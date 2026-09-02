@@ -1,0 +1,3908 @@
+[
+  {
+    "id": "gs-001",
+    "number": 1,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "A patient received a severe blow on the inferolateral side of the left knee joint while playing football. Radiographic examination confirmed a fracture of the head and neck of the fibula. Which of the following nerves is most vulnerable for damaged?",
+    "options": [
+      "Tibial",
+      "Deep peroneal",
+      "Common peroneal",
+      "Superficial peroneal"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 1,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-002",
+    "number": 2,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "A 19-year-old fell on an outstretched hand while playing football. examination confirmed tenderness over the anatomic snuff box. Which of the following is the most suspected fracture?",
+    "options": [
+      "Colles",
+      "Cuboid",
+      "Scaphoid",
+      "Hook of hamate"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 1,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-003",
+    "number": 3,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 45-year-old man had transurethral catheterization before going for a long surgical procedure. Postoperatively he developed haematuria and a urethral injury is suspected. Which of the following is most likely injured part of urethra?",
+    "options": [
+      "Penile",
+      "Prostatic",
+      "Membranous",
+      "Middle spongy"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 1,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-004",
+    "number": 4,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A patient presented after a blunt injury over the left leg. examination confirmed a sensory loss on adjacent sides of the great and second toes, and impaired dorsiflexion of the foot. Which of the following nerves is most likely injured?",
+    "options": [
+      "Sural",
+      "Saphenous",
+      "Deep peroneal",
+      "Posterior tibial"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 1,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-005",
+    "number": 5,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "A 60-year-old man presents to the Emergency Department with epigastric pain radiating to the back. He is a smoker and has long-standing diabetes and hypertension. Abdominal examination reveals a pulsatile supra-umbilical mass. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Abdominal aortic aneurysm",
+      "Secondary liver metastasis",
+      "Renal cell carcinoma",
+      "Peri-umbilical hernia"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 1,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-006",
+    "number": 6,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 45-year-old man presented to the Emergency Department complaining of lower abdominal pain for 3 days. He gave a history of being hit by a piece of wood in the same site of pain 4 days back. Examination revealed lethargic patient in pain, which was aggravated by moving his leg. there was grayish turbid semipurulent secretions from a small break in the skin of right lower quadrant (see lab result). Test Result Normal Values WBC 33.1 4.5-10.5 × 10^9/L Which of the following is the most appropriate next step in the management?",
+    "options": [
+      "Observation",
+      "Surgical drainage",
+      "CT scan abdomen",
+      "Culture and sensitivity for secretions"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 2,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-007",
+    "number": 7,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 37-year-old man was involved in a fight and sustained a stab wound to the neck. On presentation, patient was conscious, alert. Examination showed a 2 cm wound anterior to the left ear and close to the angle of the mandible with blood ooze. which of the following is the most appropriate next step?",
+    "options": [
+      "Chest X ray",
+      "Observation",
+      "CTA of the neck",
+      "Exploration of the wound"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 2,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-008",
+    "number": 8,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 19-year-old woman brought to the Emergency Department after being stabbed to the right upper quadrant. On arrival, she was conscious and oriented. Examination showed only a penetrating wound to the anterior abdominal wall at anterior axillary line just below the right costal margin. Which of the following is the most appropriate next step?",
+    "options": [
+      "Observation",
+      "CT scan abdomen",
+      "Ultrasound abdomen",
+      "Exploratory laparotomy"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 2,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-009",
+    "number": 9,
+    "specialty": "Surgery",
+    "topic": "Thoracic Surgery",
+    "stem": "A 25-year-old man brought to the Emergency Department after he was involved in motor vehicle crash, which was driving at a speed of 130 km/hour. Patient was wearing seat belt. On arrival to the Emergency Department, he was conscious, and alert (see report). Chest X-ray: Normal. Which of the following is the most appropriate next step?",
+    "options": [
+      "US abdomen",
+      "CT scan abdomen",
+      "Diagnostic laparoscopy",
+      "Exploratory Laparotomy"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 2,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-010",
+    "number": 10,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 33-year-old man was involved in a motor vehicle crash. On arrival to the Emergency Department, he was conscious and alert. Examination showed an open wound to the anterior surface of the neck with devitalized tissue. Blood pressure 100/60 mmHg Heart rate 104 /min Respiratory rate 28 /min Oxygen saturation 87% Which of the following is the most appropriate next step?",
+    "options": [
+      "Oxygen mask",
+      "Tracheostomy",
+      "Cricothyroidotomy",
+      "Endotracheal intubation"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 2,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-011",
+    "number": 11,
+    "specialty": "Surgery",
+    "topic": "Burns",
+    "stem": "A 56-year-old woman was exposed to chemical burns to her trunk. On arrival to the Emergency Department, she was conscious and alert. Examination showed a 6 cm x 11 cm wound at her back with burned clothe and powder of chemicals on her clothes and skin. Which of the following is most appropriate next step after removing her clothes?",
+    "options": [
+      "Antibiotics",
+      "Powder sweeping",
+      "Surgical debridement",
+      "Water irrigation for 30 minutes"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 3,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-012",
+    "number": 12,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 23-year-old man presented to the Emergency Department after he fell down from 3 m height on his right leg. Examination revealed a deformity of right leg with an open wound in the mid-leg and devitalized tissue and dirt in the wound. The leg was put in a splint. Blood pressure 112/70 mmHg Heart rate 99 /min Respiratory rate 22 /min Oxygen saturation 95 % Which of the following is the most appropriate next step?",
+    "options": [
+      "Antibiotics",
+      "External fixator",
+      "Surgical debridement",
+      "Urgent internal fixation"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 3,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-013",
+    "number": 13,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 17-year-old man had a crush injury to his left leg after a heavy object fell on it, 5 hours prior to presentation. He was complaining of severe pain in his leg. Examination revealed a conscious and alert patient. His left leg was cold with delayed capillary refilling. Blood pressure 116/67 mmHg Heart rate 95 /min Respiratory rate 23 /min Oxygen saturation 95 % Which of the following is the most appropriate next step?",
+    "options": [
+      "Angiography",
+      "CT angiography",
+      "Duplex ultrasound",
+      "Compartment pressure"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 3,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-014",
+    "number": 14,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 37-year-old man presented to the Emergency Department with vomiting blood after attacks of excessive vomiting (see lab results). Blood pressure 112/63 mmHg Heart rate 89 /min Respiratory rate 21 /min Oxygen saturation 96 % Test Result Normal Values Hb 135 130-170 g/L (Male) 120-160 g/L (Female) WBC 7.8 4.5-10.5 × 10^9/L. Which of the following is the most appropriate management plan?",
+    "options": [
+      "Upper GI endoscopy",
+      "Conservative treatment",
+      "Exploratory laparotomy",
+      "Sengstaken-Blakemore tube"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 4,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-015",
+    "number": 15,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 63-year-old woman presented to the Surgical Clinic complaining of upper abdominal pain and shortness of breath and occasional attacks of palpitation after meals, for several years. These symptoms relieved by vomiting. Which of the following is the most appropriate method of investigations?",
+    "options": [
+      "CT scan abdomen",
+      "Upper Gi endoscopy",
+      "Plain abdominal X-Ray",
+      "Upper GI barium study"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 4,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-016",
+    "number": 16,
+    "specialty": "Surgery",
+    "topic": "Burns",
+    "stem": "A 40-year-old woman presented with heartburn at the epigastric and retrosternal areas, and symptoms of regurgitation. The patient has tried conservative measures, including proton pumps inhibitors with no improvement in symptoms (see report). Endoscopy: Erythema of the esophagus consistent with reflux esophagitis. Which of the following is the most appropriate next step?",
+    "options": [
+      "Manometry study",
+      "24-hour pH monitoring",
+      "Lifestyle modification",
+      "Nissin's fundoplication"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 4,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-017",
+    "number": 17,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 73-year-old woman underwent percutaneous trans-hepatic cholangiography for treatment of obstructive jaundice. 24 hours after the procedure, she started to have upper gastrointestinal bleeding (see lab results). Blood pressure 105/62 mmHg Heart rate 89 /min Respiratory rate 22 /min Oxygen saturation 94 % Test Result Normal Values Hb 103 130-170 g/L (Male) 120-160 g/L (Female) WBC 7.8 4.5-10.5 × 10^9/L Which of the following is the most appropriate next step in the management plan?",
+    "options": [
+      "CT scan",
+      "Endoscopy",
+      "Ultrasound",
+      "Angiography"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 4,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-018",
+    "number": 18,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 24-year-old man recovers from an attack of severe pancreatitis. He has mild epigastric discomfort, sensation of bloating, and loss of appetite. Examination reveals an epigastric fullness. The swelling increases in size over a 3-week period of observation (see report). Ultrasound: Confirmed to be a pseudocyst. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Observation",
+      "Internal drainage",
+      "Percutaneous drainage",
+      "Excision of pseudocyst"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 5,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-019",
+    "number": 19,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 32-year-old diabetic woman has taken contraceptive pills for 12 years develops right upper quadrant pain (see report). CT scan: A 5-cm hypodense lesion in the right lobe of the liver. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Excision",
+      "Follow up CT scan",
+      "Right hepatectomy",
+      "Stop oral contraceptive"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 5,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-020",
+    "number": 20,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "A 68-year-old man has been advised to undergo surgical treatment for a left reducible inguinal hernia. He is otherwise healthy. Which of the following is the most appropriate treatment?",
+    "options": [
+      "Simple repair",
+      "Open mesh repair",
+      "Laparoscopic repair",
+      "Non-surgical treatment"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 5,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-021",
+    "number": 21,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 27-year-old man presented to the Surgical Clinic complaining of right groin pain for few weeks, which is aggravated by exercising. Examination confirmed normal external genitalia and groin region. Which of the following is the most appropriate next step?",
+    "options": [
+      "MRI",
+      "CT scan",
+      "Ultrasound",
+      "Re-examination after 3 months"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 5,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-022",
+    "number": 22,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 42-year-old woman underwent an uneventful laparoscopic cholecystectomy. 2 weeks later, she presents to the Emergency Department with vague abdominal pain (see lab results and report). Blood pressure 117/59 mmHg, Heart rate 83 /min Respiratory rate 19 /min Temperature 37.4 °C Oxygen saturation 95 % Test Result Normal Values Hb 103 130-170 g/L (Male) 120-160 g/L (Female) WBC 7.8 4.5-10.5 × 10^9/L Total bilirubin 3.7 3.5-16.5 mol/L CT scan: Large collection in the sub-hepatic area. Which of the following is most appropriate next step?",
+    "options": [
+      "Operative drainage",
+      "CT-guided drainage",
+      "Laparoscopic drainage",
+      "ERCP with biliary stent placement"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 5,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-023",
+    "number": 23,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 57-year-old man presents with 2 days of abdominal pain, nausea, and vomiting. Examination revealed a distended, tympanic and mildly tender abdomen without rebound or guarding (see lab results and reports). Test Result Normal Values Hb 153 130-170 g/L (Male) 120-160 g/L (Female) WBC 12.6 4.5-10.5 × 10^9/L Plain Abdominal X-ray: Multiple air-fluid levels. CT scan: Multiple dilated loops of small bowel with a transition point in the distal small bowel, with some adjacent mesenteric fat stranding. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Observation",
+      "Colonoscopy",
+      "Diagnostic laparoscopy",
+      "Exploratory laparotomy"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 6,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-024",
+    "number": 24,
+    "specialty": "Surgery",
+    "topic": "Endocrine Surgery",
+    "stem": "A 35-year-old woman 1-day post total thyroidectomy was observed by the nurses to develop a spasm of her right hand during blood pressure measurement from the right arm. Which of the following is the most appropriate next step?",
+    "options": [
+      "Reassurance",
+      "Give analgesia",
+      "Check her calcium level",
+      "Recheck the blood pressure"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 6,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-025",
+    "number": 25,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "A 30-year-old man presented to Surgical Clinic with right inguinal hernia. He was complaining of cough for the last 6 months. and did not use any treatment for it. He insisted to have the surgery and threatened the surgeon that he will raise a complain if did not book him for surgery. Which of the following is the most appropriate action?",
+    "options": [
+      "Do the surgery",
+      "Call the social worker",
+      "Consult the physician",
+      "Inform the administration"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 6,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-026",
+    "number": 26,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "During a laparoscopic cholecystectomy, the surgeon encountered a difficult anatomy and there was a CBD injury, which was repaired and patient did very well. Which of the following is the most appropriate post-operative action?",
+    "options": [
+      "Talk to the family",
+      "Talk to the patient",
+      "No need to tell them",
+      "Call a colleague to tell them"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 6,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-027",
+    "number": 27,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 32-year-old man was operated for a self-induced rectal injury. After the surgery, the family was asking about the cause of his illness. Which of the following is the most appropriate response?",
+    "options": [
+      "Inform the police",
+      "Tell them the truth",
+      "Involve social worker",
+      "Refer them to the patient"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 7,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-028",
+    "number": 28,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 5-year-old girl brought by her family with rectal bleeding. During examination, it was observed that there is an abnormal relation between the parents. Examination confirmed multiple bruises over the child body. which of the following is the most appropriate action?",
+    "options": [
+      "Inform the police",
+      "Admit the patient",
+      "Inform the social worker",
+      "Talk to the family about your concern"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 7,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-029",
+    "number": 29,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 60-year-old woman was admitted for elective laparoscopic cholecystectomy. During the procedure, the surgeon found a big mass in the stomach Which of the following is the most appropriate action?",
+    "options": [
+      "Cholecystectomy",
+      "Stop the procedure",
+      "Resection of the mass",
+      "Cholecystectomy and mass resection"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 7,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-030",
+    "number": 30,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 28-year-old man is brought to Emergency Room with head injury after motor vehicle accident, he is making incomprehensive sounds, open his eyes to painful stimuli and flexes his limbs to painful stimuli, and his pupils react sluggishly to light. What is his Glasgow Coma Score?",
+    "options": [
+      "5",
+      "6",
+      "7",
+      "8"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 7,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-031",
+    "number": 31,
+    "specialty": "Surgery",
+    "topic": "Endocrine Surgery",
+    "stem": "A 33-year-old woman diagnosed with papillary thyroid cancer and planed for total thyroidectomy, she have mitral valve prolapse with mild regurgitation, no other co-morbidity. Which of the following is most appropriate option to prevent infection?",
+    "options": [
+      "Amoxicillin to prevent endocarditis",
+      "Cefazolin to prevent wound infection",
+      "No indication for antibiotic prophylaxis",
+      "Administer both cefazolin and amoxicillin"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 7,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-032",
+    "number": 32,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "A 55-year-old woman is admitted with obstructed ventral hernia for emergency exploration; patient is obese, diabetic and was discharged 7 days ago after surgical correction of retinal detachment. Which of following is most appropriate DVT prophylaxis?",
+    "options": [
+      "Subcutaneous heparin",
+      "Mechanical prophylaxis",
+      "Subcutaneous enoxaparin",
+      "Enoxaparin and mechanical prophylaxis"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 7,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-033",
+    "number": 33,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "A 65-year-old man diagnosed with obstructing lower esophageal cancer and planed for surgery, patient is cachectic with more than 20% weight loss over 3 months. The treating team decided to start on preoperative TPN. Which of the following is the most expected electrolyte abnormality?",
+    "options": [
+      "Hypokalemia",
+      "Hypocalcemia",
+      "Hypernatremia",
+      "Hyperphosphatemia"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 8,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-034",
+    "number": 34,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "; Refeeding Syndrome (Hypo- Kalemia, Magnesemia, and Phosphatemia) A 33-year-old woman otherwise healthy, underwent laparoscopic sleeve gastrectomy. complicated by pulmonary embolism, she was started on heparin infusion, and after 5 days (see lab results). Test Result Normal Values Platelets count 59 150-400 × 109/L APTT 53 30-40 sec INR 1.2 0.8-1.2 Prothrombin time 14 10-13 sec Which of the following is the most appropriate management?",
+    "options": [
+      "Stop heparin and start lepirudin",
+      "Increase IV heparin to reach PTT 60-70",
+      "Shift to subcutaneous therapeutic enoxaparin",
+      "Continue on same dose and repeat labs after 6 hours"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 8,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-035",
+    "number": 35,
+    "specialty": "Surgery",
+    "topic": "Burns",
+    "stem": "A 17-year-old man presented to Emergency Room with right lower quadrant pain and anorexia. Examination revealed tenderness and rebound tenderness at Mc Burney's point (see image, lab result and report). Heart rate 92 /min, Temperature 38.2 °C Test Result Normal Values WBC 21.3 4.5-10.5 × 10^9/L Abdominal X-ray: Round 1.5 cm Radio opaque area at right iliac fossa. Which of the following is the most appropriate next step?",
+    "options": [
+      "Appendectomy",
+      "Urgent urology consult",
+      "Non contrast CT abdomen",
+      "Ultrasound of the gall-bladder"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 8,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-036",
+    "number": 36,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 44-year-old woman is admitted electively for laparoscopic cholecystectomy for chronic cholelithiasis. She is obese, diabetic and sickle cell trait. Which of the following is most likely type of her gallstones?",
+    "options": [
+      "Mixed",
+      "Oxalate",
+      "Pigmented",
+      "Pure cholesterol"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 8,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-037",
+    "number": 37,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 65-year-old man presented to Emergency Room with history of vague upper abdominal pain and loss of appetite and weight. Examination revealed he was jaundiced; abdomen is so. and lax with palpable non-tender gallbladder. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Liver cancer",
+      "Pancreatic cancer",
+      "Primary choledocholithiasis",
+      "Secondary choledocholithiasis"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 9,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-038",
+    "number": 38,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 75-year-old man admitted to Coronary Care Unit with acute MI, complicated with bacterial pneumonia, patient on tazocin for 12 days. Examination revealed abdomen severe tenderness in the right upper quadrant (see report). Blood pressure 100/60 mmHg Heart rate 96 /min Respiratory rate 22 /min Temperature 38.3 °C Ultrasound abdomen: Distended gallbladder with thick wall and pericystic fluids, there is no gallstones. which of following is the most appropriate management?",
+    "options": [
+      "ERCP drainage",
+      "Emergency cholecystectomy",
+      "Change tazocin to meropenem",
+      "US guided tube cholecystostomy drainage"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 9,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-039",
+    "number": 39,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 35-year-old woman presented to Emergency Room with vague upper abdominal pain, She underwent elective cholecystectomy for cholelithiasis 7 days ago. Examination revealed she was jaundiced with mild right upper quadrant tenderness (see lab results and report). Temperature 37.1 °C Test Result Normal Values WBC 9.3 4.5-10.5 × 10^9/L Alkaline phosphatase 169 39-117 IU/L Alanine aminotransferase 35 5-40 IU/L Amylase 102 24-151 IU/L Direct bilirubin 10 1.5-6.5 mol/L Total bilirubin 17 3.5-16.5 mol/L Ultrasound: Minimal fluids in gall-bladder fossa, CBD measure 9 mm Which of the following is the most likely diagnosis?",
+    "options": [
+      "CBD injury",
+      "Retained CBD stone",
+      "Sub-hepatic collection",
+      "Slipped cystic duct clip"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 9,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-040",
+    "number": 40,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 70-year-old women p7+1 with chronic constipation presented to Emergency Room with abdominal distension and vomiting. Examination revealed abdomen is distended, tympanic, with round tender non- reducible swelling in the right groin bellow and lateral to pubic tubercle (see report). X-ray abdomen: Distended small bowel with multiple fluid levels. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Femoral hernia",
+      "Direct inguinal hernia",
+      "Metastatic lymphnode",
+      "Indirect inguinal hernia"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 9,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-041",
+    "number": 41,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 61-year-old man presented to Outpatient Clinic with general fatigue and mild on and off stool mixed with streaks of blood for 4 months. Examination revealed he was pale; abdomen is soft and lax, per rectal examination revealed 2nd degree piles (see lab result). Test Result Normal Values Hb 8.3 130-170 g/L (Male) 120-160 g/L (Female) Which of the following is the most likely diagnosis?",
+    "options": [
+      "Cecal cancer",
+      "Rectal cancer",
+      "Sigmoid cancer",
+      "Chronically bleeding haemorrhoids"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 10,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-042",
+    "number": 42,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "A 52-year-old woman presented to Emergency Room with abdominal distension and vomiting, she has history of ventral hemia repair with mesh 12 years back. Examination revealed distended abdomen, no tenderness, and no signs of hernia recurrence (see reports). X-ray abdomen: Dilated bowels with air/fluid levels. CT scan: Contrast cut off at terminal ilium with so. tissue mass and target sign. Which of the following is likely diagnosis?",
+    "options": [
+      "Small bowel cancer",
+      "Adhesion to the mesh",
+      "Meckel's diverticulum",
+      "Late onset crohn's disease"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 10,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-043",
+    "number": 43,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 12-year-old boy is brought to the Emergency Room 30 min after accidentally ingesting bleach; vital signs are stable with maintained airway. He was kept NPO, started on IV fluids and broad- spectrum antibiotics. Blood pressure 110/70 mmHg Heart rate 76 /min Respiratory rate 18 /min Temperature 36.6 °C Oxygen saturation 95 % Which of the following is most appropriate next step?",
+    "options": [
+      "Induce emesis",
+      "Close observation",
+      "Water ingestion to dilute the bleach",
+      "Insert NGT and drain gastric content"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 10,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-044",
+    "number": 44,
+    "specialty": "Surgery",
+    "topic": "Burns",
+    "stem": "An 18-year-old man involved in burn accident, he has 2nd degree burn to his both lower limbs. Weight 70 kg Using Parkland formula, which of the following is most appropriate fluid resuscitation?",
+    "options": [
+      "Lactate ringer's 200 ml/hr for 24 hrs",
+      "Normal saline 1L bolus then 120ml/hr",
+      "Lactate ringer's 5 L over 1st 6 hrs then 5 L over next 16 hrs",
+      "Lactate ringer's 2.5 L over 1st 6 hrs then 2.5 L over the next 16 hrs"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 10,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-045",
+    "number": 45,
+    "specialty": "Surgery",
+    "topic": "Endocrine Surgery",
+    "stem": "A 32-year-old healthy woman had neck ultrasound to evaluate lipoma; incidentally, there was right thyroid lobe 2.3 cm solid hypochoic nodule (see lab results and report). Test Result Normal Values Thyroid-Stimulating Hormone 2.3 0.4 - 5.0 µU/mL. Thyroxine (T4 free serum) 11.3 8.5 - 15.2 pmol/L. Fine Needle Aspiration: Follicular neoplasm, Bethesda 4. Which of the following is most appropriate management?",
+    "options": [
+      "Nodule excision",
+      "Hemithyroidectomy",
+      "Repeat US in 3 months",
+      "Radiofrequency ablation"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 11,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-046",
+    "number": 46,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "A 27-year-old man is brought to Emergency Room after motor vehicle accidents, he was complaining of severe pain in his right leg. Examination revealed intact skin, tens swollen leg. foot paresthesia at the 1st web space with palpable distal puises (see reports). Blood pressure 121/70 mmHg Heart rate 109 /min Respiratory rate 23 /min Temperature 37.0 °C Oxygen saturation 95 % X-ray: Comminuted, right bicondylar tibial plateau fracture. Posterior leg deep compartment pressure: 35 mmHg. Which of the following is the most appropriate management?",
+    "options": [
+      "Closed reduction and elevation",
+      "External fixation and leg elevation",
+      "Internal fixation and leg elevation",
+      "External fixation and 4 compartment fasciotomy"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 11,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-047",
+    "number": 47,
+    "specialty": "Surgery",
+    "topic": "Breast Surgery",
+    "stem": "A 24-year-old man had gunshot wound in the left side of his chest; chest tube was inserted with minimal hemothorax and no air leak. The bullet entry lateral the nipple, exit point was below the left scapula. Suddenly patient becomes agitated and hypotensive. Examination revealed distended neck veins, good air entry both side of the chest with unclear heart sounds Which of the following is the most appropriate management?",
+    "options": [
+      "Fluid bolus",
+      "Pericardiocentesis",
+      "Emergency room thoracotomy",
+      "Needle thoracostomy in the left 2nd intercostal"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 11,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-048",
+    "number": 48,
+    "specialty": "Surgery",
+    "topic": "Pediatric Surgery",
+    "stem": "A 2-month-old baby is brought to the clinic because of umbilical bulge that appears when child is crying. Examination revealed 1 cm reducible umbilical hernia. Which of the following is most appropriate treatment?",
+    "options": [
+      "Observation",
+      "Hernia sling",
+      "Surgical repair",
+      "Delayed surgical repair at age of 6 months"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 11,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-049",
+    "number": 49,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 12-year-old boy had isolated blunt abdominal injury, is complaining of vague upper abdominal pain. Examination revealed the abdomen was soft with mild left upper quadrant tenderness (see lab results and report). Blood pressure 100/65 mmHg Heart rate 91 /min Respiratory rate 18 /min Temperature 37.3 °C Oxygen saturation 97 % Test Result Normal Values Hb 11.3 130-170 g/L. (Male) 120-160 g/L (Female) HCT 0.39 0.42-0.52 (Male) 0.37-0.48 (Female) Platelets count 238 150-400 × 10^9/L WBC 14.1 4.5-10.5 × 10^9/L CT scan: Minimal pelvic fluids, 4 cm splenic tear with 7 cm subcapsular hematoma (Grade 3), no other abnormality. Which of the following is most appropriate management?",
+    "options": [
+      "Close observation",
+      "Open splenectomy",
+      "Splenic preserving surgery",
+      "Per-cutaneous drainage of pelvic fluids"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 12,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-050",
+    "number": 50,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 28-year-old man has chronic history of episodes of sharp anal pain with defecation, occasionally associated with small amount of fresh blood. Examination revealed posterior anal fissure with skin tag. All conservative treatments failed. Which of the following is most appropriate surgical management?",
+    "options": [
+      "Anal dilatation",
+      "Lateral internal sphincterotomy",
+      "Lateral external sphincterotomy",
+      "Curettage of the fissure and excision of skin tag"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 12,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-051",
+    "number": 51,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "A 55-year-old man presents to the clinic. He is a smoker with long history of sever gastrointestinal reflux disease on proton bump inhibitors. His last endoscopy revealed lower esophageal redness and ulceration (see report). Biopsy from lower esophagus: Squamous cells with high-grade dysplasia. Which of the following is the most appropriate therapeutic option?",
+    "options": [
+      "Add ranitidine",
+      "Council to stop smoking",
+      "Repeat endoscopy after 6 months",
+      "Refer for possible esophageal resection"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 12,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-052",
+    "number": 52,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 37-year-old P5+0 woman comes to the clinic. History reveals she has grave's disease since 5 years; her condition is well-controlled with antithyroid medications, trials of stopping medication failed. Examination reveals she has severe exophthalmos (see report). Ultrasound thyroid: Hypervascular homogenous normal size thyroid. Which of the following indicates thyroidectomy over radioactive iodine?",
+    "options": [
+      "The patients age",
+      "Severe exophthalmos",
+      "Hypervascular thyroid",
+      "Failure of medical treatment"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 12,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-053",
+    "number": 53,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "Which of the following is most appropriate management of penetrating zone 3 neck vascular injury?",
+    "options": [
+      "Vascular ligation",
+      "Open primary repair",
+      "Open vascular bypass",
+      "Endovascular intervention"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 13,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-054",
+    "number": 54,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "Which of the following is the most common location for blunt thoracic aortic injury?",
+    "options": [
+      "Aortic arch",
+      "At the ligamentum arteriosum",
+      "Disal to left subclavian artery",
+      "Proximal to the left subclavian artery"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 13,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-055",
+    "number": 55,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "A 32-year-old man fell from his motorbike and broke his femur. Which of the following is most essential before reduction?",
+    "options": [
+      "Give sedation",
+      "Give analgesia",
+      "Call the operating room",
+      "Examine his peripheral pulses"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 13,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-056",
+    "number": 56,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "Which of the following is the most appropriate diagnostic gold standard in critical limbs ischemia?",
+    "options": [
+      "Ultrasound",
+      "CT Angiography",
+      "MR Angiography",
+      "Conventional angiography"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 13,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-057",
+    "number": 57,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "Which of the following is an absolute indication for treatment of vascular malformations?",
+    "options": [
+      "Pain",
+      "Cosmesis",
+      "Claudication",
+      "Congestive heart failure"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 13,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-058",
+    "number": 58,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "Which of the following is the most appropriate strategy in managing medical risk factors in Peripheral Atrial disease?",
+    "options": [
+      "Weight reduction",
+      "Aerobic exercised",
+      "Supervised exercised program",
+      "Non supervised exercised program"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 13,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-059",
+    "number": 59,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 40-year-old healthy woman presents to Emergency Room with a 4-hour history of sudden onset right lower limb pain. Her examination reveals intact femoral pulse but absent distal pulses, diminished sensory exam with an altered motor exam. Her labs are normal (see report). Blood pressure 110/70 mmHg Heart rate 95 /min Respiratory rate 18 /min Temperature 36.6 °C Oxygen saturation 98 % ECG: Shows atrial fibrillation. Which of the following is the most appropriate next step?",
+    "options": [
+      "Heparin",
+      "Morphine",
+      "CT angiogram",
+      "Vascular Ultrasound"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 13,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-060",
+    "number": 60,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 40-year old healthy woman presents to Emergency Room with a 4-hour history of sudden onset right lower limb pain. Her examination reveals intact femoral pulse but absent distal pulses, diminished sensory exam with an altered motor exam. Her labs are normal (see report). Blood pressure 110/70 mmHg Heart rate 95 /min Respiratory rate 18 /min Temperature 36.6 °C Oxygen saturation 98 % ECG: Shows atrial fibrillation. Which of the following is the most appropriate management?",
+    "options": [
+      "Femoral embolectomy",
+      "Above knee amputation",
+      "Catheter-directed thrombolysis",
+      "Heparinization and observation"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 14,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-061",
+    "number": 61,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 40-year old healthy woman presents to Emergency Room with a 4-hour history of sudden onset right lower limb pain. Her examination reveals intact femoral pulse but absent distal pulses, diminished sensory exam with an altered motor exam, Her labs are normal (see report). Blood pressure 110/70 mmHg Heart rate 95 /min Respiratory rate 18 /min Temperature 36.6 °C Oxygen saturation 98 % ECG: Shows atrial fibrillation. Which of the following is the most appropriate investigation?",
+    "options": [
+      "CT angiogram",
+      "Vascular ultrasound",
+      "Conventional angiogram",
+      "Embolectomy with no imaging"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 14,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-062",
+    "number": 62,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 62-year-old man known diabetes and hypertension presents with 4-hour history of sudden left leg pain, he had a history of left leg pain after walking 200 meters that make him stop and is relieved by rest. He is on oral hypoglycemic and statin but not compliant to medication and has been smoking for the last 40 years. Pulse examination on the left reveals present femoral absent popliteal and distal, his right leg revealed intact femoral and popliteal but diminished distal pulses (see lab results and report). Blood pressure 110/70 mmHg Heart rate 76 /min Respiratory rate 18 /min Temperature 36.6 °C Oxygen saturation 95 % Test Result Normal Values Random Glucose 10 3.9-5.5 mmol/L НА1C 8 4.7-5.6 % ECG: Normal. Which of the following is the most appropriate investigation?",
+    "options": [
+      "CT angiogram",
+      "Vascular ultrasound",
+      "Conventional angiogram",
+      "Magnetic resonant angiogram"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 14,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-063",
+    "number": 63,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 62-year-old man known diabetes and hypertension presents with 4-hour history of sudden left leg pain, he had a history of left leg pain after walking 200 meters that make him stop and is relieved by rest. He is on oral hypoglycemic and statin but not compliant to medication and has been smoking for the last 40 years. Pulse examination on the left reveals present femoral absent popliteal and distal, his right leg revealed intact femoral and popliteal but diminished distal pulses (see lab result and report). Test Result Normal Values Random Glucose 7 3.9-5.5 mmol/L ECG: Normal. Which of the following is the most appropriate next step?",
+    "options": [
+      "Heparin",
+      "Morphine",
+      "CT angiogram",
+      "Vascular Ultrasound"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 15,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-064",
+    "number": 64,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 62-year-old man known case of DM HT presents with 4-hour history of sudden left leg pain, the patient had a history of left leg pain after walking 200 meters that make him stop and is relieved by rest. He is on an oral hypoglycemic and a statin but he is not compliant to his medication. He has been smoking for the last 40 years. His pulse exam on the left reveals present femoral absent popliteal and distal, his right leg revealed intact femoral and popliteal but diminished distal pulses His labs are normal apart from an elevated BSL (see report). ECG: Normal. Which of the following is the most appropriate management?",
+    "options": [
+      "Catheter-directed thrombolysis",
+      "Femoral thrombectomy",
+      "Above knee amputation",
+      "Heparinization and observation"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 15,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-065",
+    "number": 65,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 62-year-old man known diabetes and hypertension presents with 4-hour history of sudden left leg pain, he had a history of left leg pain after walking 200 meters that make him stop and is relieved by rest. He is on oral hypoglycemic and statin but he is not compliant to medication. He has been smoking for the last 40 years. Pulse examination on the left reveals present femoral absent popliteal and distal, his right leg revealed intact femoral and popliteal but diminished distal pulses. The patient had a successful thrombolysis with an endovascular correction of a long stenosis segment (see lab result and report). Test Result Normal Values Random Glucose 7 3.9-5.5 mmol/L ECG: Normal. Which of the following is the most common cause of death during his hospital stay?",
+    "options": [
+      "Stroke",
+      "Bleeding",
+      "Pulmonary embolism",
+      "Myocardial infarction"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 15,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-066",
+    "number": 66,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 54-year-old man known diabetic and heavy smoker presents with a history of classic vascular claudication of his left leg after 100m walk to the mosque. His pulse examination reveals intact pulses on the right leg and diminished distal pulses below the popliteal artery. Which of the following is the most appropriate way to improve his claudication distance?",
+    "options": [
+      "Dual antiplatlet therapy",
+      "Supervised exercise program",
+      "Supervised smoking cessation",
+      "Aggressive blood sugar control start program"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 16,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-067",
+    "number": 67,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 54-year-old man known diabetic and heavy smoker presents with a history of classic vascular claudication of his left leg after 100m walk to the mosque. His pulse examination reveals intact pulses on the right leg and diminished distal pulses below the popliteal artery. Which of the following is the most appropriate investigation?",
+    "options": [
+      "MRA",
+      "CT angiogram",
+      "Conventional angiogram",
+      "None-invasive vascular lab exam"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 16,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-068",
+    "number": 68,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 54-year-old man known diabetic and heavy smoker presents with a history of classic vascular claudication of his left leg after 100m walk to the mosque. His pulse examination reveals intact pulses on the right leg and diminished distal pulses below the popliteal artery. Which of the following is the most appropriate management?",
+    "options": [
+      "Medical risk factor stratification",
+      "Surgical bypass of the stenosis lesion",
+      "Endovascular repair of the stenotic lesion",
+      "Smoking cessation aggressive blood sugar level control"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 16,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-069",
+    "number": 69,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 32-year-old woman presents with 5-year history of spider veins that are asymptomatic but she wants to treat it cosmetically. Her pulse examination is normal and there is no other varicosities noted part from the anterior thigh spider veins. Which of the following is the most appropriate investigation?",
+    "options": [
+      "CT venography",
+      "Venous plethysmography",
+      "No investigation needed",
+      "Venous duplex ultrasound"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 16,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-070",
+    "number": 70,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 32-year-old woman presents with 5-year history of spider veins that are asymptomatic but she wants to treat it cosmetically. Her pulse examination is normal and there is no other varicosities noted part from the anterior thigh spider veins. Which of the following is the most appropriate management?",
+    "options": [
+      "Sclerotherapy",
+      "Endovenous ablation",
+      "Ligation and stripping of GSV",
+      "Daflon, micronized purified flavonoid fraction 500m PO twice daily"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 17,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-071",
+    "number": 71,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 46-year-old woman presented with a 6-year history of bilateral varicosities, she complained of heaviness during standing and bilateral lower limb swelling. There is no history of claudication or rest pain. Examination revealed intact distal pulses and bilateral varicose on the GS territory Which of the following is the most appropriate investigation?",
+    "options": [
+      "CT venography",
+      "Venous plethysmography",
+      "No investigation needed",
+      "Venous duplex ultrasound"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 17,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-072",
+    "number": 72,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 46-year-old woman presented with a 6-years history of bilateral varicosities, she complained of heaviness during standing and bilateral lower limb swelling. There is no history of claudication or rest pain. Examination revealed intact distal pulses and bilateral varicose on the great saphynous vein (GS) territory. Which of the following is the most appropriate management?",
+    "options": [
+      "Sclerotherapy",
+      "Endovenous ablation",
+      "Ligation and stripping of GSV",
+      "Dafion, micronized purified flavonoid fraction 500mg PO twice daily"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 17,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-073",
+    "number": 73,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 62-year-old man presents with an incidental finding of a 4.5 cm abdominal aortic aneurysm and gallstones on an ultrasound done for biliary colic, the general surgeon decided to do a laparoscopic cholecystectomy and referred him to vascular surgery for an opinion. Which of the following is the most appropriate recommendation of the vascular surgeon?",
+    "options": [
+      "Proceed with surgery and follow up with US",
+      "CT angiography before proceeding for surgery",
+      "Proceed with surgery and follow up with CT angiography",
+      "Conventional angiography before proceeding for surgery"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 17,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-074",
+    "number": 74,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 72-year-old man known to have diabetes and hypertension presents with an ingrowing toenail. Blood pressure 110/70 mmHg Heart rate 76 /min Respiratory rate 18 /min Temperature 36.6 °C Oxygen saturation 99 % Height 160 cm BMI 20 kg/m2 Which of the following is the most appropriate step before operating on the toe?",
+    "options": [
+      "Start antibiotics",
+      "Examine the other toes",
+      "Swab the toe for culture",
+      "Examine peripheral pulses"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 17,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-075",
+    "number": 75,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 54 year old man known to have diabetes and hypertension presents to the clinic with an ulcer over the right lateral malleolus for 3 months. Examination revealed intact distal pulses. Which of the following the most appropriate next step?",
+    "options": [
+      "MRA",
+      "CT angio",
+      "Conventional angio",
+      "Venouse duplex of right lower limb"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 18,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-076",
+    "number": 76,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 32-year-old woman presents with a 2-day history of right lower limb swelling, no history of trauma. Examination reveals bluish discoloration of the foot and intact distal pulses. Blood pressure 110/70 mmHg Heart rate 90 /min Respiratory rate 18 /min Temperature 36.6 °C Oxygen saturation 99 % Which of the following is the most appropriate next best step in diagnosis?",
+    "options": [
+      "CT angio",
+      "CT venogram",
+      "Venouse duplex",
+      "Arterial duplex"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 18,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-077",
+    "number": 77,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 55-year-old man hypertensive with renal insufficiency was fully evaluated for arteriovenous fistula creation, he has intact distal pulses and no history of trauma or vascular procedures on his non- dominant hand. Which of the following fistula type should be offered first?",
+    "options": [
+      "Radio-cephalic",
+      "Brachio-basilic",
+      "Brachio-cephalic",
+      "Basilic vein transposition"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 18,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-078",
+    "number": 78,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 50-year-old man post-kidney transplant, 2-year on steroid treatment underwent emergency exploratory laparotomy for intestinal obstruction. Which of the following will most likely promotes his wound healing?",
+    "options": [
+      "Vitamin A",
+      "Vitamin B1",
+      "Vitamin B2",
+      "Vitamin C"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 18,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-079",
+    "number": 79,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 45-year-old man had laparoscopic cholecystectomy, developed fever on 3rd postoperative day. He had no abdominal pain. Temperature 38.6 °C Which of the following is most likely diagnosis?",
+    "options": [
+      "Chest infection",
+      "Wound infection",
+      "Urinary tract infection",
+      "Intra-abdominal abscess"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 18,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-080",
+    "number": 80,
+    "specialty": "Surgery",
+    "topic": "Breast Surgery",
+    "stem": "A 40-year-old woman complains of painful right breast mass for 6 months increasing in size. Examination confirms a 3 cm mass at 9 O'clock (see report). Core biopsy: Benign phyliodes tumor. Which is the following the most appropriate treatment?",
+    "options": [
+      "Wide local excision",
+      "Simple mastectomy",
+      "No surgical intervention",
+      "wide local excision with radiation therapy"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 19,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-081",
+    "number": 81,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 35-year-old woman had abdominal ultrasound as part of screening for essential hypertension. She has no abdominal symptoms (see report). Ultrasound Abdomen: Gall bladder single polyp measures 0.6 cm, no stones, and normal bile ducts. Which is the following is the most appropriate management?",
+    "options": [
+      "Surgical consultation",
+      "No further intervention",
+      "Check Liver function test",
+      "Follow up ultrasound within 6 months"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 19,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-082",
+    "number": 82,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 33-year-old women presents with history of right upper quadrant pain and yellow sclera. Examination reveals unwell patient with abdominal tendemess but no guarding (see lab results and report). Test Result Normal Values Total bilirubin 30 3.5-16.5 mol/L WBC 15 4.5-10.5 × 10^9/L Alkaline phosphatase 280 39-117 IU/L Ultrasound of Abdomen: Multiple gallstone, no precholecystic fluid, common bile duct is dilated and measures 1 cm. Which is the following is most likely diagnosis?",
+    "options": [
+      "Acute pancrea77s",
+      "Acute chioecys77s",
+      "Choledocholithiasis",
+      "Ascending cholangitis"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 19,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-083",
+    "number": 83,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 19-year-old man was involved in road traffic accident underwent emergency splenectomy. Which the following is the optimal post-operative timing for administration of pneumococcal vaccine?",
+    "options": [
+      "2 day",
+      "1 week",
+      "2 weeks",
+      "1 month"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 19,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-084",
+    "number": 84,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "A 31-year-old man was involved in road traffic accident; examination revealed he is fully oriented GCS15/15 before reaching the hospital paramedic reported interval unresponsiveness. The patient suddenly lost consciousness and dilatation of left pupil was noted (see report). X-ray of the skull: Left temporal fracture. Which is the following most likely diagnosis?",
+    "options": [
+      "Ruptured arteriovenous malformation",
+      "Subdural hematoma",
+      "Epidural hematoma",
+      "Basal skull fracture"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 19,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-085",
+    "number": 85,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 30-year-old man presented with history of bleeding per rectum. Anoscopy examination revealed swelling at 3,7 o'clock position. A treatment with injection of sclerosing agents is planned. Which of the following is most indicated for sclerosing therapy?",
+    "options": [
+      "External haemorrhoids",
+      "Internal haemorrhoids",
+      "Prolapsed haemorrhoids",
+      "Thrombose haemorrhoids"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 20,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-086",
+    "number": 86,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "A 5-year-old boy presents to Emergency Room because the parents noticed that there is only one testis in the scrotum. Examination reveals that one testis is in the scrotum while the other one is felt in the inguinal canal. Which the following is the most appropriate treatment?",
+    "options": [
+      "Orchidopexy",
+      "Orchidectomy",
+      "Wait till puberty",
+      "Androgens administration"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 20,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-087",
+    "number": 87,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "A 6-year-old boy presents with a fracture of femur (mid shaft) with 30% of anterior angulation. Which of the following is the most appropriate treatment?",
+    "options": [
+      "Traction and bed rest",
+      "Closed reduction and hip a Spica cast",
+      "Open reduction and intramedullary fixation",
+      "Open reduction and internal fixation (plate)"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 20,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-088",
+    "number": 88,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 45-year-old man diagnosed as short bowel syndrome on total parenteral nutrition developed weakness vertigo and convulsions. Which of the following is the most like diagnosis?",
+    "options": [
+      "Hyperkalemia",
+      "Hypokalemia",
+      "Hyperammonemia",
+      "Hypomagnesaemia"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 20,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-089",
+    "number": 89,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 30-year-old women 16-week pregnant presents with nausea, vomiting and right sided abdominal pain. The obstetrician excluded any pregnancy related cause for pain. Temperature 37.8 °C Which of the following is the most likely cause?",
+    "options": [
+      "Gastritis",
+      "Pancrea77s",
+      "Cholecys77s",
+      "Appendicitis"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 20,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-090",
+    "number": 90,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 45-year-old man farmer presented with history of right side abdominal pain, vomiting and fever. Examination confirmed tenderness in right upper quadrant (see report). Temperature 37.6 °C CT abdomen: Calcified cyst 5X6 cm. Hydatid cvst (echinococous ) was confirmed. Which of the following is the most appropriate treatment?",
+    "options": [
+      "Surgical excision",
+      "Administration of steroid",
+      "Percutaneous catheter drainage",
+      "Administration of metronidazole"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 21,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-091",
+    "number": 91,
+    "specialty": "Surgery",
+    "topic": "Thoracic Surgery",
+    "stem": "A 35-year-old man presents with history of dyspnea during sleep and swallowing discomfort for 4 month. He is a known case of asthma (see report). Chest X-ray: Midline mass compressing trachea. Which of the following is the most like diagnosis?",
+    "options": [
+      "Goiter",
+      "Thymoma",
+      "Lymphoma",
+      "Lung cancer"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 21,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-092",
+    "number": 92,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 20-year-old women presents with history of dysphagia that was more with liquid than solid. Which of the following is the most appropriate first investigation?",
+    "options": [
+      "Barium swallow",
+      "Upper GI endoscopy",
+      "Ultrasound of chest",
+      "CT scan of the chest"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 21,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-093",
+    "number": 93,
+    "specialty": "Surgery",
+    "topic": "Endocrine Surgery",
+    "stem": "A 55-year-old woman complained of difficulty in breathing 6-hour post total thyroidectomy. Examination confirmed the presence of large neck swelling. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Treacheostomy",
+      "IV calcium glucante",
+      "Epinephrine injection",
+      "Open the wound sutures in the ward"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 21,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-094",
+    "number": 94,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 20-year-old man presents to Emergency Department with renal colic. Which of the following is most diagnostic imaging?",
+    "options": [
+      "MRI abdomen",
+      "X-ray KUB region",
+      "CT scan abdomen",
+      "Ultrasound abdomen"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 21,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-095",
+    "number": 95,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "A 4-year-old boy presented with history of pain above his right knee. Examination revealed there is swelling at distal femur no limitation of knee movement (see report). X-ray: 3x3 sclerotic bone lesion at distal femur. Which of the following is most likely diagnosis?",
+    "options": [
+      "Osteosarcoma",
+      "Chondrosarcoma",
+      "Ewing's sarcoma",
+      "Periosteal sarcoma"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 21,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-096",
+    "number": 96,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "A 23-year-old military man presented to the clinic with history of bilateral groin swelling. Examination revealed there was bilateral inguinal hernia. Which of the following is the most appropriate treatment?",
+    "options": [
+      "Observation",
+      "Open repair with mesh",
+      "Open repair without mesh",
+      "Laparoscopic repair with mesh"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 22,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-097",
+    "number": 97,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 50-year-old woman presented with history of right upper guardant pain for the last 5 months associated with jaundice for 4 days. Examination revealed unwell patient, tender abdomen but no rebound. The patient started on I.V antibiotic (see report). Blood pressure 99/70 mmHg, Heart rate 100 /min, Temperature 38 °C Ultrasound: Gall bladder stones, dilated common bile duct with stone. Which is the following is the most appropriate treatment?",
+    "options": [
+      "Lithotripsy",
+      "Open surgery",
+      "Laparoscopic cholecystectomy",
+      "Endoscopic retrograde cholengiopancreatography ERCP"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 22,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-098",
+    "number": 98,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "A 64-year-old man is involved in a high-speed car crash. He is resuscitated initially in a small hospital with limited resources he has head injury. It was decided to transfer this patient to trauma center, which is 40 km away (see report). Blood pressure 110/70 mmHg, Heart rate 100 /min Respiratory rate 18 /min Temperature 36.6 °C X-ray chest: Widened mediastinum with fractures left ribs 2-5 but no pneumothorax. Which is the following the most appropriate next step?",
+    "options": [
+      "Insert chest tube",
+      "Intubate the patient",
+      "Perform diagnostic peritoneal lavage",
+      "Call the receiving hospital and speak to the surgeon on call"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 22,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-099",
+    "number": 99,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 30-year-old man presented to the Surgical Clinic while taking medical history he want his perceptions of why he felt ill and the doctor wants more detail about his symptoms and medical problems. Which is the following the most appropriate response?",
+    "options": [
+      "Allow him to complete his thought",
+      "Inform him to change his appointment with other doctor",
+      "Till him other patient are waiting outside and clinic is busy now",
+      "Politely interrupt him and continue with close-ended question"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 22,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-100",
+    "number": 100,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 22-year-old women presented to Surgery Clinic wearing revealing cloths, she come up very close to the doctor asking personal question in sedative tone with a language that is different from attending nurse language. Which is the following is the best response by the doctor?",
+    "options": [
+      "Shout at here",
+      "Call the security",
+      "Refer to other doctor",
+      "Call for other nurse talk same language"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 23,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-101",
+    "number": 101,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 70-year-old man presented with history of skin lesion over the right check (see report). Skin biopsy: Malignant melanoma. Which is the following is best way to make the patient comply with medical advice?",
+    "options": [
+      "The illness has serous symptoms",
+      "He believes you are professional and right",
+      "Explain pathophysiology using medical terminology",
+      "Taking time to provide information and gain his trust"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 23,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-102",
+    "number": 102,
+    "specialty": "Surgery",
+    "topic": "Pediatric Surgery",
+    "stem": "A 23-year-old woman presented to the Surgical Clinic with a 1 X2 cm skin lesion in the left forearm since childhood. Which of the following is the most appropriate treatment?",
+    "options": [
+      "Laser",
+      "Excision",
+      "Radiation",
+      "Follow up"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 23,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-103",
+    "number": 103,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 43-year-old man presented to the Surgical Clinic complaining of a dark colored pigmented skin lesion in the upper thigh for few months. Examination revealed a 3 X 4 cm dark colored skin lesion at the anterior aspect of right thigh with irregular borders and it was elevated above the skin. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Excision",
+      "Bunch biopsy",
+      "Radiotherapy",
+      "Chemotherapy"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 23,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-104",
+    "number": 104,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 47-year-old woman presented to the Emergency Department complaining of painful cord-like swelling in the calf of left leg for 48 hours. She gave history of varicose veins for 20 years. Which of the following is the most appropriate initial treatment?",
+    "options": [
+      "Non-steroidal an7-Inflamatory drugs",
+      "Clexane",
+      "Heparin",
+      "Antibiotics"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 23,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-105",
+    "number": 105,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 45-year-old man presents to the Emergency Department complaining of severe abdominal pain, which was increasing in intensity with time. Patient underwent laparoscopic sleeve gastrectomy 3 weeks back. Which of the following is the most appropriate diagnostic test?",
+    "options": [
+      "Ultrasound Abdomen",
+      "Plain Abdominal X-ray",
+      "Diagnostic laparoscopy",
+      "CT scan abdomen with contrast"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 23,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-106",
+    "number": 106,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 45-year-old man presents to the Emergency Department complaining of severe abdominal pain, which was increasing in intensity with time. Patient underwent laparoscopic sleeve gastrectomy 3 weeks back. which of the following is the most appropriate management?",
+    "options": [
+      "Endoscopy",
+      "Exploration",
+      "Nil per mouth",
+      "Anticoagulation"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 24,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-107",
+    "number": 107,
+    "specialty": "Surgery",
+    "topic": "Pediatric Surgery",
+    "stem": "A male newborn develops sudden respiratory distress (see report). Chest radiograph: A hyperlucent left upper lobe with adjacent lobar compression and mediastinal shi. to the right. Which of the following is most appropriate treatment?",
+    "options": [
+      "Intubation",
+      "Thoracotomy",
+      "Bronchoscopy",
+      "Thoracostory"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 24,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-108",
+    "number": 108,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 5-week-old boy presents with persistent progressive projectile vomiting. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Antiemetics",
+      "Normal saline",
+      "Ringer lactate",
+      "Potassium chloride"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 24,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-109",
+    "number": 109,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 3-year-old boy presented to Emergency Department with progressive abdominal pain and vomiting. Examination revealed distended abdomen. Which of the following is the most appropriate initial management?",
+    "options": [
+      "MRI abdomen",
+      "CT scan abdomen",
+      "Ultrasound abdomen",
+      "Plain abdominal X-ray"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 24,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-110",
+    "number": 110,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 10-month-old girl brought by her family because of swelling in the umbilicus, which becomes more obvious when she is crying and disappears during sleeping. Which of the following is the most appropriate management?",
+    "options": [
+      "Follow up",
+      "Mesh repair",
+      "Simple repair",
+      "Laparoscopic repair"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 24,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-111",
+    "number": 111,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "A 40-old woman had laparoscopic Roux-en-Y gastric bypass 5 days ago, presented with pain at the left shoulder, fever and rigors. Blood pressure 90/60 mmHg Heart rate 120 /min Temperature 38.6 °C Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Endoscopy",
+      "Ultrasound abdomen",
+      "Diagnostic laparoscopy",
+      "CT scan abdomen with contrast"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 25,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-112",
+    "number": 112,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 26-year-old woman presented 17 days after laparoscopic sleeve gastrectomy complaining of persistent vomiting and change of her mode according to the family. Examination revealed soft abdomen (see reports). Ultrasound abdomen:Normal. CT scan abdomen: Normal. Which of the following is the most appropriate management?",
+    "options": [
+      "Endoscopy",
+      "Reassurance",
+      "Diagnostic laparoscopy",
+      "Psychiatry consultation"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 25,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-113",
+    "number": 113,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 30-year-old woman who is 10-week pregnant and known case of gallstone presents to the Surgical Clinic complaining of recurrent attacks of biliary colic for the last 5 weeks. Which of the following is the most appropriate management?",
+    "options": [
+      "Immediate laparoscopic cholecystectomy",
+      "Laparoscopic cholecystectomy after delivery",
+      "Laparoscopic cholecystectomy in 2nd trimester",
+      "Laparoscopic cholecystectomy in 3rd trimester"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 25,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-114",
+    "number": 114,
+    "specialty": "Surgery",
+    "topic": "Perioperative Care",
+    "stem": "A 73-year-old man presented with abdominal pain and constipation for 1 week. Workup revealed a sigmoid cancer. He underwent laparoscopic surgery with a plan to perform a resection with a proximal colostomy. During the operation, his vital signs changed. Blood pressure 86/45 mmHg Heart rate 124 /min Temperature 36.8 °C Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Chest X-ray",
+      "Echocardiography",
+      "Convert laparotomy",
+      "Terminate the surgery"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 25,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-115",
+    "number": 115,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 65-year-old man presented to the Emergency Department with pain over the angle of his mouth for 24 hours. He underwent laparoscopic cholecystectomy 8 days prior to presentation. Blood pressure 110/72 mmHg Heart rate 104 /min Temperature 38.8 °C Which of the following is the most appropriate management?",
+    "options": [
+      "CT scan",
+      "Plain X-ray",
+      "Antibiotics",
+      "Paracetamol"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 25,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-116",
+    "number": 116,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 25-year-old woman underwent appendectomy. 20 hours after the surgery, she was complaining of severe pain at the wound site with purulent discharges. Blood pressure 100/55 mmHg Heart rate 114 /min Temperature 38.8 °C Which of the following is the most appropriate management?",
+    "options": [
+      "Dressing",
+      "Antibiotics",
+      "Observation",
+      "Wound exploration"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 26,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-117",
+    "number": 117,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 35-year-old man has been in the Intensive Care Unit with severe pancreatitis, ventilator dependence, and pneumonia for 2 weeks. He is receiving nutrition parenterally (see lab results). Test Result Normal Values Platelets count 184 150-400 × 10^9/L Total bilirubin 4.6 3.5-16.5 mol/L APTT 36 30-40 sec INR 2.1 0.8-1.2 Which of the following is the most appropriate management?",
+    "options": [
+      "Factor X",
+      "Vitamin K",
+      "Vitamin C",
+      "Factor VIll"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 26,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-118",
+    "number": 118,
+    "specialty": "Surgery",
+    "topic": "Thoracic Surgery",
+    "stem": "A 58-year-old man had laparotomy with sigmoidectomy and colostomy for perforated diverticulitis, presented to the clinic complaining of intermittent attacks of fever for 1 week, Examination revealed normal chest and abdominal examination with healthy looking wound. Blood pressure 116/68 mmHg Heart rate 106 /min Temperature 38.2 °C Which of the following is the most appropriate next step?",
+    "options": [
+      "Exploration",
+      "Reassurance",
+      "CT scan abdomen",
+      "Plain chest X-ray"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 26,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-119",
+    "number": 119,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 41-year-old man underwent laparoscopic cholecystectomy 5 days back started to experience severe abdominal pain and distension. Examination revealed a distended tender abdomen (see report). Blood pressure 100/55 mmHg Heart rate 103 /min Temperature 37.9 °C Ultrasound: Revealed the presence of ascites. Which of the following is most appropriate management?",
+    "options": [
+      "Endoscopic retrograde cholangio pacreaticogram",
+      "Diagnostic laparoscopy",
+      "Exploratory laparotomy",
+      "Percutaneous aspiration"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 26,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-120",
+    "number": 120,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 36-year-old man was stabbed in the right lower quadrant of his abdomen 1 hour back. He complained of pain at the wound site. Local wound exploration revealed penetration of the anterior abdominal fascia. Blood pressure 110/62 mmHg Heart rate 87 /min Temperature 37.2 °C Which of the following is the most appropriate next step?",
+    "options": [
+      "CT scan abdomen",
+      "Hospital observation",
+      "Diagnostic laparoscopy",
+      "Exploratory laparotomy"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 27,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-121",
+    "number": 121,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 40-year-old man had abdominal surgery 12 hours back; he noted drainage of 20 mL of fluid from her midline abdominal wound. Which of the following is the most appropriate management?",
+    "options": [
+      "Dressing",
+      "Antibiotics",
+      "CT scan abdomen",
+      "Wound exploration"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 27,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-122",
+    "number": 122,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 40-year-old man who underwent a laparotomy and lysis for adhesive intestinal obstruction. On his regular follow up after discharge, there was discharges from the middle of the wound. Which of the following is the most appropriate management?",
+    "options": [
+      "Daily dressing",
+      "Wound inspection",
+      "Abdominal CT scan",
+      "Wound exploration"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 27,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-123",
+    "number": 123,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "A 63-year-old woman comes to the clinic for an annual check-up. On examination, she has a small and asymptomatic right femoral hernia. Which of the following is the most appropriate management?",
+    "options": [
+      "Observation",
+      "Open mesh repair",
+      "Open simple repair",
+      "Laparoscopic repair"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 27,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-124",
+    "number": 124,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 45-year-old woman presented with postprandial right upper quadrant abdominal pain, nausea, and emesis for few days that became persistent for the last 20 hours (see lab results and report). Blood pressure 110/70 mmHg, Heart rate 87 /min Temperature 37.2 °C Test Result Normal Values WBC 11 4.5-10.5 × 10^9/L Direct bilirubin 9.5 1.5-6.5 mol/L Total bilirubin 18.5 3.5-16.5 mol/L Alkaline phosphatase 463 39-117 IU/L Ultrasound: Cholelithiasis, gallbladder wall thickening, and a common bile duct of 12 mm. Which of the following is the most appropriate management?",
+    "options": [
+      "Endoscopic retrograde cholangio pacreaticogram (ERCP)",
+      "Magnetic resonant cholangio pacreaticogram (MRCP)",
+      "Laparoscopic cholecystectomy",
+      "Conservative treatment"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 27,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-125",
+    "number": 125,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 73-year-old woman presents with new onset jaundice, generalized fatigability, weight loss and loss of appetite (see report). CT scan: Multiple lesions replacing approximately 70% of the liver parenchyma. Which of the following is the most appropriate management?",
+    "options": [
+      "Colonoscopy",
+      "Upper GI endoscopy",
+      "Percutaneous biopsy",
+      "Diagnostic laparoscopy"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 28,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-126",
+    "number": 126,
+    "specialty": "Surgery",
+    "topic": "Thoracic Surgery",
+    "stem": "Which of the following confirms proper position of orotracheal intubation?",
+    "options": [
+      "Carbon dioxide monitor",
+      "Easy insertion",
+      "Movement of the chest",
+      "Distended abdomen"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 28,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-127",
+    "number": 127,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A trauma patient who lost 25% of his blood volume. Which of the following is most expected to be decreased?",
+    "options": [
+      "Urine output",
+      "Pulse pressure",
+      "Respiratory rate",
+      "Glasco coma scale"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 28,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-128",
+    "number": 128,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "Which of the following is the first priority when managing long bone fracture?",
+    "options": [
+      "Pain management",
+      "Improve function",
+      "Decrease blood loss",
+      "Decrease soft tissue trauma"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 28,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-129",
+    "number": 129,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 36-year-old man fell from a height of 4 meters, his GCS is 15 and vital signs are stable but he complains of severe bilateral heal pain. Which of the following the most appropriate next step?",
+    "options": [
+      "Pain control",
+      "Examine pulses",
+      "Bilateral splint",
+      "Bilateral foot x-ray"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 28,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-130",
+    "number": 130,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "An 18-year-old man involved in a hit and run, presented to the Emergency Room with multiple facial fractures and signs of severe brain injury. Which of the following is the most appropriate next step?",
+    "options": [
+      "Secure airway",
+      "Consult neurosurgery",
+      "Secure cervical spine",
+      "Minimize fluid resuscitation"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 29,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-131",
+    "number": 131,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "Which of the following is a hard sign for vascular injury in a trauma patient?",
+    "options": [
+      "Week pulse",
+      "Palpable thrill",
+      "Skin color change",
+      "Extensive fractures"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 29,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-132",
+    "number": 132,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "Which of the following is a hard sign for vascuoar injury?",
+    "options": [
+      "Week pulse",
+      "Audible bruit",
+      "Skin color change",
+      "Extensive fractures"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 29,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-133",
+    "number": 133,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 23-year-old woman involved in a motor vehicle accident, after completing her primary and secondary survey and gesng ready to transfer her to definitive care. Her pregnancy test was positive. Which of the following will most indicates Rh immunoglobulin?",
+    "options": [
+      "Rh positive, and abdominal trauma",
+      "Rh negative, and abdominal trauma",
+      "Rh positive, and has a wrist fracture",
+      "Rh negative, and has a wrist fracture"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 29,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-134",
+    "number": 134,
+    "specialty": "Surgery",
+    "topic": "Thoracic Surgery",
+    "stem": "A 42-year-old woman involved in a head on collision arrived at the Emergency Room talking coherently, with the following vital signs. Her examination revealed equal air entry bilaterally with ecchymosis on her anterior chest wall, distended neck veins and her abdomen is soft and lax. Blood pressure 90/60 mmHg, Heart rate 130 /min, Respiratory rate 18/min Which of the following is the most likely diagnosis?",
+    "options": [
+      "Cardiac tamponade",
+      "Cardiac contusion",
+      "Massive hemothorax",
+      "Bilateral tension pneumothorax"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 29,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-135",
+    "number": 135,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "An 18-year-old man presented to a tertiary care hospital after he was involved in a motor vehicle accident. Primary survey was conducted and he was stabilized. While gesng ready to transfer him his pressure dropped down (see report). Blood pressure 60/40 mmHg CT scan: Thoracic aortic injury and a splenic laceration with free fluid in the abdomen. Which of the following is the most appropriate transfer?",
+    "options": [
+      "Angiography",
+      "Operating room for laparotomy",
+      "Operating room for thoracotomy",
+      "A center that has a vascular surgeon"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 29,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-136",
+    "number": 136,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "An 18-year-old man presented to the Emergency Room with bleeding from a deep 10 cm anterior laceration of his right thigh. Which of the following is the most appropriate next step?",
+    "options": [
+      "Apply tourniquet",
+      "Call a vascular surgeon",
+      "Put direct pressure on the wound",
+      "Put pressure on the femoral artery above the wound"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 30,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-137",
+    "number": 137,
+    "specialty": "Surgery",
+    "topic": "Burns",
+    "stem": "A 17-year-old girl was admitted with a 20% burn transferred to the burn unit for proper resuscitation. Which of the following goals will most indicates that adequate resuscitation is achieved?",
+    "options": [
+      "Normalizing heart rate",
+      "Normalizing blood pressure",
+      "Urine output of 0.6 ml/kg/hr",
+      "Central venous pressure of 12"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 30,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-138",
+    "number": 138,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "The vascular surgeon was called for help in the Operating Room by the colorectal surgeon who is doing a low anterior resection for colon cancer as he encountered pelvic bleeding that he could not control, Which of the following is the most appropriate next step?",
+    "options": [
+      "Do on table angiogram",
+      "Heavily pack the pelvis",
+      "Infra renal aortic clamp",
+      "Supra celiac aortic clamp"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 30,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-139",
+    "number": 139,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "The vascular surgeon was called for help in the Operating Room by the colorectal surgeon who is doing a low anterior resection for colon cancer as he encountered pelvic bleeding that he could not control, the pelvis was packed and the bleeding slowed down but the patient dropped his pressure again. Blood pressure 60/40 mmHg. Which of the following is the most appropriate next step?",
+    "options": [
+      "Do on table angiogram",
+      "Infra renal aortic clamp",
+      "Supra celiac aortic clamp",
+      "Remove the packs and repair the injury"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 30,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-140",
+    "number": 140,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 56-year-old woman presents to the clinic with a non-healing ulcer over her right lateral Malleolus, she is hypertensive but not diabetic. Which of the following is the most appropriate next step?",
+    "options": [
+      "Venous duplex",
+      "Arterial doppler US",
+      "Examine distal pulses",
+      "Do ankle brachial index"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 30,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-141",
+    "number": 141,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 56-year-old woman presents to the clinic with a non-healing ulcer over her right lateral Malleolus, she is hypertensive but not diabetic. Her pulse examination is normal and her local examination shows dark discoloration of the skin around the ulcer and a viable ulcer bed. Which of the following is the most appropriate next step?",
+    "options": [
+      "CT angiogram",
+      "Venous duplex US",
+      "Arterial doppler US",
+      "Conventional angiogram/venogram"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 31,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-142",
+    "number": 142,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 7-year-old girl presents with a vascular anomaly on her left cheek. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Heamangioma",
+      "Venous malformations",
+      "Arterio-venouse fistula",
+      "Lymphatic malformations"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 31,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-143",
+    "number": 143,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "A 13-year-old girl presents with a vascular malformation of her left leg that is growing over the years. Which of following will most indicates treatment and intervention?",
+    "options": [
+      "Pain",
+      "Claudication",
+      "Cosmetic reasons",
+      "Congestive heart failure"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 31,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-144",
+    "number": 144,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 38-year-old woman presents with swelling of her left leg that is gradually increasing over the last 3 months, no history of travel or and surgeries over the last 6 months. Which of the following is the most important further history to obtain?",
+    "options": [
+      "Smoking",
+      "History of trauma",
+      "Medication history",
+      "Family history of similar problems"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 31,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-145",
+    "number": 145,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 38-year-old woman presents with swelling of her left leg that is gradually increasing over the last 3 months, no history of travel or surgeries or trauma over the last 6 months. Her distal pulses are palpable and her leg shows non-pinng edema with thickened skin and a dark discoloration. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "CT angio",
+      "Conventional venogram",
+      "Venous duplex ultrasound",
+      "Magnetic resonant venograoghy"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 31,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-146",
+    "number": 146,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 38-year-old woman presents with swelling of her left leg that is gradually increasing over the last 3 months, no history of travel or surgeries or trauma over the last 6 months, no family history of similar problems. Her distal pulses are palpable and her leg shows non-pisng edema with thickened skin and a dark discoloration. Which of the following is the most appropriate diagnostic test?",
+    "options": [
+      "Lymphoscintigraphy",
+      "Venous duplex ultrasound",
+      "Conventional angiography",
+      "Magnetic resonant venography"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 31,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-147",
+    "number": 147,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 38-year-old woman presents with swelling of her left leg that is gradually increasing over the last 3 months, no history of travel or surgeries or trauma over the last 6 months. Her distal pulses are palpable and her leg shows non-pisng edema with thickened skin and a dark discoloration. Which of the following is the most appropriate management?",
+    "options": [
+      "Anticoagulation",
+      "Lymphatic bypass",
+      "Prophylactic heparin",
+      "Lymphatic massage and compression bandage"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 32,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-148",
+    "number": 148,
+    "specialty": "Surgery",
+    "topic": "Thoracic Surgery",
+    "stem": "A 70-year-old man presents with abdominal pain. Examination revealed a pulsatile abdominal mass felt on deep palpation with mild tenderness just above the umbilicus (see lab results and report). Blood pressure 110/70 mmHg Heart rate 76 /min Respiratory rate 14 /min Temperature 36.6 °C Oxygen saturation 99 % Test Result Normal Values RBC 6.0 4.7-6.1 x 1012/L (Male) 4.2-5.4 x 1012/L (Female) Hb 135 130-170 g/L (Male) 120-160 g/L (Female) HCT 0.42 0.42-0.52 (Male) 0.37-0.48 (Female) Platelets count 155 150-400 × 10^9/L WBC 13.5 4.5-10.5 × 10^9/L Sodium 136 134-146 mmol/L Potassium 4 3.5-5.1 mmol/L Bicarbonate 25 21-28 mmol/L Upright chest x-ray: No air under diaphragm. Which the following is the most appropriate lab investigation to be ordered next?",
+    "options": [
+      "Cl level",
+      "Amylase level",
+      "Calcium level",
+      "Arterial blood gas"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 32,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-149",
+    "number": 149,
+    "specialty": "Surgery",
+    "topic": "Thoracic Surgery",
+    "stem": "A 70-year-old man presents with abdominal pain. Examination revealed a pulsatile abdominal mass felt on deep palpation with mild tenderness just above the umbilicus (see lab results and report). Blood pressure 110/70 mmHg Heart rate 76 /min Respiratory rate 16 /min Temperature 36.6 °C Oxygen saturation 99 % Test Result Normal Values RBC 6.0 4.7-6.1 x 1012/L (Male) 4.2-5.4 x 1012/L (Female) Hb 135 130-170 g/L (Male) 120-160 g/L (Female) HCT 0.42 0.42-0.52 (Male) 0.37-0.48 (Female) Platelets count 155 150-400 × 10^9/L WBC 13.5 4.5-10.5 × 10^9/L Sodium 136 134-146 mmol/L Potassium 4 3.5-5.1 mmol/L Bicarbonate 25 21-28 mmol/L Alanine aminotransferase 10 5-40 IU/L Aspartate aminotransferase 20 12-40 IU/L Amylase 100 24-151 IU/L Lactate dehydrogenase 70 60-160 IU/L Lipase 100 0-160 IU/L Urea 3.5 2.75-7.4 mmol/L Blood urea nitrogen 7.0 2.8 to 8.9 mmol/. Creatinine 69 44-115 mol/L Upright chest x-ray: No air under diaphragm. Abdominal X-Ray: Unremarkableft Which of the following is the most appropriate diagnostic test?",
+    "options": [
+      "US abdomen",
+      "CT angiogram",
+      "MR angiography",
+      "Conventional angiography"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 32,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-150",
+    "number": 150,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "Surgery A 32-year-old man brought to the Emergency Department after he was involved in a road traffic accident. He was diagnosed with massive intra-abdominal bleeding due to a severe splenic injury. He underwent exploratory laparotomy and splenectomy. Which of the following is most likely to be low in the early postoperative period?",
+    "options": [
+      "Insulin",
+      "Glucagon",
+      "Prolactin",
+      "Vasopressin"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 33,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-151",
+    "number": 151,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 27-year-old man admitted to the Intensive Care Unit 4 weeks ago with severe infected necrotizing pancreatitis. He underwent several interventions for sepsis control and drainage of collections. He is on mechanical ventilation and inotropes. Which of the following metabolic responses is most expected?",
+    "options": [
+      "Reduced insulin resistance",
+      "Reduced gluconeogenesis",
+      "Increased lipolysis",
+      "Hypoglycemia"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 33,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-152",
+    "number": 152,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 38-year-old man who is known to have Crohn's disease, presented to the Emergency Department with a history of 8-12 episodes of diarrhea per day over the last 5 days. On examination, he was dehydrated; abdomen was distended with generalized muscle weakness (see report). ECG: Flattened T-waves. Which of the following is the most likely electrolyte abnormality?",
+    "options": [
+      "Hypomagnesemia",
+      "Hyponatremia",
+      "Hypocalcemia",
+      "Hypokalemia"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 34,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-153",
+    "number": 153,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 33-year-old man is known to have renal impairment, underwent appendectomy for acute appendicitis. On the first day after surgery, he was complaining of palpitation (see lab result and report). Test Result Normal Value Potassium 6.5 3.5-5.1 mmol/L ECG: Tented T-waves. Which of the following is the most appropriate initial step in management?",
+    "options": [
+      "Intravenous infusion of dextrose with insulin",
+      "Intravenous infusion of sodium bicarbonate",
+      "Intravenous calcium gluconate",
+      "Immediate hemodialysis"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 34,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-154",
+    "number": 154,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "A 55-year-old woman known to have chronic duodenal ulcer, presented to the Emergency Department with a history of frequent vomiting for 2 weeks. Examination revealed dehydration, with distended upper abdomen and normal bowel sounds (see report). Upper Gastrointestinal Endoscopy: Severely narrowed pylorus due to chronic peptic ulcer disease. Which of the following is the most expected?",
+    "options": [
+      "High urinary potassium",
+      "Respiratory alkalosis",
+      "Metabolic acidosis",
+      "Hypokalemia"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 34,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-155",
+    "number": 155,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 36-year-old man presented to the Emergency Department with a history of right iliac fossa pain for 9 days associated with fever and vomiting. Physical examination revealed tender abdominal mass in the right iliac fossa with sluggish bowel sounds (see report). Temperature 39 °C CT scan: Appendicular abscess, 15 x 18 cm in size, in the right iliac fossa. Which of the following is a characteristic pathophysiology?",
+    "options": [
+      "Redistribution of blood flow",
+      "Peripheral vasoconstriction",
+      "Decreased cardiac index",
+      "Bradycardia"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 34,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-156",
+    "number": 156,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 38-year-old man has suffered from a severe hypovolemic shock due to traumatic splenic injury and underwent splenectomy. He received 8 units of packed red blood cells during resuscitation and surgery. He was admitted to the intensive care unit. On the 3rd postoperative day, he was febrile (see report). Gram stain of blood: Positive for gram-negative bacilli. Which of the following is the most likely source of the bacteremia?",
+    "options": [
+      "Contaminated blood",
+      "Urinary tract infection",
+      "Respiratory tract infection",
+      "Translocation from the bowel"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 35,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-157",
+    "number": 157,
+    "specialty": "Surgery",
+    "topic": "Thoracic Surgery",
+    "stem": "A 41-year-old man underwent blood transfusion for postoperative bleeding. He developed pain at the site of the infusion with fever and chest tightness after a few minutes of starting the transfusion. Temperature 38 °C Which of the following is the most likely diagnosis?",
+    "options": [
+      "Febrile non-hemolytic reaction",
+      "Bacterial blood contamination",
+      "Hemolytic reaction",
+      "Allergic reaction"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 35,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-158",
+    "number": 158,
+    "specialty": "Surgery",
+    "topic": "Infections & Wounds",
+    "stem": "A 25-year-old man brought to the Emergency Department unconscious with massive bleeding from a stab wound in the right thigh. On examination, he was pale with active bleeding from the stab wound (see lab result). Test Result Normal Value Hb 89 130-170 g/L Which of the following is the most important initial step in management?",
+    "options": [
+      "Intravenous ringer lactate infusion",
+      "Tourniquet around the right thigh",
+      "Transfusion of fresh blood",
+      "Orotracheal intubation"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 35,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-159",
+    "number": 159,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "A 37-year-old man with a history of chronic duodenal ulcer, presented to the Emergency Department complaining of frequent postprandial vomiting since the last 2 weeks. On physical examination, he was dehydrated with positive succussion splash when shaking the abdomen. Which of the following is the most expected acid-base abnormality?",
+    "options": [
+      "Metabolic acidosis",
+      "Metabolic alkalosis",
+      "Compensated metabolic acidosis",
+      "Compensated metabolic alkalosis"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 35,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-160",
+    "number": 160,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 32-year-old man who is known to have ulcerative colitis presented to the Emergency Department with a history of frequent attacks of watery diarrhea for 10 days. On examination, he was severely dehydrated with a non-distended, soft abdomen. Which of the following is the most expected acid-base abnormality?",
+    "options": [
+      "Metabolic acidosis",
+      "Metabolic alkalosis",
+      "Compensated metabolic acidosis",
+      "Compensated metabolic alkalosis"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 36,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-161",
+    "number": 161,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 67-year-old man, known to have advanced antral carcinoma with liver metastasis, presented to the Emergency Department with a history of frequent vomiting for 10 days. On examination, he was jaundiced and dehydrated (see report). ECG: Flattened T-wave. Which of the following is the most expected finding in urinalysis?",
+    "options": [
+      "Aciduria",
+      "High sodium",
+      "High potassium",
+      "Alkaline urine"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 36,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-162",
+    "number": 162,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 35-year-old man with a history of open appendectomy 5 years ago presented with abdominal pain, distension, vomiting, and constipation for 3 days. On physical examination, he was dehydrated, abdomen was distended with marked tenderness in the right iliac fossa and exaggerated bowel sounds. He was scheduled for emergency exploratory laparotomy (see report). Plain abdominal X-ray: Distended small bowel, multiple air-fluid levels with collapsed colon. Which of the following is contraindicated?",
+    "options": [
+      "Propofol",
+      "Ketamine",
+      "Sevoflurane",
+      "Nitrous oxide"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 36,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-163",
+    "number": 163,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 45-year-old man involved in a motor vehicle accident with an isolated head injury, remains in a coma for 5 days after the accident. Which of the following is the most appropriate feeding method in the early stage of management?",
+    "options": [
+      "Gastrostomy tube feeding",
+      "Nasogastric tube feeding",
+      "Central parenteral feeding",
+      "Peripheral parenteral feeding"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 36,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-164",
+    "number": 164,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "A 64-year-old man with emphysema was admitted with hematemesis. On endoscopy, a bleeding duodenal ulcer was diagnosed and controlled but the patient became confused and agitated (see lab results). Test Result Normal Values ABG PCO2 75 4.7-6.0 kPa pH 7.23 7.36-7.45 ABG PO2 42 10.6-14.2 kPa Which of the following is the most appropriate therapy?",
+    "options": [
+      "Dexamethasone",
+      "Sodium bicarbonate",
+      "High flow O2 therapy",
+      "Intubate and hyperventilate"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 36,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-165",
+    "number": 165,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "An 18-year-old woman developed urticaria and wheezing following intravenous injection of contrast for abdominal CT scan. Blood Pressure 90/50 mmHg Heart rate 110 /min Temperature 37.2 °C Which of the following is the most appropriate immediate therapy?",
+    "options": [
+      "Steroids",
+      "Intubation",
+      "Epinephrine",
+      "Beta blocker"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 37,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-166",
+    "number": 166,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 40-year-old woman presented with progressive redness over the dorsum of the left hand associated with pain and fever. She gave a history of a knife prick at the affected area 3 days ago. Temperature 37.9 °C Which of the following is the most likely diagnosis?",
+    "options": [
+      "Cellulitis",
+      "Carbuncle",
+      "Gas gangrene",
+      "Necrotizing fasciitis"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 37,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-167",
+    "number": 167,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 50-year-old man who is known to have non-insulin-dependent diabetes presented with a progressive painful swelling on the back of the neck for 5 days. On physical examination, there is a 5x6 cm swelling and redness with multiple discharging openings. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Abscess",
+      "Cellulitis",
+      "Furuncle",
+      "Carbuncle"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 37,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-168",
+    "number": 168,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "Which of the following is a contraindication for liver transplantation?",
+    "options": [
+      "Acute liver failure",
+      "Liver cirrhosis with active alcohol",
+      "End-stage liver disease with ascites",
+      "End-stage liver disease with encephalopathy"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 37,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-169",
+    "number": 169,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "A patient presented with frequent vomiting due to gastric outlet obstruction. Which of the following is the most expected abnormality?",
+    "options": [
+      "Metabolic acidosis with hyperkalemia",
+      "Metabolic alkalosis with hypokalemia",
+      "Metabolic acidosis with hypokalemia",
+      "Metabolic alkalosis with hyperkalemia"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 38,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-170",
+    "number": 170,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "Which of the following hormones reduces water loss through the kidneys?",
+    "options": [
+      "Vasopressin",
+      "Angiotensin",
+      "Cortisone",
+      "Renin"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 38,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-171",
+    "number": 171,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A patient presented with severe diarrhea. Which of the following is the most expected abnormalities?",
+    "options": [
+      "Metabolic acidosis with hypokalemia",
+      "Metabolic acidosis with hyperkalemia",
+      "Metabolic alkalosis with hypokalemia",
+      "Metabolic alkalosis with hyperkalemia"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 38,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-172",
+    "number": 172,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "A patient presented with severe maxillofacial injury with mandibular fracture dislocation and profuse oral bleeding. Which of the following is the most appropriate way to secure the airway?",
+    "options": [
+      "Laryngeal mask",
+      "Orotracheal tube",
+      "Nasotracheal tube",
+      "Cricothyroidotomy"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 38,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-173",
+    "number": 173,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "Which of the following is the most common cause of fever in the first 24 hours after abdominal surgery?",
+    "options": [
+      "Atelectasis",
+      "Wound infection",
+      "Blood transfusion",
+      "Intra-abdominal collection"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 38,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-174",
+    "number": 174,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 21-year-old man was brought to the Emergency Department following a motorbike crash, complaining of difficulty in breathing. On examination, he was conscious, oriented, dyspnoeic with reduced breath sounds and tympanic percussion over the left hemithorax. Blood pressure 90/55 mmHg Heart rate 110 /min Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Plain chest X-ray",
+      "Endotracheal intubation and ventilation",
+      "Needle decompression of left hemithorax",
+      "Chest tube insertion in the left hemithorax"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 38,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-175",
+    "number": 175,
+    "specialty": "Surgery",
+    "topic": "Thoracic Surgery",
+    "stem": "A 20-year-old man was brought to the Emergency Department, 20 minutes after a motor vehicle accident. On examination, his extremities were warm, he was conscious, oriented with a clear chest and normal abdomen. Blood pressure 90/40 mmHg Heart rate 70 /min Which of the following is the most likely type of shock?",
+    "options": [
+      "Septic",
+      "Neurogenic",
+      "Cardiogenic",
+      "Hypovolemic"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 39,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-176",
+    "number": 176,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 25-year-old man was admitted through the Emergency Department complaining of a 5-day history of right iliac fossa pain. Physical examination confirmed a tender mass in the right iliac fossa with sluggish bowel sounds (see report). CT scan: Acute appendicitis, appendicolith, with 10×15 cm abscess, extending from the right iliac fossa to the abdominal wall. Which of the following is the most appropriate intervention?",
+    "options": [
+      "Open drainage of the collection",
+      "Percutaneous drainage of the collection",
+      "Open appendectomy with drainage of the collection",
+      "Laparoscopic appendectomy with drainage of the collection"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 39,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-177",
+    "number": 177,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "A 33-year-old woman presented with a 1-day history of right upper quadrant abdominal pain associated with fever, nausea, and vomiting. Physical examination confirmed marked tenderness in the right upper quadrant of the abdomen (see report). Ultrasound: Thick wall gallbladder, pericholecystic fluids and multiple gallstones. Which of the following is the most appropriate management?",
+    "options": [
+      "Early open cholecystectomy",
+      "Early laparoscopic cholecystectomy",
+      "Delayed cholecystectomy in 2-3 months",
+      "Emergency cholecystectomy tube insertion"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 39,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-178",
+    "number": 178,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 28-year-old woman was admitted through the Emergency Department with a 12-hour history of epigastric pain. Physical examination confirmed epigastric tenderness. Over the next 3 days during hospitalization, the patient completely recovered clinically and biochemically (see lab results and report). Test Result Normal Values Alkaline phosphatase 110 39-117 IU/L Amylase 250 24-151 IU/L Ultrasound: Multiple gallstones with mild extrahepatic biliary dilation. Which of the following is the most appropriate intervention?",
+    "options": [
+      "Abdominal computed tomography",
+      "Cholecystectomy before discharge",
+      "Interval cholecystectomy in 6-8 weeks",
+      "Endoscopic retrograde cholangiopancreatography"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 39,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-179",
+    "number": 179,
+    "specialty": "Surgery",
+    "topic": "Burns",
+    "stem": "A 38-year-old man with a history of recurrent acute pancreatitis over the last 10 years presents with a 12-hour history of frequent episodes of vomiting fresh blood. Intravenous fluid resuscitation was initiated (see reports). Upper gastrointestinal endoscopy: Isolated bleeding fundal varices which have been controlled by injection sclerotherapy. Ultrasound: Splenomegaly, normal portal vein and thrombosed splenic vein. Which of the following is the most appropriate management?",
+    "options": [
+      "Splenectomy",
+      "Portacaval shunt",
+      "Distal splenorenal shunt",
+      "Sengstaken Blakemore tube"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 40,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-180",
+    "number": 180,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "A 28-year-old woman presented to the Emergency Department with an 18-hour history of severe epigastric pain associated with vomiting. She is known to have multiple small gallstones. Physical examination confirmed upper abdominal tenderness (see lab results). Test Result Normal Values WBC 13.4 4.5-10.5 × 10^9/L Alkaline phosphatase 289 39-117 IU/L Amylase 488 24-151 IU/L Direct bilirubin 19 1.5-6.5 mol/L Total bilirubin 34 3.5-16.5 mol/L Which of the following is the most appropriate initial management?",
+    "options": [
+      "Abdominal ultrasound",
+      "Intravenous crystalloid infusion",
+      "Intravenous broad-spectrum antibiotics",
+      "Endoscopic retrograde cholangiopancreatography"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 40,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-181",
+    "number": 181,
+    "specialty": "Surgery",
+    "topic": "Breast Surgery",
+    "stem": "A 19-year-old woman complains of a 4-month history of a left breast mass. Breast examination confirmed a well-circumscribed, firm, smooth mobile lump, 2x2 cm in size, in the lateral upper quadrant of the left breast. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Sclerosis",
+      "Galactocele",
+      "Duct ectasia",
+      "Fibroadenoma"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 40,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-182",
+    "number": 182,
+    "specialty": "Surgery",
+    "topic": "Breast Surgery",
+    "stem": "A 25-year-old breastfeeding mother presented with right breast pain for 24 hours. Examination confirmed a tender swelling with skin redness in the outer lower quadrant of the right breast, with warm skin, but no fluctuation. Which of the following is the most appropriate initial management?",
+    "options": [
+      "Aspiration",
+      "Flucloxacillin",
+      "Prolactin antagonist",
+      "Incision and drainage"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 41,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-183",
+    "number": 183,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 65-year-old man presented to the Emergency Department with an 8-hour history of severe, sudden central abdominal pain associated with vomiting. He has a history of cardiomyopathy. He reports having passed loose stools once. On examination, the abdomen was soft with exaggerated bowel sounds (see lab results). Test Result Normal Values WBC 26.7 4.5-10.5 × 10^9/L Amylase 155 24-151 IU/L Which of the following is the most likely diagnosis?",
+    "options": [
+      "Acute pancreatitis",
+      "Small bowel obstruction",
+      "Dissecting aortic aneurysm",
+      "Mesenteric vascular occlusion"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 41,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-184",
+    "number": 184,
+    "specialty": "Surgery",
+    "topic": "Breast Surgery",
+    "stem": "A 58-year-old woman complains of a 4-month history of a right breast lump, increasing in size, associated with bloody nipple discharge. Physical examination confirmed a 4cm central hard mass with ill-defined edges. The right nipple was inverted with enlarged axillary lymph nodes (see report). Mammogram: Sub-areolar dense irregular density with microcalcification and thickening of overlying skin. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Excisional biopsy",
+      "Needle core biopsy",
+      "Discharge cytology",
+      "Fine needle aspiration"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 41,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-185",
+    "number": 185,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 68-year-old man was admitted through the Emergency Department with a 24-hour history of sudden severe lower abdominal pain, associated with progressive abdominal distension and constipation. On examination, the abdomen was hugely distended, tympanic with tenderness over the left iliac fossa. Digital rectal examination confirmed an empty rectum (see lab result and report). Test Result Normal Value WBC 22 4.5-10.5 × 10^9/L Abdominal plain X-ray: Y-shaped shadow surrounded by a hugely distended colon arising from the pelvis. Which of the following is the most appropriate intervention?",
+    "options": [
+      "Fleet enema",
+      "Colonoscopy",
+      "CT with double contrast",
+      "Sigmoid colectomy with end colostomy"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 41,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-186",
+    "number": 186,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 28-year-old man presented with a 2-month history of frequent attacks of bloody stools. Physical examination was unremarkableft Proctoscopic examination showed multiple rectal polyps (see report). Colonoscopy: Colon and rectum were carpeted with polyps, multiple biopsies were taken. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Ulcerative colitis",
+      "Diverticulosis coli",
+      "Familial adenomatous polyposis",
+      "Human Papilloma virus process"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 42,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-187",
+    "number": 187,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 72-year-old diabetic presented to the Emergency Department with a 2-day history of lower abdominal pain, nausea, vomiting and bloody diarrhea. Physical examination confirmed tenderness in the left lower quadrant (see lab result and report). Test Result Normal Value WBC 17.4 4.5-10.5 × 10^9/L Plain abdominal x-ray: Thickened descending and sigmoid colon with thumb printing appearance. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Crohn's disease",
+      "Ischemic colitis",
+      "Ulcerative colitis",
+      "Acute diverticulitis"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 42,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-188",
+    "number": 188,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "1. A 65-year-old man complains of a 2-month history of dysuria associated with the passage of cloudy urine with bubbling on micturition. He reports a 2-year history of recurrent left iliac fossa pain. Physical examination was unremarkable (see reports). Sigmoidoscopy: Narrowed sigmoid colon with intact mucosa. Cystoscopy: Erythematous area in the dome of the bladder. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Ischemic colitis",
+      "Diverticular disease",
+      "Squamous cell carcinoma of the bladder",
+      "Transitional cell carcinoma of the bladder"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 42,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-189",
+    "number": 189,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "2. A 28-year-old man presented with a 4-day history of abdominal pain, associated with frequent bloody diarrhea and vomiting. Physical examination confirmed he was dehydrated, had a distended abdomen, tenderness mainly over the lower abdomen with sluggish bowel sounds. He is known to have ulcerative colitis and is having medical treatment (see lab result and report). Test Result Normal Value WBC 21.3 4.5-10.5 × 10^9/L Plain abdominal X-ray: Dilated transverse colon (15 cm) with loss of haustrations. Which of the following is the most appropriate management?",
+    "options": [
+      "High dose systemic steroid",
+      "High dose systemic infliximab",
+      "Proctocolectomy with ileal pouch",
+      "Total colectomy with end ileostomy"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 43,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-190",
+    "number": 190,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "Explanation: Toxic megacolon is an indication for surgery. 3. A 66-year-old healthy man complains of rectal bleeding for 3 months. Anorectal examination confirmed 3rd-degree haemorrhoids. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Colonoscopy",
+      "Haemorrhoidectomy",
+      "Abdominal computed tomography",
+      "Submucosal injection of sclerosant"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 43,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-191",
+    "number": 191,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "4. A 52-year-old man presented to the Emergency Department with a 5-day history of right upper quadrant abdominal pain associated with fever, and yellowish discoloration of sclera. On examination, he was jaundiced with mild right upper quadrant abdominal tenderness (see lab results). Test Result Normal Values Alkaline phosphatase 389 39-117 IU/L Alanine aminotransferase 85 5-40 IU/L Aspartate aminotransferase 78 12-40 IU/L Direct bilirubin 55 1.5-6.5 mol/L Total bilirubin 66 3.5-16.5 mol/L Which of the following is the most appropriate next investigation?",
+    "options": [
+      "Abdominal computed tomography",
+      "Trans-abdominal ultrasonography",
+      "Magnetic resonant cholangiopancreatography",
+      "Endoscopic retrograde cholangiopancreatography"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 43,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-192",
+    "number": 192,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "5. A 38-year-old woman presented to the Emergency Department with epigastric pain for 6 days, radiating to the back, associated with frequent vomiting. She is known to have multiple small gallstones. Physical examination confirmed diffuse abdominal distension, epigastric tenderness with sluggish bowel sounds (see lab results and report). Test Result Normal Values Alkaline phosphatase 115 39-117 IU/L Amylase 149 24-151 IU/L Direct bilirubin 5.6 1.5-6.5 mol/L Total bilirubin 15.8 3.5-16.5 mol/L Erect chest X-ray: Left pleural effusion. Which of the following is the most appropriate initial investigation?",
+    "options": [
+      "Trans-abdominal ultrasound",
+      "Urine analysis for amylase level",
+      "Abdominal computed tomography",
+      "Analysis of gastrointestinal aspirated fluids"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 44,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-193",
+    "number": 193,
+    "specialty": "Surgery",
+    "topic": "Hepatobiliary & Pancreas",
+    "stem": "6. A 38-year-old woman presented to the Emergency Department complaining of epigastric pain and post-prandial vomiting. She was conservatively treated for acute pancreatitis 4 weeks ago. Physical examination confirmed tenderness and fullness in the epigastric region (see lab results and report). Test Result Normal Values Amylase 413 24-151 IU/L WBC 15.9 4.5-10.5 × 10^9/L Abdominal ultrasound: Fluid collection surrounded by thick wall in the lesser sac 15 x 17 cm in size. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Abscess",
+      "Phlegmon",
+      "Pseudocyst",
+      "Walled off necrosis"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 44,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-194",
+    "number": 194,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "7. A 42-year-old man presented to the Emergency Department complaining of a 12-hour history of severe epigastric pain. Physical examination confirmed upper abdominal tenderness (see lab results and report). Test Result Normal Values WBC 14.5 4.5-10.5 × 10^9/L Amylase 254 24-151 IU/L Erect chest X-ray: Normal. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Abdominal CT scan",
+      "Abdominal ultrasound",
+      "Exploratory laparotomy",
+      "Urine analysis for amylase"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 44,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-195",
+    "number": 195,
+    "specialty": "Surgery",
+    "topic": "Urology",
+    "stem": "8. A 67-year-old man presented with a 2-month history of yellowish discoloration of his sclera and skin with dark urine and pale stool. On examination, he was jaundiced with a palpable distended gallbladder (see report and lab results). Test Result Normal Values Alkaline phosphatase 421 39-117 IU/L Direct bilirubin 122.3 1.5-6.5 mol/L Total bilirubin 134.5 3.5-16.5 umol/L Ultrasound: Dilated intra and extrahepatic bile ducts with hugely distended gallbladder. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Klatskin tumour",
+      "Pancreatic cancer",
+      "Mirizzi's syndrome",
+      "Common bile duct stone"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 45,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-196",
+    "number": 196,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "9. A 25-year-old patient presented to the Emergency Department with a 6-hour history of severe periumbilical colicky abdominal pain associated with frequent vomiting, and abdominal distension. Physical examination confirmed diffuse abdominal distension with exaggerated bowel sounds. Which of the following is the most appropriate initial step in management?",
+    "options": [
+      "Ultrasound abdomen",
+      "Diagnostic laparoscopy",
+      "Examination of the groin",
+      "Abdominal computed tomography"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 45,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-197",
+    "number": 197,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "10. A 28-year-old is 4-days post-exploratory laparotomy for a perforated acute appendicitis and is complaining of generalized abdominal discomfort and vomiting. Physical examination confirmed a distended abdomen, mild generalized tenderness, and sluggish bowel sounds (see lab result and report). Test Result Normal Value WBC 12.5 4.5-10.5 × 10^9/L Abdominal X-ray: Multiple air-fluid levels. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Paralytic ileus",
+      "Volvulus of small bowel",
+      "Intra-abdominal collection",
+      "Adhesive small bowel obstruction"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 45,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-198",
+    "number": 198,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "12. A 28-year-old man presented with a 2-year history of reducible right inguinal hernia that became painful for 16 hours. It is associated with progressive abdominal distension, and vomiting. Physical examination confirmed a distended abdomen, exaggerated bowel sound, and a tender right inguinal swelling with red discoloration of the overlying skin (see lab result and report). Test Result Normal Value WBC 9.8 4.5-10.5 × 10^9/L Erect abdominal X-ray: Multiple air-fluid levels. Which of the following is the most likely hernia complication?",
+    "options": [
+      "Irreducible",
+      "Obstructed",
+      "Incarcerated",
+      "Strangulated"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 46,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-199",
+    "number": 199,
+    "specialty": "Surgery",
+    "topic": "Endocrine Surgery",
+    "stem": "13. A 42-year-old woman presented with a 4-month history of an anterior neck swelling. Physical examination confirmed a solitary nodule in the right lobe of the thyroid (see lab results and report). Test Result Normal Values Thyroid-Stimulating Hormone 0.05 0.4 - 5.0 U/mL Thyroxine (T4 free serum) 37 8.5 - 15.2 pmol/L Ultrasound: Right thyroid lobe solitary solid nodule 2 x 3 cm. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Thyroid CT scan",
+      "Right hemithyroidectomy",
+      "Thyroid isotope scintigraphy",
+      "Fine needle aspiration cytology"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 46,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-200",
+    "number": 200,
+    "specialty": "Surgery",
+    "topic": "Endocrine Surgery",
+    "stem": "14. A 33-year-old woman presented with a lump in her neck. Physical examination confirmed enlarged right cervical lymph nodes with a normal thyroid gland. She underwent percutaneous biopsy of the lymph nodes (see report). Histopathology: Normal follicular thyroid cells. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Ectopic thyroid",
+      "Thyroid lymphoma",
+      "Papillary thyroid cancer",
+      "Follicular thyroid cancer"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 46,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-201",
+    "number": 201,
+    "specialty": "Surgery",
+    "topic": "Vascular Surgery",
+    "stem": "15. A 52-year-old woman presented with a 3-month history of a progressive anterior neck swelling with stridor. She has a 12-year history of Hashimoto's thyroiditis. Physical examination confirmed a diffuse, large, non-tender thyroid swelling with retrosternal extension. A core needle biopsy was ordered (see reports). Ultrasound: Diffuse thyroid enlargement, encasing bilateral carotid sheaths. Histopathology: Malignant thyroid tumour. Which of the following is the most likely tumour?",
+    "options": [
+      "Follicular",
+      "Medullary",
+      "Anaplastic",
+      "Lymphoma"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 47,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-202",
+    "number": 202,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "16. A 75-year-old man presented with a 12-hour history of sudden lower abdominal pain, associated with progressive abdominal distension, nausea, vomiting, and absolute constipation. Physical examination confirmed a grossly distended abdomen, generalized discomfort with normal bowel sounds with an empty rectum (see report). Erect abdominal X-ray: Massively distended bowel loop pointing to the right upper quadrant. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Sigmoid volvulus",
+      "Rectosigmoid cancer",
+      "Closed-loop obstruction",
+      "Acute sigmoid diverticulitis"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 47,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-203",
+    "number": 203,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "17. A 58-year-old man presented with a 4-month history of generalized fatigue and shortness of breath. Physical examination confirmed a non-tender mass in the right iliac fossa (see lab result). Test Result Normal Value Hb 66 130-170 g/L Which of the following is the most important step in management?",
+    "options": [
+      "Colonoscopy",
+      "Abdominal ultrasound",
+      "Percutaneous biopsy of the mass",
+      "Abdominal computed tomography"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 47,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-204",
+    "number": 204,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "18. A 45-year-old woman presents to the Emergency Department with severe continuous mid- abdominal pain for 16 hours, associated with nausea and vomiting. She is known to have cholelithiasis. Physical examination confirmed epigastric tenderness (see lab results). Test Result Normal Values WBC 13 4.5-10.5 × 10^9/L Amylase 650 24-151 IU/L Which of the following is the most likely diagnosis?",
+    "options": [
+      "Hepatitis",
+      "Acute pancreatitis",
+      "Acute cholecystitis",
+      "Perforated peptic ulcer disease"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 48,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-205",
+    "number": 205,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "19. A 58-year-old man presented with a 3-month history of vague epigastric pain associated with weight loss and loss of appetite. Physical examination was normal. Which of the following is the most appropriate investigation?",
+    "options": [
+      "Plain abdominal CT",
+      "Gastroduodenoscopy",
+      "Abdominal ultrasound",
+      "Gastrografin swallow"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 48,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-206",
+    "number": 206,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "20. A 33-year-old man presented to the Emergency Department with a 24-hour history of epigastric pain. Physical examination confirmed tenderness in the epigastric area with normal bowel sounds (see lab results and report). Blood pressure 100/60 mmHg Heart rate 110 /min Temperature 37.7 °C Test Result Normal Values WBC 14 4.5-10.5 × 10^9/L Amylase 223 24-151 IU/L Erect chest x-ray: Free air under the diaphragm. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Gastrografin swallow",
+      "Gastroduodenoscopy",
+      "Exploratory laparotomy",
+      "Conservative treatment"
+    ],
+    "answer": 2,
+    "answerLetter": "C",
+    "sourcePage": 48,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-207",
+    "number": 207,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "21. A 27-year-old obese woman presented to the Emergency Department with a 6-day history of right iliac fossa pain associated with nausea, vomiting, and loss of appetite. Physical examination confirmed tenderness in the right iliac fossa (see lab result). Test Result Normal Value WBC 13 4.5-10.5 × 10^9/L Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Open surgery",
+      "Abdominal CT scan",
+      "Abdominal ultrasound",
+      "Diagnostic laparoscopy"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 48,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-208",
+    "number": 208,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "22. A 34-year-old man who underwent an open repair of a right inguinal hernia 3 years ago, presented with a 3-month history of a right groin swelling that is associated with dragging pain. Physical examination confirmed a right groin reducible swelling with positive cough impulse, reaching the neck of the scrotum. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Open repair",
+      "CT abdomen",
+      "Scrotal support",
+      "Laparoscopic mesh repair"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 49,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-209",
+    "number": 209,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "23. A 34-year-old man who underwent an open repair of a right inguinal hernia 3 years ago, presented with a 3-month history of a right groin swelling that is associated with dragging pain. Physical examination confirmed a right groin reducible swelling with positive cough impulse, reaching the neck of the scrotum. Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Open repair",
+      "CT abdomen",
+      "Scrotal support",
+      "Laparoscopic mesh repair"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 49,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-210",
+    "number": 210,
+    "specialty": "Surgery",
+    "topic": "Hernia",
+    "stem": "A 48-year-old woman presented with a 12-hour history of a painful swelling in the right groin. Physical examination confirmed an irreducible tender swelling in the groin area that is 3 x 4 cm. Surgical exploration confirmed a strangulated hernia, and the neck is lateral and inferior to the pubic tubercleft Which of the following is the most likely hernia?",
+    "options": [
+      "Femoral",
+      "Obturator",
+      "Direct inguinal",
+      "Indirect inguinal"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 49,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-211",
+    "number": 211,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 25-year-old presented to the Emergency Department with a 2-day history of diffuse colicky abdominal pain, associated with abdominal distension, vomiting, and constipation. Physical examination confirmed diffuse abdominal discomfort with exaggerated bowel sounds (see reports). CT scan: Distended proximal small bowel with complete obstruction at the proximal ileum. Exploratory laparotomy: 3 strictures over 60 cm of the ileum, the proximal one was the cause of small bowel obstruction. Which of the following is the most likely diagnosis?",
+    "options": [
+      "TB enteritis",
+      "Crohn's disease",
+      "Small bowel lymphoma",
+      "Gastrointestinal stromal tumor"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 49,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-212",
+    "number": 212,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 29-year-old patient presented with a 3-year history of frequent attacks of bloody diarrhea. On examination, he was pale with a normal abdominal examination (see reports). Barium enema: Featureless \"lead-pipe\" colon. Colonoscopy: Diffusely inflamed colon with pseudopolyps, featureless terminal ileum, and backwash ileitis. Which of the following is the most likely type of colitis?",
+    "options": [
+      "Crohn's",
+      "Amebic",
+      "Ischemic",
+      "Ulcerative"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 50,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-213",
+    "number": 213,
+    "specialty": "Surgery",
+    "topic": "Colorectal Surgery",
+    "stem": "A 19-year-old man presented with a 3-day history of frequent attacks of per-rectal fresh bleeding. Physical examination confirmed clotted blood in the rectum. Nasogastric tube was draining Test Result Normal Value Hb 85 130-170 g/L (Male) 120-160 g/L (Female) Colonoscopy: No colorectal pathology. Which of the following is the most appropriate diagnostic tool to localize the source of bleeding?",
+    "options": [
+      "Diagnostic laparoscopy",
+      "Gastrografin follow through",
+      "Upper gastrointestinal endoscopy",
+      "99mc-labelled sodium pertechnetate"
+    ],
+    "answer": 3,
+    "answerLetter": "D",
+    "sourcePage": 50,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-214",
+    "number": 214,
+    "specialty": "Surgery",
+    "topic": "General Surgery",
+    "stem": "A 55-year-old man complains of a 2-month history of central abdominal pain. Physical examination was normal (see lab result and report). Test Result Normal Value 24 hours 5-HIAA 21 mg 2-7 mg/24 h CT scan: Small bowel mass 4x5 cm, with some calcifications. Which of the following is the most likely small bowel tumor?",
+    "options": [
+      "Carcinoid",
+      "Lymphoma",
+      "Schwannoma",
+      "Gastrointestinal stroma"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 50,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-215",
+    "number": 215,
+    "specialty": "Surgery",
+    "topic": "Orthopedics",
+    "stem": "A 32-year-old man presented to the Emergency Department with pain and swelling of his right thigh after a trivial injury. Physical examination confirmed swelling, deformity of his right thigh with tenderness (see lab results and report). Test Result Normal Values Parathyroid hormone (intact PTH levels) 8.9 1.1-5.3 pmol/L Calcium 4.5 2.15-2.62 mol/L X-ray: Spiral fracture of right femur with subperiosteal resorption. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Parathyroid adenoma",
+      "Parathyroid carcinoma",
+      "Tertiary hyperparathyroidism",
+      "Secondary hyperparathyroidism"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 51,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-216",
+    "number": 216,
+    "specialty": "Surgery",
+    "topic": "Trauma & Critical Care",
+    "stem": "A 28-year-old married woman presented to the Emergency Department complaining of a 6-hour history of right iliac fossa pain associated with drowsiness. Physical examination confirmed tenderness over the lower abdomen with sluggish bowel sounds. Which of the following is the most likely diagnosis?",
+    "options": [
+      "Septic shock",
+      "Ectopic pregnancy",
+      "Ruptured ovarian cyst",
+      "Pelvic inflammatory disease"
+    ],
+    "answer": 1,
+    "answerLetter": "B",
+    "sourcePage": 51,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  },
+  {
+    "id": "gs-217",
+    "number": 217,
+    "specialty": "Surgery",
+    "topic": "Upper GI Surgery",
+    "stem": "A 32-year-old man presented to the Emergency Department with a 6-hour history of severe sudden epigastric pain. Physical examination confirmed diffuse severe abdominal tenderness with sluggish bowel sounds (see lab results). Test Result Normal Values WBC 13.8 4.5-10.5 x 10^9/L Amylase 300 24-151 IU/L Which of the following is the most appropriate next step in management?",
+    "options": [
+      "Erect chest X-ray",
+      "Abdominal X-ray",
+      "CT scan abdomen",
+      "Ultrasound abdomen"
+    ],
+    "answer": 0,
+    "answerLetter": "A",
+    "sourcePage": 51,
+    "sourceFile": "MedGard - GS first 51.pdf",
+    "revision": 1
+  }
+]
