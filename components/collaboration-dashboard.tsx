@@ -185,40 +185,83 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
           <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
             <div className="border-b p-5">
               <h2 className="font-bold">Registration and access</h2>
-              <p className="text-xs text-muted-foreground">Access Managers can approve, reject, block, or restore accounts only.</p>
+              <p className="text-xs text-muted-foreground">Review every registrant detail before approving, rejecting, blocking, or restoring an account.</p>
             </div>
-            <div className="divide-y">
-              {collaboration.members.map((member) => (
-                <div key={member.uid} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
-                  <div className="min-w-0 flex-1">
-                    <strong className="text-sm">{member.displayName}</strong>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {member.email} · {member.universityId} · {member.tier}
-                    </p>
-                  </div>
-                  <span className="text-[10px] font-bold uppercase text-muted-foreground">{member.suspended ? 'blocked' : member.status}</span>
-                  <div className="flex gap-2">
-                    {member.status === 'pending' && (
-                      <>
-                        <button onClick={() => reviewMember(member.uid, 'rejected')} className="h-9 rounded-lg border px-3 text-xs font-bold text-red-600 dark:text-red-300">
-                          <UserRoundX className="mr-1 inline size-4" />
-                          Reject
-                        </button>
-                        <button onClick={() => reviewMember(member.uid, 'approved')} className="h-9 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground">
-                          <UserCheck className="mr-1 inline size-4" />
-                          Approve
-                        </button>
-                      </>
-                    )}
-                    {member.status === 'approved' && member.role !== 'super_admin' && (
-                      <button onClick={() => toggleSuspended(member)} className="h-9 rounded-lg border px-3 text-xs font-bold">
-                        {member.suspended ? 'Restore' : 'Block'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+            {collaboration.members.length ? (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1120px] text-left text-sm">
+                  <thead className="border-b bg-muted/30 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="px-5 py-3">Registrant</th>
+                      <th className="px-5 py-3">Email</th>
+                      <th className="px-5 py-3">Mobile</th>
+                      <th className="px-5 py-3">University ID</th>
+                      <th className="px-5 py-3">Status</th>
+                      <th className="px-5 py-3">Role &amp; tier</th>
+                      <th className="px-5 py-3">Registered</th>
+                      <th className="px-5 py-3">Reviewed by</th>
+                      <th className="px-5 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/70">
+                    {collaboration.members.map((member) => (
+                      <tr key={member.uid} className="align-top transition hover:bg-muted/20">
+                        <td className="px-5 py-4">
+                          <strong className="block whitespace-nowrap text-sm">{member.displayName}</strong>
+                          <span className="mt-1 block max-w-[150px] truncate font-mono text-[10px] text-muted-foreground" title={member.uid}>
+                            {member.uid}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className="block max-w-[220px] truncate" title={member.email}>
+                            {member.email}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 font-mono text-xs">{member.phone || '—'}</td>
+                        <td className="px-5 py-4 font-mono text-xs font-semibold">{member.universityId}</td>
+                        <td className="px-5 py-4">
+                          <span className={cx('inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold uppercase', member.suspended ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300' : member.status === 'pending' ? 'bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200' : member.status === 'approved' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'bg-muted text-muted-foreground')}>
+                            {member.suspended ? 'Blocked' : member.status}
+                          </span>
+                          <span className="mt-1 block text-[10px] text-muted-foreground">MFA {member.mfaEnrolled ? 'enabled' : 'not enabled'}</span>
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className="block capitalize">{member.role.replaceAll('_', ' ')}</span>
+                          <span className="mt-1 block text-xs text-muted-foreground">{member.tier} · {member.platformRoles.length ? member.platformRoles.join(', ') : 'no extra roles'}</span>
+                        </td>
+                        <td className="whitespace-nowrap px-5 py-4 text-xs text-muted-foreground">{formatDate(member.createdAt)}</td>
+                        <td className="px-5 py-4 text-xs">
+                          {member.approvedByName ? <><span className="block">{member.approvedByName}</span><span className="mt-1 block text-muted-foreground">{formatDate(member.approvedAt)}</span></> : <span className="text-muted-foreground">Pending review</span>}
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="flex justify-end gap-2">
+                            {member.status === 'pending' && (
+                              <>
+                                <button onClick={() => reviewMember(member.uid, 'rejected')} className="h-9 rounded-lg border px-3 text-xs font-bold text-red-600 dark:text-red-300">
+                                  <UserRoundX className="mr-1 inline size-4" />
+                                  Reject
+                                </button>
+                                <button onClick={() => reviewMember(member.uid, 'approved')} className="h-9 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground">
+                                  <UserCheck className="mr-1 inline size-4" />
+                                  Approve
+                                </button>
+                              </>
+                            )}
+                            {member.status === 'approved' && member.role !== 'super_admin' && (
+                              <button onClick={() => toggleSuspended(member)} className="h-9 rounded-lg border px-3 text-xs font-bold">
+                                {member.suspended ? 'Restore' : 'Block'}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="p-10 text-center text-sm text-muted-foreground">No registrations yet.</div>
+            )}
           </section>
         )}
         {tab === 'student-ids' && (

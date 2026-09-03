@@ -76,6 +76,7 @@ async function mapUser(user: { uid: string; email: string | null; displayName: s
     ...mapped,
     displayName: profile.displayName || mapped.displayName,
     universityId: profile.universityId,
+    phone: profile.phone,
     role: profile.role,
     status: profile.status,
     createdAt: profile.createdAt,
@@ -144,7 +145,7 @@ export async function completeTotpEnrollment(code: string): Promise<void> {
   pendingTotpSecret = undefined;
 }
 
-export async function createFirebaseAccount(name: string, email: string, password: string, universityId: string): Promise<AppUser> {
+export async function createFirebaseAccount(name: string, email: string, password: string, universityId: string, phone: string): Promise<AppUser> {
   const { auth, authModule } = await services();
   const result = await authModule.createUserWithEmailAndPassword(auth, email, password);
   const normalizedId = universityId.replace(/\s+/g, '').toUpperCase();
@@ -161,6 +162,7 @@ export async function createFirebaseAccount(name: string, email: string, passwor
         email: result.user.email ?? email.trim().toLowerCase(),
         displayName: name.trim(),
         universityId: normalizedId,
+        phone: phone.trim(),
         role: 'student',
         status: 'pending',
         createdAt: now,

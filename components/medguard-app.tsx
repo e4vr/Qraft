@@ -212,6 +212,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [universityId, setUniversityId] = useState('');
+  const [phone, setPhone] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [mfaRequired, setMfaRequired] = useState(false);
@@ -223,17 +224,21 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
       setError('Use at least 6 characters for your password.');
       return;
     }
+    if (register && phone.trim().length < 7) {
+      setError('Enter a valid mobile number.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       const user = firebaseEnabled
         ? register
-          ? await createFirebaseAccount(name, email, password, universityId)
+          ? await createFirebaseAccount(name, email, password, universityId, phone)
           : mfaRequired
             ? await completeFirebaseMfaSignIn(mfaCode)
             : await signInFirebase(email, password)
         : register
-          ? await createLocalAccount(name, email, password, universityId)
+          ? await createLocalAccount(name, email, password, universityId, phone)
           : await signInLocal(email, password);
       onAuthenticated(user);
     } catch (caught) {
@@ -320,6 +325,21 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
                   className="h-12 w-full rounded-xl border bg-white px-4 text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-primary focus:ring-3 focus:ring-primary/10 dark:bg-card dark:text-foreground dark:placeholder:text-muted-foreground"
                   placeholder="Khaled"
                 />
+              </label>
+            )}
+            {register && (
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-semibold">Mobile number</span>
+                <input
+                  required
+                  type="tel"
+                  autoComplete="tel"
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  className="h-12 w-full rounded-xl border bg-white px-4 text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-primary focus:ring-3 focus:ring-primary/10 dark:bg-card dark:text-foreground dark:placeholder:text-muted-foreground"
+                  placeholder="05XXXXXXXX"
+                />
+                <span className="mt-1 block text-[11px] text-muted-foreground">Used to help administrators verify your registration.</span>
               </label>
             )}
             {register && (

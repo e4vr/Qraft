@@ -59,7 +59,7 @@ export async function saveSession(user?: AppUser): Promise<void> {
   await writeValue('active-session', user ?? null);
 }
 
-export async function createLocalAccount(name: string, email: string, password: string, universityId: string): Promise<AppUser> {
+export async function createLocalAccount(name: string, email: string, password: string, universityId: string, phone: string): Promise<AppUser> {
   const normalizedEmail = email.trim().toLowerCase();
   const normalizedUniversityId = universityId.replace(/\s+/g, '').toUpperCase();
   const existing = await readValue<LocalAccount>(`account:${normalizedEmail}`);
@@ -78,6 +78,7 @@ export async function createLocalAccount(name: string, email: string, password: 
     role: 'student',
     status: 'pending',
     universityId: normalizedUniversityId,
+    phone: phone.trim(),
     createdAt: now,
     tier: 'lite',
     platformRoles: [],
@@ -90,6 +91,7 @@ export async function createLocalAccount(name: string, email: string, password: 
     email: user.email,
     displayName: user.displayName,
     universityId: normalizedUniversityId,
+    phone: user.phone,
     role: user.role,
     status: user.status,
     createdAt: now,
@@ -115,7 +117,7 @@ export async function signInLocal(email: string, password: string): Promise<AppU
   const { passwordHash: _, ...safeUser } = account;
   const shared = await loadLocalCollaboration();
   const member = shared?.members.find((item) => item.uid === safeUser.uid);
-  const current = member ? { ...safeUser, role: member.role, status: member.status, universityId: member.universityId, tier: member.tier, platformRoles: member.platformRoles, suspended: member.suspended, mfaEnrolled: member.mfaEnrolled, isAdmin: member.role === 'super_admin' || member.platformRoles.length > 0 } : safeUser;
+  const current = member ? { ...safeUser, role: member.role, status: member.status, universityId: member.universityId, phone: member.phone ?? safeUser.phone, tier: member.tier, platformRoles: member.platformRoles, suspended: member.suspended, mfaEnrolled: member.mfaEnrolled, isAdmin: member.role === 'super_admin' || member.platformRoles.length > 0 } : safeUser;
   await saveSession(current);
   return normalizeUser(current);
 }

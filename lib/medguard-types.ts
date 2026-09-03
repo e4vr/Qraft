@@ -115,6 +115,7 @@ export interface AppUser {
   role: UserRole;
   status: AccountStatus;
   universityId?: string;
+  phone?: string;
   createdAt?: string;
   tier: AccountTier;
   platformRoles: PlatformRole[];
@@ -173,6 +174,7 @@ export interface MemberProfile {
   email: string;
   displayName: string;
   universityId: string;
+  phone?: string;
   role: UserRole;
   status: AccountStatus;
   createdAt: string;
