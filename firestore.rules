@@ -1,8 +1,105 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function profile() { return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data; }
+    function approved() { return signedIn() && profile().status == 'approved'; }
+    function admin() { return approved() && profile().role in ['admin', 'super_admin']; }
+    function superAdmin() { return approved() && profile().role == 'super_admin'; }
+    function identityMatches(data) {
+      return data.updatedById == request.auth.uid && data.updatedByName == profile().displayName;
+    }
+
+    match /profiles/{userId} {
+      allow get: if signedIn() && (request.auth.uid == userId || admin());
+      allow list: if admin();
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.role == 'student'
+        && request.resource.data.status == 'pending'
+        && exists(/databases/$(database)/documents/universityIds/$(request.resource.data.universityId))
+        && getAfter(/databases/$(database)/documents/universityIds/$(request.resource.data.universityId)).data.claimedById == userId;
+      allow update: if superAdmin()
+        || (admin()
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.universityId == resource.data.universityId)
+        || (signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName'])
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.universityId == resource.data.universityId);
+      allow delete: if false;
+    }
+
+    match /universityIds/{studentId} {
+      allow get: if signedIn();
+      allow list, create: if admin();
+      allow update: if admin()
+        || (signedIn()
+          && resource.data.claimedById == null
+          && request.resource.data.claimedById == request.auth.uid
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.addedById == resource.data.addedById);
+      allow delete: if superAdmin() && resource.data.claimedById == null;
+    }
+
+    match /adminInvites/{inviteId} {
+      allow read, create, update: if superAdmin();
+      allow delete: if false;
+    }
+
+    match /qbanks/{qbankId} {
+      allow read: if approved();
+      allow create, update: if admin();
+      allow delete: if superAdmin();
+    }
+
+    match /questionProposals/{proposalId} {
+      allow read: if approved();
+      allow create: if approved()
+        && request.resource.data.proposedById == request.auth.uid
+        && request.resource.data.proposedByName == profile().displayName
+        && request.resource.data.status == 'pending';
+      allow update: if admin();
+      allow delete: if false;
+    }
+
+    match /sharedQuestions/{questionId} {
+      allow read: if approved();
+      allow create, update: if admin();
+      allow delete: if superAdmin();
+    }
+
+    match /sharedNotes/{noteId} {
+      allow read: if approved();
+      allow create: if approved()
+        && identityMatches(request.resource.data)
+        && request.resource.data.version == 1
+        && request.resource.data.history.size() == 1;
+      allow update: if approved()
+        && identityMatches(request.resource.data)
+        && request.resource.data.qbankId == resource.data.qbankId
+        && request.resource.data.questionId == resource.data.questionId
+        && request.resource.data.version == resource.data.version + 1
+        && request.resource.data.history.size() == resource.data.history.size() + 1
+        && request.resource.data.history[request.resource.data.history.size() - 1].editedById == request.auth.uid
+        && request.resource.data.history[request.resource.data.history.size() - 1].editedByName == profile().displayName;
+      allow delete: if admin();
+    }
+
+    match /auditLog/{entryId} {
+      allow read: if admin();
+      allow create: if approved()
+        && request.resource.data.actorId == request.auth.uid
+        && request.resource.data.actorName == profile().displayName;
+      allow update, delete: if false;
+    }
+
     match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if signedIn() && request.auth.uid == userId && approved();
     }
   }
 }

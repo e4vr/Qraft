@@ -1,7 +1,7 @@
 {
-  "name": "MedGuard - SMLE QBank",
+  "name": "MedGuard Collaborative QBank",
   "short_name": "MedGuard",
-  "description": "A private, fast SMLE question bank with notes, highlights, tests, and synced progress.",
+  "description": "A secure collaborative platform for building, reviewing, and studying multiple medical QBanks.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f6f8fb",

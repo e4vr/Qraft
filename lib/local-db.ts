@@ -1,4 +1,4 @@
-import type { AppState, AppUser } from './medguard-types';
+import { initialCollaborationState, type AppState, type AppUser, type CollaborationState } from './medguard-types';
 
 const DATABASE = 'medguard-qbank';
 const STORE = 'key-value';
@@ -44,32 +44,61 @@ async function sha256(value: string): Promise<string> {
 
 interface LocalAccount extends AppUser { passwordHash: string }
 
+function normalizeUser(user: AppUser): AppUser {
+  const role = user.role ?? (user.isAdmin ? 'super_admin' : 'student');
+  return { ...user, role, status: user.status ?? 'approved', isAdmin: role === 'admin' || role === 'super_admin' };
+}
+
 export async function loadSession(): Promise<AppUser | undefined> {
-  return readValue<AppUser>('active-session');
+  const user = await readValue<AppUser>('active-session');
+  return user ? normalizeUser(user) : undefined;
 }
 
 export async function saveSession(user?: AppUser): Promise<void> {
   await writeValue('active-session', user ?? null);
 }
 
-export async function createLocalAccount(name: string, email: string, password: string): Promise<AppUser> {
+export async function createLocalAccount(name: string, email: string, password: string, universityId: string): Promise<AppUser> {
   const normalizedEmail = email.trim().toLowerCase();
+  const normalizedUniversityId = universityId.replace(/\s+/g, '').toUpperCase();
   const existing = await readValue<LocalAccount>(`account:${normalizedEmail}`);
   if (existing) throw new Error('An account with this email already exists.');
   const accountCount = (await readValue<number>('local-account-count')) ?? 0;
+  const shared = (await loadLocalCollaboration()) ?? initialCollaborationState();
+  const allowed = shared.allowedUniversityIds.find((item) => item.id === normalizedUniversityId);
+  if (!allowed || allowed.claimedById) throw new Error('This university ID is not eligible or has already been used.');
+  const now = new Date().toISOString();
   const user: LocalAccount = {
     uid: `local-${crypto.randomUUID()}`,
     email: normalizedEmail,
     displayName: name.trim() || normalizedEmail.split('@')[0],
-    isAdmin: accountCount === 0,
+    isAdmin: false,
     provider: 'local',
+    role: 'student',
+    status: 'pending',
+    universityId: normalizedUniversityId,
+    createdAt: now,
     passwordHash: await sha256(password),
   };
   await writeValue(`account:${normalizedEmail}`, user);
   await writeValue('local-account-count', accountCount + 1);
+  const profile = {
+    uid: user.uid,
+    email: user.email,
+    displayName: user.displayName,
+    universityId: normalizedUniversityId,
+    role: user.role,
+    status: user.status,
+    createdAt: now,
+  };
+  await saveLocalCollaboration({
+    ...shared,
+    members: [...shared.members, profile],
+    allowedUniversityIds: shared.allowedUniversityIds.map((item) => item.id === normalizedUniversityId ? { ...item, claimedById: user.uid, claimedByName: user.displayName, claimedAt: now } : item),
+  });
   const { passwordHash: _, ...safeUser } = user;
   await saveSession(safeUser);
-  return safeUser;
+  return normalizeUser(safeUser);
 }
 
 export async function signInLocal(email: string, password: string): Promise<AppUser> {
@@ -79,12 +108,23 @@ export async function signInLocal(email: string, password: string): Promise<AppU
     throw new Error('Incorrect email or password.');
   }
   const { passwordHash: _, ...safeUser } = account;
-  await saveSession(safeUser);
-  return safeUser;
+  const shared = await loadLocalCollaboration();
+  const member = shared?.members.find((item) => item.uid === safeUser.uid);
+  const current = member ? { ...safeUser, role: member.role, status: member.status, universityId: member.universityId, isAdmin: member.role === 'admin' || member.role === 'super_admin' } : safeUser;
+  await saveSession(current);
+  return normalizeUser(current);
 }
 
 export async function loadLocalState(uid: string): Promise<AppState | undefined> {
   return readValue<AppState>(`state:${uid}`);
+}
+
+export async function loadLocalCollaboration(): Promise<CollaborationState | undefined> {
+  return readValue<CollaborationState>('collaboration:shared');
+}
+
+export async function saveLocalCollaboration(state: CollaborationState): Promise<void> {
+  await writeValue('collaboration:shared', state);
 }
 
 export async function saveLocalState(uid: string, state: AppState): Promise<void> {

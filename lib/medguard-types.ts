@@ -1,5 +1,8 @@
 export type TestMode = 'tutor' | 'timed';
 export type QuestionStatus = 'new' | 'previous' | 'correct' | 'incorrect' | 'flagged';
+export type UserRole = 'super_admin' | 'admin' | 'student';
+export type AccountStatus = 'pending' | 'approved' | 'rejected';
+export type ProposalStatus = 'pending' | 'approved' | 'rejected';
 
 export interface Question {
   id: string;
@@ -14,6 +17,7 @@ export interface Question {
   sourceFile: string;
   revision: number;
   isCustom?: boolean;
+  qbankId?: string;
 }
 
 export interface HighlightRange {
@@ -53,6 +57,7 @@ export interface TestSession {
   updatedAt: string;
   completedAt?: string;
   status: 'active' | 'completed';
+  qbankId?: string;
 }
 
 export interface ErrorReport {
@@ -77,6 +82,7 @@ export interface AppSettings {
   dailyGoal: number;
   theme: 'light' | 'dark' | 'system';
   autoSync: boolean;
+  activeQBankId: string;
 }
 
 export interface AppState {
@@ -97,6 +103,122 @@ export interface AppUser {
   displayName: string;
   isAdmin: boolean;
   provider: 'firebase' | 'local';
+  role: UserRole;
+  status: AccountStatus;
+  universityId?: string;
+  createdAt?: string;
+}
+
+export interface QBank {
+  id: string;
+  name: string;
+  shortName: string;
+  description: string;
+  createdAt: string;
+  createdById: string;
+  createdByName: string;
+  archived: boolean;
+}
+
+export interface MemberProfile {
+  uid: string;
+  email: string;
+  displayName: string;
+  universityId: string;
+  role: UserRole;
+  status: AccountStatus;
+  createdAt: string;
+  approvedAt?: string;
+  approvedById?: string;
+  approvedByName?: string;
+}
+
+export interface AllowedUniversityId {
+  id: string;
+  addedAt: string;
+  addedById: string;
+  claimedById?: string | null;
+  claimedByName?: string | null;
+  claimedAt?: string | null;
+}
+
+export interface AdminInvite {
+  id: string;
+  email: string;
+  createdAt: string;
+  createdById: string;
+  createdByName: string;
+  status: 'pending' | 'accepted' | 'revoked';
+}
+
+export interface QuestionProposalPayload {
+  stem: string;
+  options: string[];
+  answer: number;
+  specialty: string;
+  topic: string;
+}
+
+export interface QuestionProposal {
+  id: string;
+  qbankId: string;
+  type: 'new_question' | 'question_edit';
+  questionId?: string;
+  payload: QuestionProposalPayload;
+  rationale: string;
+  status: ProposalStatus;
+  proposedById: string;
+  proposedByName: string;
+  proposedAt: string;
+  reviewedById?: string;
+  reviewedByName?: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+}
+
+export interface SharedNoteRevision {
+  id: string;
+  content: string;
+  images: NoteImage[];
+  editedById: string;
+  editedByName: string;
+  editedAt: string;
+}
+
+export interface SharedQuestionNote {
+  id: string;
+  qbankId: string;
+  questionId: string;
+  content: string;
+  images: NoteImage[];
+  version: number;
+  updatedById: string;
+  updatedByName: string;
+  updatedAt: string;
+  history: SharedNoteRevision[];
+}
+
+export interface AuditEntry {
+  id: string;
+  action: string;
+  entityType: 'account' | 'admin' | 'university_id' | 'qbank' | 'question' | 'note';
+  entityId: string;
+  actorId: string;
+  actorName: string;
+  createdAt: string;
+  detail: string;
+}
+
+export interface CollaborationState {
+  qbanks: QBank[];
+  members: MemberProfile[];
+  allowedUniversityIds: AllowedUniversityId[];
+  adminInvites: AdminInvite[];
+  proposals: QuestionProposal[];
+  approvedQuestions: Question[];
+  sharedNotes: Record<string, SharedQuestionNote>;
+  auditLog: AuditEntry[];
+  lastSyncAt?: string;
 }
 
 export interface TestBuilderConfig {
@@ -128,6 +250,45 @@ export function initialAppState(): AppState {
     revisions: [],
     questionOverrides: {},
     customQuestions: [],
-    settings: { dailyGoal: 20, theme: 'light', autoSync: true },
+    settings: { dailyGoal: 20, theme: 'light', autoSync: true, activeQBankId: 'smle-gs' },
+  };
+}
+
+export function initialCollaborationState(): CollaborationState {
+  return {
+    qbanks: [{
+      id: 'smle-gs',
+      name: 'SMLE · General Surgery',
+      shortName: 'SMLE GS',
+      description: 'General Surgery question bank for SMLE preparation.',
+      createdAt: '2026-09-02T00:00:00.000Z',
+      createdById: 'system',
+      createdByName: 'MedGuard',
+      archived: false,
+    }],
+    members: [],
+    allowedUniversityIds: [],
+    adminInvites: [],
+    proposals: [],
+    approvedQuestions: [],
+    sharedNotes: {},
+    auditLog: [],
+  };
+}
+
+export function normalizeAppState(input?: Partial<AppState>): AppState {
+  const base = initialAppState();
+  if (!input) return base;
+  return {
+    ...base,
+    ...input,
+    version: 1,
+    settings: { ...base.settings, ...input.settings },
+    progress: input.progress ?? {},
+    tests: input.tests ?? [],
+    reports: input.reports ?? [],
+    revisions: input.revisions ?? [],
+    questionOverrides: input.questionOverrides ?? {},
+    customQuestions: input.customQuestions ?? [],
   };
 }

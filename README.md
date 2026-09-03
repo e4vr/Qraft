@@ -1,20 +1,36 @@
-# MedGuard SMLE QBank
+# MedGuard Collaborative QBank
 
-MedGuard is a private, installable SMLE question-bank PWA. Phase one contains
-217 Surgery questions imported from `MedGard - GS first 51.pdf`, with the answer
-key preserved and the PDF text-layer artifacts corrected.
+MedGuard is a private, installable collaborative QBank PWA. The initial **SMLE
+General Surgery** bank contains 217 questions imported from
+`MedGard - GS first 51.pdf`; answer keys are preserved and extraction artifacts
+are corrected without changing the source meaning.
 
-## Included
+## Product capabilities
 
-- Email/password and Google sign-in when Firebase is configured.
-- IndexedDB offline persistence with automatic Firestore synchronization.
-- Tutor and Timed tests, status filters, Specialty and Topic filters.
-- Resume-safe test sessions, question navigator, results, and progress views.
-- Per-user flags, yellow text highlights, notes, and note images.
-- Error reports, direct admin corrections, and an answer revision log.
-- Printable PDF export containing questions, answers, notes, and images.
-- JSON backups, manual question entry, a daily goal, and a manual Sync button.
-- Installable iPad/desktop PWA shell and offline asset cache.
+- Multiple isolated QBanks (SMLE, USMLE, university courses, and future banks).
+- Personal Tutor/Timed tests, progress, flags, highlights, and daily goals.
+- Student question and correction proposals with a mandatory admin review queue.
+- Shared notes and images editable by approved members, with editor name,
+  timestamp, version history, and audit attribution.
+- First-registration approval before any QBank access.
+- One-time university ID claiming from an administrator-managed eligibility list.
+- Root-admin-only administrator promotion, plus a synchronized admin workspace.
+- Admin registration, QBank, proposal, student-ID, administrator, and audit views.
+- Printable per-QBank PDF export with answers and attributed shared explanations.
+- IndexedDB offline support, Firebase synchronization, and an iPad-ready PWA.
+
+## Permission model
+
+- `super_admin`: manages admins and has every admin permission.
+- `admin`: approves or rejects registrations and question changes, imports
+  eligible student IDs, and creates QBanks.
+- `student`: uses approved QBanks, proposes questions/corrections, and edits
+  shared notes directly.
+- `pending` or `rejected` accounts cannot read QBank data or save progress.
+
+The interface is not the security boundary. `firestore.rules` and
+`storage.rules` independently enforce approval, roles, single-use student IDs,
+proposal review, note attribution, note version increments, and image limits.
 
 ## Run locally
 
@@ -23,22 +39,33 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`. Demo mode works without cloud credentials and
-saves its test state in IndexedDB on the current device.
+Open `http://localhost:3000`. The root-admin demo stores its personal and shared
+workspace state in IndexedDB on the current device. It is intended for product
+testing only.
 
 ## Connect Firebase
 
-1. Create a Firebase project and a Web app.
-2. Enable Email/Password and Google in Firebase Authentication.
-3. Create a Firestore database and a Cloud Storage bucket.
-4. Copy `.env.example` to `.env.local` and fill the `NEXT_PUBLIC_FIREBASE_*`
-   values. Set `NEXT_PUBLIC_ADMIN_EMAIL` to the owner account.
-5. Deploy `firestore.rules` and `storage.rules` to the Firebase project.
-6. Restart the app. Demo mode disappears and real account sync becomes active.
+1. Create a Firebase project and Web app.
+2. Enable **Email/Password** in Firebase Authentication.
+3. Create Firestore and Cloud Storage.
+4. Copy `.env.example` to `.env.local`, fill the Firebase values, and set
+   `NEXT_PUBLIC_ADMIN_EMAIL` to the owner email.
+5. Create the owner in Firebase Authentication. Copy its `uid`, then create
+   `profiles/{uid}` in Firestore with these fields:
+   - `uid`: the same Authentication UID
+   - `email`: owner email
+   - `displayName`: owner name
+   - `universityId`: `ADMIN`
+   - `role`: `super_admin`
+   - `status`: `approved`
+   - `createdAt`: an ISO timestamp
+6. Deploy `firestore.rules` and `storage.rules`.
+7. Sign in as the root admin, import the permitted university IDs, then students
+   can submit registration requests. Each student ID can be claimed only once.
 
-Firebase web configuration values identify the project but do not replace the
-included Firestore and Storage rules. Each signed-in user can access only their
-own progress and note images.
+Do not put Firebase service-account credentials in this project. Firebase Web
+configuration values are public identifiers; authorization is enforced by the
+included server-side rules.
 
 ## Validation
 
@@ -48,6 +75,6 @@ npm run lint
 npm run build
 ```
 
-The data-integrity tests require exactly 217 questions, four non-empty options
-per question, a valid A-D answer mapping, page-order preservation, removal of
-known PDF font-encoding artifacts, and the expected PWA/security files.
+Tests cover the 217-question source integrity, PWA files, collaborative role
+rules, single-use university IDs, admin-only question publication, and
+attributed shared-note versioning.

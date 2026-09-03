@@ -1,12 +1,22 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    match /users/{userId}/{allPaths=**} {
-      allow read: if request.auth != null && request.auth.uid == userId;
-      allow write: if request.auth != null
-                   && request.auth.uid == userId
-                   && request.resource.size < 10 * 1024 * 1024
-                   && request.resource.contentType.matches('image/.*');
+    function approved() {
+      return request.auth != null
+        && firestore.get(/databases/(default)/documents/profiles/$(request.auth.uid)).data.status == 'approved';
+    }
+    function admin() {
+      return approved()
+        && firestore.get(/databases/(default)/documents/profiles/$(request.auth.uid)).data.role in ['admin', 'super_admin'];
+    }
+
+    match /qbanks/{qbankId}/notes/{questionId}/{userId}/{fileName} {
+      allow read: if approved();
+      allow create, update: if approved()
+        && request.auth.uid == userId
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if request.auth.uid == userId || admin();
     }
   }
 }
