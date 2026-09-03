@@ -23,11 +23,24 @@ service cloud.firestore {
       );
     }
     function identityMatches(data) { return data.updatedById == request.auth.uid && data.updatedByName == profile().displayName; }
+    function accessBlocked(data) {
+      return exists(/databases/$(database)/documents/system/accessControl)
+        && (
+          get(/databases/$(database)/documents/system/accessControl).data.emails.hasAny([data.email])
+          || get(/databases/$(database)/documents/system/accessControl).data.phones.hasAny([data.phone])
+          || get(/databases/$(database)/documents/system/accessControl).data.universityIds.hasAny([data.universityId])
+        );
+    }
 
     match /system/security {
       allow read: if active();
       allow create: if false;
       allow update: if superAdmin() && request.resource.data.superAdminUid == resource.data.superAdminUid;
+      allow delete: if false;
+    }
+
+    match /system/accessControl {
+      allow read, create, update: if accessManager();
       allow delete: if false;
     }
 
@@ -70,6 +83,7 @@ service cloud.firestore {
         && request.resource.data.tier == 'lite'
         && request.resource.data.platformRoles.size() == 0
         && request.resource.data.status == 'pending'
+        && !accessBlocked(request.resource.data)
         && exists(/databases/$(database)/documents/universityIds/$(request.resource.data.universityId))
         && getAfter(/databases/$(database)/documents/universityIds/$(request.resource.data.universityId)).data.claimedById == userId;
       allow update: if (superAdmin()

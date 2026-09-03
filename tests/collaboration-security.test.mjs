@@ -128,3 +128,18 @@ test('review workspace, test deletion, question images, and Qraft JSON import ar
   assert.match(manager, /One question per slide/);
   assert.match(manager, /Upload Qraft JSON/);
 });
+
+test('access blocklist covers phone, university ID, and email registrations', async () => {
+  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
+  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  const dashboard = await readFile(new URL('components/collaboration-dashboard.tsx', root), 'utf8');
+  const localDb = await readFile(new URL('lib/local-db.ts', root), 'utf8');
+  assert.match(types, /interface AccessBlocklist/);
+  assert.match(dashboard, /Blocked access list/);
+  assert.match(dashboard, /Mobile numbers/);
+  assert.match(dashboard, /University IDs/);
+  assert.match(dashboard, /Email addresses/);
+  assert.match(localDb, /This email, university ID, or mobile number is blocked/);
+  assert.match(rules, /match \/system\/accessControl/);
+  assert.match(rules, /accessBlocked\(request\.resource\.data\)/);
+});

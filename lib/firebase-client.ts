@@ -1,6 +1,9 @@
 import {
   initialCollaborationState,
   normalizeCollaborationState,
+  normalizeEmail,
+  normalizePhone,
+  normalizeUniversityId,
   canReviewBank,
   type AppState,
   type AppUser,
@@ -148,21 +151,29 @@ export async function completeTotpEnrollment(code: string): Promise<void> {
 export async function createFirebaseAccount(name: string, email: string, password: string, universityId: string, phone: string): Promise<AppUser> {
   const { auth, authModule } = await services();
   const result = await authModule.createUserWithEmailAndPassword(auth, email, password);
-  const normalizedId = universityId.replace(/\s+/g, '').toUpperCase();
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedId = normalizeUniversityId(universityId);
+  const normalizedPhone = normalizePhone(phone);
   try {
     await authModule.updateProfile(result.user, { displayName: name });
     const { db, firestoreModule } = await services();
     const now = new Date().toISOString();
     await firestoreModule.runTransaction(db, async (transaction) => {
       const allowedRef = firestoreModule.doc(db, 'universityIds', normalizedId);
+      const blocklistRef = firestoreModule.doc(db, 'system', 'accessControl');
       const allowed = await transaction.get(allowedRef);
+      const blocklist = await transaction.get(blocklistRef);
       if (!allowed.exists() || allowed.data().claimedById) throw new Error('This university ID is not eligible or has already been used.');
+      if (blocklist.exists()) {
+        const blocked = blocklist.data() as { emails?: string[]; phones?: string[]; universityIds?: string[] };
+        if ((blocked.emails ?? []).includes(normalizedEmail) || (blocked.phones ?? []).includes(normalizedPhone) || (blocked.universityIds ?? []).includes(normalizedId)) throw new Error('This email, university ID, or mobile number is blocked.');
+      }
       const profile: MemberProfile = {
         uid: result.user.uid,
-        email: result.user.email ?? email.trim().toLowerCase(),
+        email: result.user.email ?? normalizedEmail,
         displayName: name.trim(),
         universityId: normalizedId,
-        phone: phone.trim(),
+        phone: normalizedPhone,
         role: 'student',
         status: 'pending',
         createdAt: now,
@@ -331,6 +342,15 @@ export async function loadCollaborationState(user: AppUser): Promise<Collaborati
   if (canManageAccess) {
     const members = await read('profiles');
     state.members = members as unknown as CollaborationState['members'];
+    const blocklistSnapshot = await firestoreModule.getDoc(firestoreModule.doc(db, 'system', 'accessControl'));
+    if (blocklistSnapshot.exists()) {
+      const blocklist = blocklistSnapshot.data() as Partial<CollaborationState['blockedAccess']>;
+      state.blockedAccess = {
+        phones: blocklist.phones ?? [],
+        universityIds: blocklist.universityIds ?? [],
+        emails: blocklist.emails ?? [],
+      };
+    }
   }
   if (isRoot) {
     const [ids, invites, audit] = await Promise.all([read('universityIds'), read('adminInvites'), read('auditLog')]);
@@ -367,6 +387,7 @@ export async function saveCollaborationState(next: CollaborationState, previous:
   collect('qbankInvitations', next.invitations, previous.invitations, (item) => item.id, true);
   collect('profiles', next.members, previous.members, (item) => item.uid);
   collect('universityIds', next.allowedUniversityIds, previous.allowedUniversityIds, (item) => item.id);
+  if (JSON.stringify(next.blockedAccess) !== JSON.stringify(previous.blockedAccess)) writes.push({ collection: 'system', id: 'accessControl', value: { id: 'accessControl', ...next.blockedAccess, updatedAt: new Date().toISOString() } });
   collect('adminInvites', next.adminInvites, previous.adminInvites, (item) => item.id);
   collect('questionProposals', next.proposals, previous.proposals, (item) => item.id, true);
   collect('roleApplications', next.roleApplications, previous.roleApplications, (item) => item.id);

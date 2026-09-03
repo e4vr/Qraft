@@ -2,11 +2,12 @@
 
 import { Clock3, Fingerprint, Menu, ShieldCheck, UserCheck, UserRoundX } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { canReviewBank, type AccountStatus, type AppUser, type AuditEntry, type CollaborationState, type MemberProfile, type PlatformRole } from '@/lib/medguard-types';
+import { canReviewBank, normalizeEmail, normalizePhone, normalizeUniversityId, type AccessBlocklist, type AccountStatus, type AppUser, type AuditEntry, type CollaborationState, type MemberProfile, type PlatformRole } from '@/lib/medguard-types';
 import { cn as cx, nowIso } from '@/lib/utils';
 import { ReviewWorkspace } from '@/components/review-workspace';
 
-type Tab = 'overview' | 'registrations' | 'roles' | 'qbanks' | 'proposals' | 'student-ids' | 'audit';
+type Tab = 'overview' | 'registrations' | 'blocked' | 'roles' | 'qbanks' | 'proposals' | 'student-ids' | 'audit';
+type BlockKind = keyof AccessBlocklist;
 function formatDate(value?: string) {
   return value
     ? new Intl.DateTimeFormat('en', {
@@ -28,6 +29,20 @@ function audit(user: AppUser, action: string, entityType: AuditEntry['entityType
   };
 }
 
+function normalizeBlockValue(kind: BlockKind, value: string): string {
+  if (kind === 'phones') return normalizePhone(value);
+  if (kind === 'universityIds') return normalizeUniversityId(value);
+  return normalizeEmail(value);
+}
+
+function memberMatchesBlocklist(member: MemberProfile, blockedAccess: AccessBlocklist): boolean {
+  return Boolean(
+    (member.phone && blockedAccess.phones.includes(normalizePhone(member.phone))) ||
+      blockedAccess.universityIds.includes(normalizeUniversityId(member.universityId)) ||
+      blockedAccess.emails.includes(normalizeEmail(member.email)),
+  );
+}
+
 export function AdminDashboard({ user, collaboration, update }: { user: AppUser; collaboration: CollaborationState; update: (updater: (current: CollaborationState) => CollaborationState) => void }) {
   const canAccess = user.role === 'super_admin' || user.platformRoles.includes('access_manager') || user.role === 'admin' || user.role === 'access_manager';
   const isRoot = user.role === 'super_admin';
@@ -37,6 +52,7 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
       [
         ['overview', 'Overview'],
         ...(canAccess ? [['registrations', 'Registrations']] : []),
+        ...(canAccess ? [['blocked', 'Blocked access']] : []),
         ...(isRoot
           ? [
               ['student-ids', 'Student IDs'],
@@ -51,6 +67,7 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
   );
   const [tab, setTab] = useState<Tab>('overview');
   const [idText, setIdText] = useState('');
+  const [blockText, setBlockText] = useState<Record<BlockKind, string>>({ phones: '', universityIds: '', emails: '' });
   const pendingMembers = collaboration.members.filter((item) => item.status === 'pending');
   const reviewable = collaboration.proposals.filter((proposal) => proposal.status === 'pending' && collaboration.qbanks.some((bank) => bank.id === proposal.qbankId && canReviewBank(user, bank, collaboration.memberships)));
   const roleRequests = collaboration.roleApplications.filter((item) => item.status === 'pending');
@@ -103,6 +120,32 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
       };
     });
     setIdText('');
+  }
+
+  function addBlockedValues(kind: BlockKind) {
+    const values = [...new Set(blockText[kind].split(/[\s,;]+/).map((item) => normalizeBlockValue(kind, item)).filter(Boolean))];
+    if (!values.length) return;
+    update((current) => {
+      const existing = new Set(current.blockedAccess[kind]);
+      const added = values.filter((value) => !existing.has(value));
+      if (!added.length) return current;
+      const blockedAccess: AccessBlocklist = { ...current.blockedAccess, [kind]: [...current.blockedAccess[kind], ...added] };
+      return {
+        ...current,
+        blockedAccess,
+        members: current.members.map((member) => member.role === 'super_admin' || !memberMatchesBlocklist(member, blockedAccess) ? member : { ...member, suspended: true }),
+        auditLog: [audit(user, 'access_block_added', 'access_block', added[0], `${added.length} ${kind} value${added.length === 1 ? '' : 's'} blocked.`), ...current.auditLog],
+      };
+    });
+    setBlockText((current) => ({ ...current, [kind]: '' }));
+  }
+
+  function removeBlockedValue(kind: BlockKind, value: string) {
+    update((current) => ({
+      ...current,
+      blockedAccess: { ...current.blockedAccess, [kind]: current.blockedAccess[kind].filter((item) => item !== value) },
+      auditLog: [audit(user, 'access_block_removed', 'access_block', value, `${kind} block removed.`), ...current.auditLog],
+    }));
   }
 
   function reviewRole(applicationId: string, approved: boolean) {
@@ -287,6 +330,44 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
               </div>
             </section>
           </div>
+        )}
+        {tab === 'blocked' && (
+          <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
+            <div className="mb-5">
+              <h2 className="font-bold">Blocked access list</h2>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">New registrations matching any value below will be rejected. Existing matching accounts are suspended automatically.</p>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-3">
+              {([
+                ['phones', 'Mobile numbers', '0501234567\n+966501234567'],
+                ['universityIds', 'University IDs', '442001234\n442001235'],
+                ['emails', 'Email addresses', 'blocked@example.com\nspam@example.com'],
+              ] as Array<[BlockKind, string, string]>).map(([kind, label, placeholder]) => (
+                <article key={kind} className="rounded-2xl border bg-background/35 p-4">
+                  <h3 className="text-sm font-bold">{label}</h3>
+                  <p className="mt-1 text-[11px] leading-5 text-muted-foreground">Add one or more values separated by spaces, commas, or new lines.</p>
+                  <textarea
+                    value={blockText[kind]}
+                    onChange={(event) => setBlockText((current) => ({ ...current, [kind]: event.target.value }))}
+                    className="mt-3 min-h-24 w-full rounded-xl border bg-card p-3 font-mono text-xs outline-none transition focus:border-primary focus:ring-3 focus:ring-primary/10"
+                    placeholder={placeholder}
+                    aria-label={`Add blocked ${label.toLowerCase()}`}
+                  />
+                  <button onClick={() => addBlockedValues(kind)} className="mt-3 h-10 w-full rounded-xl bg-primary text-xs font-bold text-primary-foreground">
+                    Block values
+                  </button>
+                  <div className="mt-4 space-y-2">
+                    {collaboration.blockedAccess[kind].length ? collaboration.blockedAccess[kind].map((value) => (
+                      <div key={value} className="flex items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2">
+                        <span className="min-w-0 truncate font-mono text-[11px]" title={value}>{value}</span>
+                        <button onClick={() => removeBlockedValue(kind, value)} className="shrink-0 text-[10px] font-bold text-red-600 hover:underline dark:text-red-300">Remove</button>
+                      </div>
+                    )) : <p className="text-[11px] text-muted-foreground">No blocked values yet.</p>}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
         )}
         {tab === 'roles' && (
           <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">

@@ -196,6 +196,12 @@ export interface AllowedUniversityId {
   claimedAt?: string | null;
 }
 
+export interface AccessBlocklist {
+  phones: string[];
+  universityIds: string[];
+  emails: string[];
+}
+
 export interface AdminInvite {
   id: string;
   email: string;
@@ -287,7 +293,7 @@ export interface SharedQuestionNote {
 export interface AuditEntry {
   id: string;
   action: string;
-  entityType: 'account' | 'admin' | 'university_id' | 'qbank' | 'question' | 'note' | 'role' | 'sharing';
+  entityType: 'account' | 'admin' | 'university_id' | 'access_block' | 'qbank' | 'question' | 'note' | 'role' | 'sharing';
   entityId: string;
   actorId: string;
   actorName: string;
@@ -301,6 +307,7 @@ export interface CollaborationState {
   invitations: QBankInvitation[];
   members: MemberProfile[];
   allowedUniversityIds: AllowedUniversityId[];
+  blockedAccess: AccessBlocklist;
   adminInvites: AdminInvite[];
   proposals: QuestionProposal[];
   roleApplications: RoleApplication[];
@@ -367,6 +374,7 @@ export function initialCollaborationState(): CollaborationState {
     invitations: [],
     members: [],
     allowedUniversityIds: [],
+    blockedAccess: { phones: [], universityIds: [], emails: [] },
     adminInvites: [],
     proposals: [],
     roleApplications: [],
@@ -397,6 +405,11 @@ export function normalizeCollaborationState(input?: Partial<CollaborationState>)
     memberships: input.memberships ?? [],
     invitations: input.invitations ?? [],
     members: (input.members ?? []).map((member) => ({ ...member, tier: member.tier ?? 'lite', platformRoles: member.platformRoles ?? [] })),
+    blockedAccess: {
+      phones: [...new Set((input.blockedAccess?.phones ?? base.blockedAccess.phones).map((value) => value.replace(/\D/g, '')).filter(Boolean))],
+      universityIds: [...new Set((input.blockedAccess?.universityIds ?? base.blockedAccess.universityIds).map((value) => value.replace(/\s+/g, '').toUpperCase()).filter(Boolean))],
+      emails: [...new Set((input.blockedAccess?.emails ?? base.blockedAccess.emails).map((value) => value.trim().toLowerCase()).filter(Boolean))],
+    },
     proposals: (input.proposals ?? []).map((proposal) => ({ ...proposal, editKinds: proposal.editKinds ?? (proposal.type === 'new_question' ? ['question_text'] : ['typo_formatting']), payload: { ...proposal.payload, explanation: proposal.payload.explanation ?? '', sourceReference: proposal.payload.sourceReference ?? proposal.rationale ?? '', images: proposal.payload.images ?? [] }, currentSnapshot: proposal.currentSnapshot ? { ...proposal.currentSnapshot, images: proposal.currentSnapshot.images ?? [] } : undefined })),
     roleApplications: input.roleApplications ?? [],
     approvedQuestions: (input.approvedQuestions ?? []).map((question, index) => ({ ...question, questionId: question.questionId ?? String(218 + index).padStart(5, '0'), images: question.images ?? [] })),
@@ -405,6 +418,18 @@ export function normalizeCollaborationState(input?: Partial<CollaborationState>)
     auditLog: input.auditLog ?? [],
     security: input.security ?? base.security,
   };
+}
+
+export function normalizePhone(value: string): string {
+  return value.replace(/\D/g, '');
+}
+
+export function normalizeUniversityId(value: string): string {
+  return value.replace(/\s+/g, '').toUpperCase();
+}
+
+export function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 export function bankRoleFor(user: AppUser, bank: QBank, memberships: QBankMembership[]): BankRole | undefined {

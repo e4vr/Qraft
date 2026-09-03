@@ -1,4 +1,4 @@
-import { initialCollaborationState, normalizeCollaborationState, type AppState, type AppUser, type CollaborationState } from './medguard-types';
+import { initialCollaborationState, normalizeCollaborationState, normalizeEmail, normalizePhone, normalizeUniversityId, type AppState, type AppUser, type CollaborationState } from './medguard-types';
 
 const DATABASE = 'medguard-qbank';
 const STORE = 'key-value';
@@ -60,12 +60,16 @@ export async function saveSession(user?: AppUser): Promise<void> {
 }
 
 export async function createLocalAccount(name: string, email: string, password: string, universityId: string, phone: string): Promise<AppUser> {
-  const normalizedEmail = email.trim().toLowerCase();
-  const normalizedUniversityId = universityId.replace(/\s+/g, '').toUpperCase();
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedUniversityId = normalizeUniversityId(universityId);
+  const normalizedPhone = normalizePhone(phone);
   const existing = await readValue<LocalAccount>(`account:${normalizedEmail}`);
   if (existing) throw new Error('An account with this email already exists.');
   const accountCount = (await readValue<number>('local-account-count')) ?? 0;
   const shared = (await loadLocalCollaboration()) ?? initialCollaborationState();
+  if (shared.blockedAccess.emails.includes(normalizedEmail) || shared.blockedAccess.universityIds.includes(normalizedUniversityId) || shared.blockedAccess.phones.includes(normalizedPhone)) {
+    throw new Error('This email, university ID, or mobile number is blocked.');
+  }
   const allowed = shared.allowedUniversityIds.find((item) => item.id === normalizedUniversityId);
   if (!allowed || allowed.claimedById) throw new Error('This university ID is not eligible or has already been used.');
   const now = new Date().toISOString();
@@ -78,7 +82,7 @@ export async function createLocalAccount(name: string, email: string, password: 
     role: 'student',
     status: 'pending',
     universityId: normalizedUniversityId,
-    phone: phone.trim(),
+    phone: normalizedPhone,
     createdAt: now,
     tier: 'lite',
     platformRoles: [],
@@ -116,6 +120,9 @@ export async function signInLocal(email: string, password: string): Promise<AppU
   }
   const { passwordHash: _, ...safeUser } = account;
   const shared = await loadLocalCollaboration();
+  if (shared?.blockedAccess.emails.includes(normalizedEmail) || shared?.blockedAccess.universityIds.includes(normalizeUniversityId(account.universityId ?? '')) || shared?.blockedAccess.phones.includes(normalizePhone(account.phone ?? ''))) {
+    throw new Error('This account is blocked from signing in.');
+  }
   const member = shared?.members.find((item) => item.uid === safeUser.uid);
   const current = member ? { ...safeUser, role: member.role, status: member.status, universityId: member.universityId, phone: member.phone ?? safeUser.phone, tier: member.tier, platformRoles: member.platformRoles, suspended: member.suspended, mfaEnrolled: member.mfaEnrolled, isAdmin: member.role === 'super_admin' || member.platformRoles.length > 0 } : safeUser;
   await saveSession(current);
