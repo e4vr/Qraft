@@ -64,6 +64,7 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
               )
             )[0]
           : undefined;
+      const assignedQuestionInternalId = status === 'approved' && proposal.type === 'new_question' ? proposal.questionId ?? `shared-${crypto.randomUUID()}` : proposal.questionId;
       update((current) => {
         const bank = current.qbanks.find((item) => item.id === proposal.qbankId);
         if (!bank || !canReviewBank(user, bank, current.memberships)) return current;
@@ -78,7 +79,7 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
           ];
           const existing = proposal.questionId ? available.find((item) => item.id === proposal.questionId) : undefined;
           const question: Question = {
-            id: proposal.questionId ?? `shared-${crypto.randomUUID()}`,
+            id: assignedQuestionInternalId!,
             questionId: existing?.questionId ?? reservedId!,
             number: existing?.number ?? Math.max(0, ...available.filter((item) => item.qbankId === proposal.qbankId).map((item) => item.number)) + 1,
             qbankId: proposal.qbankId,
@@ -107,6 +108,7 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
               ? {
                   ...item,
                   status,
+                  questionId: status === 'approved' ? assignedQuestionInternalId : item.questionId,
                   reviewedById: user.uid,
                   reviewedByName: user.displayName,
                   reviewedAt,

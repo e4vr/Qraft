@@ -2572,20 +2572,27 @@ function QuestionManager({
             <div className="p-10 text-center text-sm text-muted-foreground">You have not proposed a question or correction in this QBank yet.</div>
           ) : (
             <div className="divide-y">
-              {mine.map((proposal) => (
-                <div key={proposal.id} className="grid gap-2 p-4 text-sm sm:grid-cols-[120px_1fr_auto]">
-                  <span
-                    className={cx(
-                      'w-fit rounded-full px-2 py-1 text-[10px] font-bold uppercase',
-                      proposal.status === 'approved' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200' : proposal.status === 'rejected' ? 'bg-red-50 text-red-700 dark:bg-red-500/12 dark:text-red-200' : 'bg-amber-50 text-amber-800 dark:bg-amber-500/12 dark:text-amber-200',
-                    )}
-                  >
-                    {proposal.status}
-                  </span>
-                  <span className="line-clamp-2">{proposal.payload.stem}</span>
-                  <span className="text-xs text-muted-foreground">{formatDate(proposal.proposedAt)}</span>
-                </div>
-              ))}
+              {mine.map((proposal) => {
+                const contributedQuestion = proposal.questionId ? allQuestions.find((item) => item.id === proposal.questionId) : undefined;
+                return (
+                  <div key={proposal.id} className="grid gap-3 p-4 text-sm sm:grid-cols-[120px_minmax(0,1fr)_140px_auto] sm:items-center">
+                    <span
+                      className={cx(
+                        'w-fit rounded-full px-2 py-1 text-[10px] font-bold uppercase',
+                        proposal.status === 'approved' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200' : proposal.status === 'rejected' ? 'bg-red-50 text-red-700 dark:bg-red-500/12 dark:text-red-200' : 'bg-amber-50 text-amber-800 dark:bg-amber-500/12 dark:text-amber-200',
+                      )}
+                    >
+                      {proposal.status}
+                    </span>
+                    <span className="line-clamp-2">{proposal.payload.stem}</span>
+                    <div className="rounded-lg bg-muted/45 px-3 py-2">
+                      <span className="block text-[9px] font-bold uppercase tracking-wide text-muted-foreground">Question ID</span>
+                      <strong className="font-mono text-xs">{contributedQuestion?.questionId ?? 'Not assigned'}</strong>
+                    </div>
+                    <span className="text-xs text-muted-foreground">{formatDate(proposal.proposedAt)}</span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>

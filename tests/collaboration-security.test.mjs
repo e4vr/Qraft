@@ -121,12 +121,14 @@ test('review workspace, test deletion, question images, and Qraft JSON import ar
   const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
   assert.match(app, />\s*Review\s*<\/span>/);
   assert.match(app, /Delete this test\?/);
+  assert.match(app, /Question ID/);
   assert.match(app, /aria-label="Question images"/);
   assert.match(review, /New ·\s*\{pending\.length\}/);
   assert.match(review, /Reviewed ·\s*\{reviewed\.length\}/);
   assert.match(manager, /qraft-question-bank-v1/);
   assert.match(manager, /One question per slide/);
   assert.match(manager, /Upload Qraft JSON/);
+  assert.match(review, /questionId: status === 'approved'/);
 });
 
 test('access blocklist covers phone, university ID, and email registrations', async () => {
