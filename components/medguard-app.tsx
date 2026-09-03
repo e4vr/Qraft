@@ -9,6 +9,7 @@ import {
   BookOpenCheck,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
@@ -563,23 +564,26 @@ function AppSidebar({
           <label className="flex items-center gap-2">
             <Library className="ml-1 size-4 shrink-0 text-primary" />
             <span className="sr-only">Active QBank</span>
-            <select
-              aria-label="Active QBank"
-              value={activeQBankId}
-              onChange={(event) => {
-                onSelectQBank(event.target.value);
-                navigate('dashboard');
-              }}
-              className="min-w-0 flex-1 bg-transparent py-1 text-xs font-bold outline-none"
-            >
-              {qbanks
-                .filter((item) => !item.archived)
-                .map((qbank) => (
-                  <option key={qbank.id} value={qbank.id}>
-                    {qbank.shortName}
-                  </option>
-                ))}
-            </select>
+            <span className="relative min-w-0 flex-1">
+              <select
+                aria-label="Active QBank"
+                value={activeQBankId}
+                onChange={(event) => {
+                  onSelectQBank(event.target.value);
+                  navigate('dashboard');
+                }}
+                className="qbank-selector min-w-0 w-full appearance-none rounded-lg border border-border/70 bg-card px-2 py-1.5 pr-7 text-xs font-bold text-foreground shadow-sm outline-none transition focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+              >
+                {qbanks
+                  .filter((item) => !item.archived)
+                  .map((qbank) => (
+                    <option key={qbank.id} value={qbank.id}>
+                      {qbank.shortName}
+                    </option>
+                  ))}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            </span>
           </label>
         </div>
         <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-3 [scrollbar-gutter:stable] [scrollbar-width:thin]" aria-label="Primary navigation">

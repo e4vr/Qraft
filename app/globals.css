@@ -54,6 +54,24 @@ body { min-width: 320px; overscroll-behavior-y: none; }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 ::selection { background: #ffe66d; color: #172536; }
+
+/* Native select menus inherit the browser's light defaults on some platforms.
+   Keep the QBank picker readable and visually aligned with the sidebar in both themes. */
+.qbank-selector,
+.qbank-selector option {
+  color: var(--foreground);
+  background-color: var(--card);
+}
+.dark .qbank-selector,
+.dark .qbank-selector option {
+  color: var(--foreground);
+  background-color: var(--card);
+  color-scheme: dark;
+}
+.qbank-selector option:checked {
+  color: var(--primary-foreground);
+  background-color: var(--primary);
+}
 @media (display-mode: standalone) {
   body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
 }
