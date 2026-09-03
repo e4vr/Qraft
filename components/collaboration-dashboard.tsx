@@ -4,12 +4,11 @@ import { Check, Clock3, FileCheck2, Fingerprint, Menu, ShieldCheck, UserCheck, U
 import { useMemo, useState } from 'react';
 import questionData from '@/data/questions.json';
 import { canReviewBank, type AccountStatus, type AppUser, type AuditEntry, type CollaborationState, type MemberProfile, type PlatformRole, type Question, type QuestionProposal } from '@/lib/medguard-types';
+import { cn as cx, nowIso } from '@/lib/utils';
 
 type Tab = 'overview' | 'registrations' | 'roles' | 'qbanks' | 'proposals' | 'student-ids' | 'audit';
-function cx(...values: Array<string | false | null | undefined>) { return values.filter(Boolean).join(' '); }
-function now() { return new Date().toISOString(); }
 function formatDate(value?: string) { return value ? new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—'; }
-function audit(user: AppUser, action: string, entityType: AuditEntry['entityType'], entityId: string, detail: string): AuditEntry { return { id: crypto.randomUUID(), action, entityType, entityId, actorId: user.uid, actorName: user.displayName, createdAt: now(), detail }; }
+function audit(user: AppUser, action: string, entityType: AuditEntry['entityType'], entityId: string, detail: string): AuditEntry { return { id: crypto.randomUUID(), action, entityType, entityId, actorId: user.uid, actorName: user.displayName, createdAt: nowIso(), detail }; }
 
 function DiffField({ label, current, proposed }: { label: string; current: string; proposed: string }) {
   const changed = current !== proposed;
@@ -28,7 +27,7 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
   const roleRequests = collaboration.roleApplications.filter((item) => item.status === 'pending');
 
   function reviewMember(uid: string, status: AccountStatus) {
-    const reviewedAt = now();
+    const reviewedAt = nowIso();
     update((current) => ({ ...current, members: current.members.map((item) => item.uid === uid ? { ...item, status, approvedAt: status === 'approved' ? reviewedAt : item.approvedAt, approvedById: user.uid, approvedByName: user.displayName } : item), auditLog: [audit(user, `registration_${status}`, 'account', uid, `${status} membership request.`), ...current.auditLog] }));
   }
 
@@ -39,7 +38,7 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
   function addStudentIds() {
     const values = [...new Set(idText.split(/[\s,;]+/).map((item) => item.trim().toUpperCase()).filter(Boolean))];
     if (!values.length) return;
-    const createdAt = now();
+    const createdAt = nowIso();
     update((current) => { const existing = new Set(current.allowedUniversityIds.map((item) => item.id)); const added = values.filter((id) => !existing.has(id)).map((id) => ({ id, addedAt: createdAt, addedById: user.uid })); return { ...current, allowedUniversityIds: [...added, ...current.allowedUniversityIds], auditLog: added.length ? [audit(user, 'student_ids_added', 'university_id', added[0].id, `${added.length} eligible IDs added.`), ...current.auditLog] : current.auditLog }; });
     setIdText('');
   }
@@ -47,7 +46,7 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
   function reviewRole(applicationId: string, approved: boolean) {
     const application = collaboration.roleApplications.find((item) => item.id === applicationId);
     if (!application || !isRoot) return;
-    const reviewedAt = now();
+    const reviewedAt = nowIso();
     update((current) => ({
       ...current,
       roleApplications: current.roleApplications.map((item) => item.id === applicationId ? { ...item, status: approved ? 'approved' : 'rejected', reviewedAt, reviewedById: user.uid, reviewedByName: user.displayName } : item),
@@ -67,7 +66,7 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
         const question: Question = { id: proposal.questionId ?? `shared-${crypto.randomUUID()}`, number: existing?.number ?? Math.max(0, ...available.filter((item) => item.qbankId === proposal.qbankId).map((item) => item.number)) + 1, qbankId: proposal.qbankId, specialty: proposal.payload.specialty, topic: proposal.payload.topic, stem: proposal.payload.stem, options: proposal.payload.options, answer: proposal.payload.answer, answerLetter: 'ABCD'[proposal.payload.answer], explanation: proposal.payload.explanation, sourceReference: proposal.payload.sourceReference, sourcePage: existing?.sourcePage ?? 0, sourceFile: existing?.sourceFile ?? proposal.payload.sourceReference, revision: (existing?.revision ?? 0) + 1, isCustom: true };
         approvedQuestions = [...approvedQuestions.filter((item) => item.id !== question.id), question];
       }
-      const reviewedAt = now();
+      const reviewedAt = nowIso();
       return { ...current, approvedQuestions, proposals: current.proposals.map((item) => item.id === proposal.id ? { ...item, status, reviewedById: user.uid, reviewedByName: user.displayName, reviewedAt } : item), auditLog: [audit(user, `question_proposal_${status}`, 'question', proposal.id, `${proposal.editKinds.join(', ')} by ${proposal.proposedByName}.`), ...current.auditLog] };
     });
   }

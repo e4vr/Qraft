@@ -32,7 +32,7 @@ test('separate QBanks and attributed shared notes are present', async () => {
   assert.match(types, /interface SharedQuestionNote/);
   assert.match(types, /updatedByName: string/);
   assert.match(app, /Save shared note/);
-  assert.match(app, /Submit for approval/);
+  assert.match(app, /Submit for review/);
 });
 
 test('private banks, per-bank roles, and owner boundaries are enforced', async () => {
@@ -72,6 +72,14 @@ test('ending a test uses the branded save confirmation instead of a browser aler
   assert.match(app, /role="alertdialog"/);
   assert.match(app, /End &amp; save/);
   assert.match(app, /Keep studying/);
+});
+
+test('the sidebar keeps navigation scrollable and the account footer visible', async () => {
+  const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
+  assert.match(app, /h-dvh/);
+  assert.match(app, /min-h-0 flex-1 space-y-1 overflow-y-auto/);
+  assert.match(app, /<footer className="shrink-0 border-t/);
+  assert.match(app, /aria-current=\{view === item\.id \? 'page'/);
 });
 
 test('the singleton Superadmin is gated by authenticator-app MFA', async () => {

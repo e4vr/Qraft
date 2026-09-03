@@ -3,9 +3,8 @@
 import { Check, Copy, Crown, Globe2, KeyRound, Link2, LockKeyhole, Plus, UserPlus, Users, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { bankRoleFor, canAccessBank, type AppUser, type BankRole, type CollaborationState, type QBank, type QBankVisibility } from '@/lib/medguard-types';
+import { cn as cx, nowIso } from '@/lib/utils';
 
-function cx(...values: Array<string | false | null | undefined>) { return values.filter(Boolean).join(' '); }
-function now() { return new Date().toISOString(); }
 function slug(value: string) { return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48); }
 
 export function QBankWorkspace({ user, collaboration, update, activeQBankId, onSelect }: { user: AppUser; collaboration: CollaborationState; update: (updater: (current: CollaborationState) => CollaborationState) => void; activeQBankId: string; onSelect: (id: string) => void }) {
@@ -25,7 +24,7 @@ export function QBankWorkspace({ user, collaboration, update, activeQBankId, onS
     event.preventDefault();
     const id = `${slug(shortName || name)}-${crypto.randomUUID().slice(0, 6)}`;
     if (!name.trim() || !id || !canCreate) return;
-    const createdAt = now();
+    const createdAt = nowIso();
     const bank: QBank = {
       id, name: name.trim(), shortName: (shortName.trim() || name.trim()).slice(0, 18).toUpperCase(), description: description.trim(),
       createdAt, createdById: user.uid, createdByName: user.displayName, ownerId: user.uid, ownerName: user.displayName,
@@ -43,7 +42,7 @@ export function QBankWorkspace({ user, collaboration, update, activeQBankId, onS
     const bank = collaboration.qbanks.find((item) => item.id === inviteBankId && item.ownerId === user.uid);
     const email = inviteEmail.trim().toLowerCase();
     if (!bank || !email.includes('@')) return;
-    const createdAt = now();
+    const createdAt = nowIso();
     const id = crypto.randomUUID();
     update((current) => ({ ...current, invitations: [{ id, qbankId: bank.id, email, role: inviteRole, invitedById: user.uid, invitedByName: user.displayName, createdAt, status: 'pending' }, ...current.invitations], auditLog: [{ id: crypto.randomUUID(), action: 'qbank_user_invited', entityType: 'sharing', entityId: bank.id, actorId: user.uid, actorName: user.displayName, createdAt, detail: `Invited ${email} as ${inviteRole} to ${bank.name}.` }, ...current.auditLog] }));
     setInviteEmail('');
@@ -52,7 +51,7 @@ export function QBankWorkspace({ user, collaboration, update, activeQBankId, onS
   function acceptInvite(inviteId: string) {
     const invitation = collaboration.invitations.find((item) => item.id === inviteId);
     if (!invitation) return;
-    const acceptedAt = now();
+    const acceptedAt = nowIso();
     update((current) => ({
       ...current,
       invitations: current.invitations.map((item) => item.id === inviteId ? { ...item, status: 'accepted', acceptedById: user.uid, acceptedAt } : item),
