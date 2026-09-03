@@ -1668,18 +1668,12 @@ function TestView({
                 </>
               )}
             </article>
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex gap-2">
-                <SecondaryButton onClick={() => move(test.currentIndex - 1)} disabled={test.currentIndex === 0}>
-                  <ChevronLeft className="size-4" />
-                  Previous
-                </SecondaryButton>
-                <SecondaryButton onClick={() => move(test.currentIndex + 1)} disabled={test.currentIndex === test.questionIds.length - 1}>
-                  Next
-                  <ChevronRight className="size-4" />
-                </SecondaryButton>
-              </div>
-              <div className="flex gap-2">
+            <div className="mt-4 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
+              <SecondaryButton onClick={() => move(test.currentIndex - 1)} disabled={test.currentIndex === 0}>
+                <ChevronLeft className="size-4" />
+                Previous
+              </SecondaryButton>
+              <div className="flex min-w-0 flex-wrap justify-center gap-2">
                 <SecondaryButton onClick={openReport}>
                   <CircleAlert className="size-4" />
                   Suggest edit
@@ -1689,6 +1683,10 @@ function TestView({
                   Shared notes {sharedNote?.content || sharedNote?.images.length ? '•' : ''}
                 </PrimaryButton>
               </div>
+              <SecondaryButton onClick={() => move(test.currentIndex + 1)} disabled={test.currentIndex === test.questionIds.length - 1}>
+                Next
+                <ChevronRight className="size-4" />
+              </SecondaryButton>
             </div>
             {notesOpen && (
               <section className="mt-4 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-border dark:bg-card">
