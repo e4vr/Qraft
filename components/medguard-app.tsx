@@ -248,7 +248,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
   }
 
   return (
-    <main className="grid min-h-screen bg-[#f4f8fc] lg:grid-cols-[1.05fr_0.95fr]">
+    <main className="grid min-h-screen bg-background text-foreground lg:grid-cols-[1.05fr_0.95fr]">
       <section className="relative hidden overflow-hidden bg-[radial-gradient(circle_at_15%_15%,#168ee8_0,#075dab_36%,#073c74_100%)] p-14 text-white lg:flex lg:flex-col lg:justify-between">
         <div className="absolute -bottom-48 -left-40 size-[560px] rounded-full border border-white/10" />
         <div className="absolute -bottom-28 -left-20 size-[380px] rounded-full border border-cyan-300/15" />
