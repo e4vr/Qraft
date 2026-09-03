@@ -24,5 +24,15 @@ service firebase.storage {
       allow delete: if request.auth.uid == userId
         || firestore.get(/databases/(default)/documents/qbanks/$(qbankId)).data.ownerId == request.auth.uid;
     }
+
+    match /qbanks/{qbankId}/questions/{questionId}/{userId}/{fileName} {
+      allow read: if canAccess(qbankId);
+      allow create, update: if canAccess(qbankId)
+        && request.auth.uid == userId
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if request.auth.uid == userId
+        || firestore.get(/databases/(default)/documents/qbanks/$(qbankId)).data.ownerId == request.auth.uid;
+    }
   }
 }

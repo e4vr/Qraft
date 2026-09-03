@@ -156,6 +156,7 @@ def extract() -> list[dict[str, object]]:
         questions.append(
             {
                 "id": f"gs-{len(questions) + 1:03d}",
+                "questionId": f"{len(questions) + 1:05d}",
                 "number": len(questions) + 1,
                 "specialty": "Surgery",
                 "topic": classify(stem),
@@ -166,6 +167,7 @@ def extract() -> list[dict[str, object]]:
                 "sourcePage": source_page,
                 "sourceFile": PDF_PATH.name,
                 "revision": 1,
+                "images": [],
             }
         )
 

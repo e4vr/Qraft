@@ -49,12 +49,12 @@ test('private banks, per-bank roles, and owner boundaries are enforced', async (
 test('edit proposals require classified changes, explanation, source, and review', async () => {
   const rules = await readFile(new URL('firestore.rules', root), 'utf8');
   const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
-  const admin = await readFile(new URL('components/collaboration-dashboard.tsx', root), 'utf8');
+  const review = await readFile(new URL('components/review-workspace.tsx', root), 'utf8');
   assert.match(rules, /editKinds\.size\(\) > 0/);
   assert.match(rules, /payload\.explanation\.size\(\) > 0/);
   assert.match(rules, /payload\.sourceReference\.size\(\) > 0/);
   assert.match(app, /Suggest Edit → Review → Approve \/ Reject/);
-  assert.match(admin, /Proposed · \{label\}/);
+  assert.match(review, /Proposed · \{label\}/);
 });
 
 test('study experience includes persistent marker, answer statistics, dark mode, and collapsed topics', async () => {
@@ -90,4 +90,41 @@ test('the singleton Superadmin is gated by authenticator-app MFA', async () => {
   assert.match(auth, /MFA_REQUIRED/);
   assert.match(rules, /request\.auth\.uid == rootUid\(\)/);
   assert.match(rules, /request\.resource\.data\.role != 'super_admin'/);
+});
+
+test('QBank owners can manage access, links, questions, and deletion', async () => {
+  const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
+  const workspace = await readFile(new URL('components/qbank-workspace.tsx', root), 'utf8');
+  const cloud = await readFile(new URL('lib/firebase-client.ts', root), 'utf8');
+  assert.match(workspace, /My QBanks/);
+  assert.match(workspace, /onManageBank/);
+  assert.match(manager, /Change link/);
+  assert.match(manager, /Revoke access/);
+  assert.match(manager, /Delete permanently/);
+  assert.match(manager, /Add question manually/);
+  assert.match(cloud, /deleteQBankImages/);
+});
+
+test('Question IDs are globally reserved and never reused', async () => {
+  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
+  const cloud = await readFile(new URL('lib/firebase-client.ts', root), 'utf8');
+  assert.match(rules, /match \/system\/questionCounter/);
+  assert.match(rules, /match \/questionIds\/\{questionId\}/);
+  assert.match(rules, /questionId\.matches\('\^\[0-9\]\{5\}\$'\)/);
+  assert.match(cloud, /reserveQuestionIds/);
+  assert.match(cloud, /end > 99999/);
+});
+
+test('review workspace, test deletion, question images, and Qraft JSON import are available', async () => {
+  const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
+  const review = await readFile(new URL('components/review-workspace.tsx', root), 'utf8');
+  const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
+  assert.match(app, />Review<\/button>/);
+  assert.match(app, /Delete this test\?/);
+  assert.match(app, /aria-label="Question images"/);
+  assert.match(review, /New · \{pending\.length\}/);
+  assert.match(review, /Reviewed · \{reviewed\.length\}/);
+  assert.match(manager, /qraft-question-bank-v1/);
+  assert.match(manager, /One question per slide/);
+  assert.match(manager, /Upload Qraft JSON/);
 });

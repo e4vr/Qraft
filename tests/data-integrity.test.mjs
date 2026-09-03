@@ -8,11 +8,14 @@ test('phase one contains every keyed question from the 51-page source', () => {
   assert.equal(questions.length, 217);
   assert.equal(questions[0].id, 'gs-001');
   assert.equal(questions.at(-1).id, 'gs-217');
+  assert.equal(questions[0].questionId, '00001');
+  assert.equal(questions.at(-1).questionId, '00217');
   assert.equal(questions[0].sourcePage, 1);
   assert.equal(questions.at(-1).sourcePage, 51);
 });
 
 test('question structure and answer keys are internally consistent', () => {
+  const questionIds = new Set();
   questions.forEach((question, index) => {
     assert.equal(question.number, index + 1);
     assert.equal(question.options.length, 4, question.id);
@@ -23,6 +26,10 @@ test('question structure and answer keys are internally consistent', () => {
     assert.equal(question.specialty, 'Surgery', question.id);
     assert.ok(question.topic.length > 0, question.id);
     assert.ok(question.sourcePage >= 1 && question.sourcePage <= 51, question.id);
+    assert.match(question.questionId, /^\d{5}$/, question.id);
+    assert.equal(questionIds.has(question.questionId), false, question.questionId);
+    questionIds.add(question.questionId);
+    assert.ok(Array.isArray(question.images), question.id);
   });
 });
 

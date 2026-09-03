@@ -31,6 +31,35 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /system/questionCounter {
+      allow read: if active();
+      allow create: if active()
+        && request.resource.data.lastActorId == request.auth.uid
+        && canReviewBank(request.resource.data.lastQBankId)
+        && request.resource.data.nextNumber is int
+        && request.resource.data.nextNumber > 218
+        && request.resource.data.nextNumber <= 100000;
+      allow update: if active()
+        && request.resource.data.lastActorId == request.auth.uid
+        && canReviewBank(request.resource.data.lastQBankId)
+        && request.resource.data.nextNumber is int
+        && request.resource.data.nextNumber > resource.data.nextNumber
+        && request.resource.data.nextNumber - resource.data.nextNumber <= 200
+        && request.resource.data.nextNumber <= 100000;
+      allow delete: if false;
+    }
+
+    match /questionIds/{questionId} {
+      allow read: if active();
+      allow create: if active()
+        && questionId.matches('^[0-9]{5}$')
+        && request.resource.data.questionId == questionId
+        && request.resource.data.createdById == request.auth.uid
+        && canReviewBank(request.resource.data.qbankId)
+        && !exists(/databases/$(database)/documents/questionIds/$(questionId));
+      allow update, delete: if false;
+    }
+
     match /profiles/{userId} {
       allow get: if signedIn() && (request.auth.uid == userId || accessManager() || superAdmin());
       allow list: if accessManager() || superAdmin();
@@ -106,7 +135,7 @@ service cloud.firestore {
         && request.resource.data.id == token
         && getAfter(/databases/$(database)/documents/qbanks/$(request.resource.data.qbankId)).data.ownerId == request.auth.uid
         && request.resource.data.ownerId == request.auth.uid;
-      allow delete: if false;
+      allow delete: if active() && bank(resource.data.qbankId).ownerId == request.auth.uid;
     }
 
     match /qbankInvitations/{inviteId} {
@@ -118,7 +147,7 @@ service cloud.firestore {
         || (resource.data.email == request.auth.token.email
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedById', 'acceptedAt']))
       );
-      allow delete: if false;
+      allow delete: if active() && bank(resource.data.qbankId).ownerId == request.auth.uid;
     }
 
     match /questionProposals/{proposalId} {
@@ -132,13 +161,21 @@ service cloud.firestore {
         && request.resource.data.payload.sourceReference.size() > 0;
       allow update: if canReviewBank(resource.data.qbankId)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedById', 'reviewedByName', 'reviewedAt', 'reviewNote']);
-      allow delete: if false;
+      allow delete: if active() && bank(resource.data.qbankId).ownerId == request.auth.uid;
     }
 
     match /sharedQuestions/{questionId} {
       allow read: if canAccessBank(resource.data.qbankId);
-      allow create: if canReviewBank(request.resource.data.qbankId);
-      allow update: if canReviewBank(resource.data.qbankId) && request.resource.data.qbankId == resource.data.qbankId;
+      allow create: if canReviewBank(request.resource.data.qbankId)
+        && request.resource.data.questionId.matches('^[0-9]{5}$')
+        && (
+          (request.resource.data.qbankId == 'smle-gs' && request.resource.data.id.matches('^gs-[0-9]{3}$'))
+          || (exists(/databases/$(database)/documents/questionIds/$(request.resource.data.questionId))
+            && get(/databases/$(database)/documents/questionIds/$(request.resource.data.questionId)).data.qbankId == request.resource.data.qbankId)
+        );
+      allow update: if canReviewBank(resource.data.qbankId)
+        && request.resource.data.qbankId == resource.data.qbankId
+        && (!('questionId' in resource.data) || request.resource.data.questionId == resource.data.questionId);
       allow delete: if active() && bank(resource.data.qbankId).ownerId == request.auth.uid;
     }
 
@@ -150,7 +187,7 @@ service cloud.firestore {
         && !resource.data.selections.keys().hasAny([request.auth.uid])
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['selections'])
         && request.resource.data.selections.diff(resource.data.selections).affectedKeys().hasOnly([request.auth.uid]);
-      allow delete: if false;
+      allow delete: if active() && bank(resource.data.qbankId).ownerId == request.auth.uid;
     }
 
     match /roleApplications/{applicationId} {

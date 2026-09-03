@@ -11,6 +11,7 @@ export type ProposalEditKind = 'question_text' | 'options' | 'correct_answer' | 
 
 export interface Question {
   id: string;
+  questionId: string;
   number: number;
   specialty: string;
   topic: string;
@@ -25,6 +26,7 @@ export interface Question {
   qbankId?: string;
   explanation?: string;
   sourceReference?: string;
+  images: NoteImage[];
 }
 
 export interface HighlightRange {
@@ -209,6 +211,7 @@ export interface QuestionProposalPayload {
   topic: string;
   explanation: string;
   sourceReference: string;
+  images: NoteImage[];
 }
 
 export interface QuestionProposal {
@@ -392,9 +395,9 @@ export function normalizeCollaborationState(input?: Partial<CollaborationState>)
     memberships: input.memberships ?? [],
     invitations: input.invitations ?? [],
     members: (input.members ?? []).map((member) => ({ ...member, tier: member.tier ?? 'lite', platformRoles: member.platformRoles ?? [] })),
-    proposals: (input.proposals ?? []).map((proposal) => ({ ...proposal, editKinds: proposal.editKinds ?? (proposal.type === 'new_question' ? ['question_text'] : ['typo_formatting']), payload: { ...proposal.payload, explanation: proposal.payload.explanation ?? '', sourceReference: proposal.payload.sourceReference ?? proposal.rationale ?? '' } })),
+    proposals: (input.proposals ?? []).map((proposal) => ({ ...proposal, editKinds: proposal.editKinds ?? (proposal.type === 'new_question' ? ['question_text'] : ['typo_formatting']), payload: { ...proposal.payload, explanation: proposal.payload.explanation ?? '', sourceReference: proposal.payload.sourceReference ?? proposal.rationale ?? '', images: proposal.payload.images ?? [] }, currentSnapshot: proposal.currentSnapshot ? { ...proposal.currentSnapshot, images: proposal.currentSnapshot.images ?? [] } : undefined })),
     roleApplications: input.roleApplications ?? [],
-    approvedQuestions: input.approvedQuestions ?? [],
+    approvedQuestions: (input.approvedQuestions ?? []).map((question, index) => ({ ...question, questionId: question.questionId ?? String(218 + index).padStart(5, '0'), images: question.images ?? [] })),
     answerStats: input.answerStats ?? {},
     sharedNotes: input.sharedNotes ?? {},
     auditLog: input.auditLog ?? [],

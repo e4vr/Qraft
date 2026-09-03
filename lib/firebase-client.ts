@@ -214,6 +214,50 @@ export async function uploadNoteImage(uid: string, file: File, qbankId = 'smle-g
   return storageModule.getDownloadURL(reference);
 }
 
+export async function uploadQuestionImage(uid: string, file: File, qbankId: string, questionId: string): Promise<string> {
+  const { storage, storageModule } = await services();
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const path = `qbanks/${qbankId}/questions/${questionId}/${uid}/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
+  const reference = storageModule.ref(storage, path);
+  await storageModule.uploadBytes(reference, file, { contentType: file.type });
+  return storageModule.getDownloadURL(reference);
+}
+
+export async function deleteQBankImages(qbankId: string): Promise<void> {
+  if (!firebaseEnabled) return;
+  const { storage, storageModule } = await services();
+  const removeFolder = async (path: string): Promise<void> => {
+    const result = await storageModule.listAll(storageModule.ref(storage, path));
+    await Promise.all(result.items.map((item) => storageModule.deleteObject(item)));
+    await Promise.all(result.prefixes.map((prefix) => removeFolder(prefix.fullPath)));
+  };
+  await removeFolder(`qbanks/${qbankId}`);
+}
+
+export async function reserveQuestionIds(count: number, qbankId: string, user: AppUser, knownQuestionIds: string[]): Promise<string[]> {
+  if (!Number.isInteger(count) || count < 1 || count > 200) throw new Error('You can add between 1 and 200 questions at a time.');
+  const highestKnown = knownQuestionIds.reduce((highest, value) => /^\d{5}$/.test(value) ? Math.max(highest, Number(value)) : highest, 217);
+  if (!firebaseEnabled) {
+    const end = highestKnown + count;
+    if (end > 99999) throw new Error('The platform has reached the Question ID limit.');
+    return Array.from({ length: count }, (_, index) => String(highestKnown + index + 1).padStart(5, '0'));
+  }
+  const { db, firestoreModule } = await services();
+  return firestoreModule.runTransaction(db, async (transaction) => {
+    const counterRef = firestoreModule.doc(db, 'system', 'questionCounter');
+    const counterSnapshot = await transaction.get(counterRef);
+    const storedNext = counterSnapshot.exists() ? Number(counterSnapshot.data().nextNumber) : 218;
+    const start = Math.max(highestKnown + 1, Number.isInteger(storedNext) ? storedNext : 218, 218);
+    const end = start + count - 1;
+    if (end > 99999) throw new Error('The platform has reached the Question ID limit.');
+    const createdAt = new Date().toISOString();
+    transaction.set(counterRef, { nextNumber: end + 1, lastQBankId: qbankId, lastActorId: user.uid, updatedAt: createdAt }, { merge: true });
+    const ids = Array.from({ length: count }, (_, index) => String(start + index).padStart(5, '0'));
+    ids.forEach((questionId) => transaction.set(firestoreModule.doc(db, 'questionIds', questionId), { questionId, qbankId, createdById: user.uid, createdAt }));
+    return ids;
+  });
+}
+
 export async function joinFirebaseQBankByLink(user: AppUser, qbankId: string, token: string): Promise<void> {
   const { db, firestoreModule } = await services();
   const link = await firestoreModule.getDoc(firestoreModule.doc(db, 'qbankShareLinks', token));
@@ -237,7 +281,7 @@ export async function loadCollaborationState(user: AppUser): Promise<Collaborati
   const unique = <T extends { id: string }>(items: T[]) => [...new Map(items.map((item) => [item.id, item])).values()];
   const isRoot = user.role === 'super_admin';
   const canManageAccess = isRoot || user.platformRoles.includes('access_manager');
-  const membershipRows = isRoot ? await read('qbankMemberships') : await read('qbankMemberships', [firestoreModule.where('userId', '==', user.uid)]);
+  let membershipRows = isRoot ? await read('qbankMemberships') : await read('qbankMemberships', [firestoreModule.where('userId', '==', user.uid)]);
   state.memberships = membershipRows as CollaborationState['memberships'];
   const ownedInvites = user.tier === 'pro' || isRoot ? await read('qbankInvitations', [firestoreModule.where('invitedById', '==', user.uid)]) : [];
   const receivedInvites = user.email ? await read('qbankInvitations', [firestoreModule.where('email', '==', user.email.toLowerCase())]) : [];
@@ -255,6 +299,14 @@ export async function loadCollaborationState(user: AppUser): Promise<Collaborati
     qbankRows = unique([...qbankRows, ...missing.filter(Boolean) as { id: string }[]]);
   }
   state.qbanks = qbankRows.length ? qbankRows as CollaborationState['qbanks'] : state.qbanks;
+  if (!isRoot) {
+    const ownedMemberships: { id: string }[] = [];
+    for (const bankItem of state.qbanks.filter((item) => item.ownerId === user.uid)) {
+      ownedMemberships.push(...await read('qbankMemberships', [firestoreModule.where('qbankId', '==', bankItem.id)]));
+    }
+    membershipRows = unique([...membershipRows, ...ownedMemberships]);
+    state.memberships = membershipRows as CollaborationState['memberships'];
+  }
   const normalized = normalizeCollaborationState(state);
   const questionRows: { id: string }[] = [];
   const noteRows: { id: string }[] = [];
@@ -293,27 +345,41 @@ export async function loadCollaborationState(user: AppUser): Promise<Collaborati
 export async function saveCollaborationState(next: CollaborationState, previous: CollaborationState): Promise<void> {
   const { db, firestoreModule } = await services();
   const writes: Array<{ collection: string; id: string; value: unknown }> = [];
-  const collect = <T>(collection: string, values: T[], old: T[], key: (item: T) => string) => {
+  const deletes: Array<{ collection: string; id: string }> = [];
+  const collect = <T>(collection: string, values: T[], old: T[], key: (item: T) => string, deleteMissing = false) => {
     changed(values, old, key).forEach((item) => writes.push({ collection, id: key(item), value: item }));
+    if (deleteMissing) {
+      const currentKeys = new Set(values.map(key));
+      old.filter((item) => !currentKeys.has(key(item))).forEach((item) => deletes.push({ collection, id: key(item) }));
+    }
   };
-  collect('qbanks', next.qbanks, previous.qbanks, (item) => item.id);
+  collect('qbanks', next.qbanks, previous.qbanks, (item) => item.id, true);
   changed(next.qbanks, previous.qbanks, (item) => item.id).forEach((bank) => {
     if (bank.shareToken) writes.push({ collection: 'qbankShareLinks', id: bank.shareToken, value: { id: bank.shareToken, qbankId: bank.id, ownerId: bank.ownerId, ownerName: bank.ownerName, enabled: bank.shareEnabled, updatedAt: new Date().toISOString() } });
   });
-  collect('qbankMemberships', next.memberships, previous.memberships, (item) => item.id);
-  collect('qbankInvitations', next.invitations, previous.invitations, (item) => item.id);
+  previous.qbanks.forEach((oldBank) => {
+    const nextBank = next.qbanks.find((item) => item.id === oldBank.id);
+    if (oldBank.shareToken && oldBank.shareToken !== nextBank?.shareToken) deletes.push({ collection: 'qbankShareLinks', id: oldBank.shareToken });
+  });
+  collect('qbankMemberships', next.memberships, previous.memberships, (item) => item.id, true);
+  collect('qbankInvitations', next.invitations, previous.invitations, (item) => item.id, true);
   collect('profiles', next.members, previous.members, (item) => item.uid);
   collect('universityIds', next.allowedUniversityIds, previous.allowedUniversityIds, (item) => item.id);
   collect('adminInvites', next.adminInvites, previous.adminInvites, (item) => item.id);
-  collect('questionProposals', next.proposals, previous.proposals, (item) => item.id);
+  collect('questionProposals', next.proposals, previous.proposals, (item) => item.id, true);
   collect('roleApplications', next.roleApplications, previous.roleApplications, (item) => item.id);
-  collect('sharedQuestions', next.approvedQuestions, previous.approvedQuestions, (item) => item.id);
-  collect('answerStats', Object.values(next.answerStats), Object.values(previous.answerStats), (item) => item.id);
-  collect('sharedNotes', Object.values(next.sharedNotes), Object.values(previous.sharedNotes), (item) => item.id);
+  collect('sharedQuestions', next.approvedQuestions, previous.approvedQuestions, (item) => item.id, true);
+  collect('answerStats', Object.values(next.answerStats), Object.values(previous.answerStats), (item) => item.id, true);
+  collect('sharedNotes', Object.values(next.sharedNotes), Object.values(previous.sharedNotes), (item) => item.id, true);
   collect('auditLog', next.auditLog, previous.auditLog, (item) => item.id);
-  for (let start = 0; start < writes.length; start += 400) {
+  const operations = [...deletes.map((item) => ({ ...item, type: 'delete' as const })), ...writes.map((item) => ({ ...item, type: 'set' as const }))];
+  for (let start = 0; start < operations.length; start += 400) {
     const batch = firestoreModule.writeBatch(db);
-    writes.slice(start, start + 400).forEach((write) => batch.set(firestoreModule.doc(db, write.collection, write.id), write.value as Record<string, unknown>, { merge: true }));
+    operations.slice(start, start + 400).forEach((operation) => {
+      const reference = firestoreModule.doc(db, operation.collection, operation.id);
+      if (operation.type === 'delete') batch.delete(reference);
+      else batch.set(reference, operation.value as Record<string, unknown>, { merge: true });
+    });
     await batch.commit();
   }
 }
