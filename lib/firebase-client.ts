@@ -1,10 +1,13 @@
 import {
   initialCollaborationState,
+  normalizeCollaborationState,
+  canReviewBank,
   type AppState,
   type AppUser,
   type CollaborationState,
   type MemberProfile,
 } from './medguard-types';
+import type { MultiFactorResolver, TotpSecret } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -57,15 +60,18 @@ function baseUser(user: { uid: string; email: string | null; displayName: string
     provider: 'firebase',
     role: configuredRoot ? 'super_admin' : 'student',
     status: configuredRoot ? 'approved' : 'pending',
+    tier: configuredRoot ? 'pro' : 'lite',
+    platformRoles: [],
   };
 }
 
 async function mapUser(user: { uid: string; email: string | null; displayName: string | null }): Promise<AppUser> {
   const mapped = baseUser(user);
-  const { db, firestoreModule } = await services();
+  const { auth, authModule, db, firestoreModule } = await services();
   const profileSnapshot = await firestoreModule.getDoc(firestoreModule.doc(db, 'profiles', user.uid));
   if (!profileSnapshot.exists()) return mapped;
   const profile = profileSnapshot.data() as MemberProfile;
+  const enrolledFactors = auth.currentUser ? authModule.multiFactor(auth.currentUser).enrolledFactors : [];
   return {
     ...mapped,
     displayName: profile.displayName || mapped.displayName,
@@ -73,9 +79,17 @@ async function mapUser(user: { uid: string; email: string | null; displayName: s
     role: profile.role,
     status: profile.status,
     createdAt: profile.createdAt,
-    isAdmin: profile.role === 'admin' || profile.role === 'super_admin',
+    tier: profile.tier ?? (profile.role === 'super_admin' || profile.role === 'admin' ? 'pro' : 'lite'),
+    platformRoles: profile.platformRoles ?? (profile.role === 'reviewer' ? ['reviewer'] : profile.role === 'access_manager' || profile.role === 'admin' ? ['access_manager'] : []),
+    suspended: profile.suspended,
+    mfaEnrolled: enrolledFactors.length > 0,
+    mfaVerified: profile.role !== 'super_admin' || enrolledFactors.length > 0,
+    isAdmin: profile.role === 'super_admin' || (profile.platformRoles ?? []).length > 0 || ['admin', 'reviewer', 'access_manager'].includes(profile.role),
   };
 }
+
+let pendingMfaResolver: MultiFactorResolver | undefined;
+let pendingTotpSecret: TotpSecret | undefined;
 
 export async function observeFirebaseUser(callback: (user?: AppUser) => void): Promise<() => void> {
   const { auth, authModule } = await services();
@@ -87,8 +101,47 @@ export async function observeFirebaseUser(callback: (user?: AppUser) => void): P
 
 export async function signInFirebase(email: string, password: string): Promise<AppUser> {
   const { auth, authModule } = await services();
-  const result = await authModule.signInWithEmailAndPassword(auth, email, password);
+  try {
+    const result = await authModule.signInWithEmailAndPassword(auth, email, password);
+    return mapUser(result.user);
+  } catch (error) {
+    if ((error as { code?: string }).code === 'auth/multi-factor-auth-required') {
+      pendingMfaResolver = authModule.getMultiFactorResolver(auth, error as never);
+      throw new Error('MFA_REQUIRED');
+    }
+    throw error;
+  }
+}
+
+export async function completeFirebaseMfaSignIn(code: string): Promise<AppUser> {
+  if (!pendingMfaResolver) throw new Error('Start sign-in again before entering an MFA code.');
+  const { authModule } = await services();
+  const hint = pendingMfaResolver.hints.find((item) => item.factorId === authModule.TotpMultiFactorGenerator.FACTOR_ID);
+  if (!hint) throw new Error('No authenticator-app factor is enrolled for this account.');
+  const assertion = authModule.TotpMultiFactorGenerator.assertionForSignIn(hint.uid, code.trim());
+  const result = await pendingMfaResolver.resolveSignIn(assertion);
+  pendingMfaResolver = undefined;
   return mapUser(result.user);
+}
+
+export async function beginTotpEnrollment(): Promise<{ secretKey: string; qrUrl: string }> {
+  const { auth, authModule } = await services();
+  if (!auth.currentUser) throw new Error('Sign in before enabling MFA.');
+  if (!auth.currentUser.emailVerified) {
+    await authModule.sendEmailVerification(auth.currentUser);
+    throw new Error('Verify the email message we sent, then sign in again to enable MFA.');
+  }
+  const session = await authModule.multiFactor(auth.currentUser).getSession();
+  pendingTotpSecret = await authModule.TotpMultiFactorGenerator.generateSecret(session);
+  return { secretKey: pendingTotpSecret.secretKey, qrUrl: pendingTotpSecret.generateQrCodeUrl(auth.currentUser.email ?? 'admin', 'MedGuard') };
+}
+
+export async function completeTotpEnrollment(code: string): Promise<void> {
+  const { auth, authModule } = await services();
+  if (!auth.currentUser || !pendingTotpSecret) throw new Error('Start MFA enrollment again.');
+  const assertion = authModule.TotpMultiFactorGenerator.assertionForEnrollment(pendingTotpSecret, code.trim());
+  await authModule.multiFactor(auth.currentUser).enroll(assertion, 'MedGuard authenticator');
+  pendingTotpSecret = undefined;
 }
 
 export async function createFirebaseAccount(name: string, email: string, password: string, universityId: string): Promise<AppUser> {
@@ -111,10 +164,13 @@ export async function createFirebaseAccount(name: string, email: string, passwor
         role: 'student',
         status: 'pending',
         createdAt: now,
+        tier: 'lite',
+        platformRoles: [],
       };
       transaction.update(allowedRef, { claimedById: result.user.uid, claimedByName: name.trim(), claimedAt: now });
       transaction.set(firestoreModule.doc(db, 'profiles', result.user.uid), profile);
     });
+    await authModule.sendEmailVerification(result.user).catch(() => undefined);
     return mapUser({ ...result.user, displayName: name });
   } catch (error) {
     await authModule.deleteUser(result.user).catch(() => undefined);
@@ -158,6 +214,14 @@ export async function uploadNoteImage(uid: string, file: File, qbankId = 'smle-g
   return storageModule.getDownloadURL(reference);
 }
 
+export async function joinFirebaseQBankByLink(user: AppUser, qbankId: string, token: string): Promise<void> {
+  const { db, firestoreModule } = await services();
+  const link = await firestoreModule.getDoc(firestoreModule.doc(db, 'qbankShareLinks', token));
+  if (!link.exists() || link.data().enabled !== true || link.data().qbankId !== qbankId) throw new Error('This QBank link is invalid or no longer active.');
+  const createdAt = new Date().toISOString();
+  await firestoreModule.setDoc(firestoreModule.doc(db, 'qbankMemberships', `${qbankId}_${user.uid}`), { id: `${qbankId}_${user.uid}`, qbankId, userId: user.uid, userName: user.displayName, role: 'viewer', grantedById: link.data().ownerId, grantedByName: link.data().ownerName, createdAt, viaLink: true, accessToken: token });
+}
+
 function changed<T>(next: T[], previous: T[], key: (item: T) => string) {
   const old = new Map(previous.map((item) => [key(item), JSON.stringify(item)]));
   return next.filter((item) => old.get(key(item)) !== JSON.stringify(item));
@@ -166,26 +230,64 @@ function changed<T>(next: T[], previous: T[], key: (item: T) => string) {
 export async function loadCollaborationState(user: AppUser): Promise<CollaborationState> {
   const { db, firestoreModule } = await services();
   const state = initialCollaborationState();
-  const read = async (name: string) => (await firestoreModule.getDocs(firestoreModule.collection(db, name))).docs.map((item) => ({ id: item.id, ...item.data() }));
-  const [qbanks, proposals, questions, notes] = await Promise.all([
-    read('qbanks'),
-    read('questionProposals'),
-    read('sharedQuestions'),
-    read('sharedNotes'),
+  const read = async (name: string, constraints: ReturnType<typeof firestoreModule.where>[] = []) => {
+    const target = constraints.length ? firestoreModule.query(firestoreModule.collection(db, name), ...constraints) : firestoreModule.collection(db, name);
+    return (await firestoreModule.getDocs(target)).docs.map((item) => ({ id: item.id, ...item.data() }));
+  };
+  const unique = <T extends { id: string }>(items: T[]) => [...new Map(items.map((item) => [item.id, item])).values()];
+  const isRoot = user.role === 'super_admin';
+  const canManageAccess = isRoot || user.platformRoles.includes('access_manager');
+  const membershipRows = isRoot ? await read('qbankMemberships') : await read('qbankMemberships', [firestoreModule.where('userId', '==', user.uid)]);
+  state.memberships = membershipRows as CollaborationState['memberships'];
+  const ownedInvites = user.tier === 'pro' || isRoot ? await read('qbankInvitations', [firestoreModule.where('invitedById', '==', user.uid)]) : [];
+  const receivedInvites = user.email ? await read('qbankInvitations', [firestoreModule.where('email', '==', user.email.toLowerCase())]) : [];
+  state.invitations = unique([...ownedInvites, ...receivedInvites]) as CollaborationState['invitations'];
+  let qbankRows = isRoot ? await read('qbanks') : unique([
+    ...await read('qbanks', [firestoreModule.where('visibility', '==', 'public')]),
+    ...await read('qbanks', [firestoreModule.where('ownerId', '==', user.uid)]),
   ]);
-  state.qbanks = qbanks.length ? qbanks as CollaborationState['qbanks'] : state.qbanks;
-  state.proposals = proposals as CollaborationState['proposals'];
-  state.approvedQuestions = questions as CollaborationState['approvedQuestions'];
-  state.sharedNotes = Object.fromEntries((notes as CollaborationState['sharedNotes'][string][]).map((note) => [note.id, note]));
-  if (user.isAdmin) {
-    const [members, ids, invites, audit] = await Promise.all([read('profiles'), read('universityIds'), read('adminInvites'), read('auditLog')]);
+  if (!isRoot) {
+    const missingIds = unique(state.memberships.map((item) => ({ id: item.qbankId }))).filter((item) => !qbankRows.some((bank) => bank.id === item.id));
+    const missing = await Promise.all(missingIds.map(async ({ id }) => {
+      const snapshot = await firestoreModule.getDoc(firestoreModule.doc(db, 'qbanks', id));
+      return snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : undefined;
+    }));
+    qbankRows = unique([...qbankRows, ...missing.filter(Boolean) as { id: string }[]]);
+  }
+  state.qbanks = qbankRows.length ? qbankRows as CollaborationState['qbanks'] : state.qbanks;
+  const normalized = normalizeCollaborationState(state);
+  const questionRows: { id: string }[] = [];
+  const noteRows: { id: string }[] = [];
+  const statRows: { id: string }[] = [];
+  for (const bankItem of normalized.qbanks) {
+    questionRows.push(...await read('sharedQuestions', [firestoreModule.where('qbankId', '==', bankItem.id)]));
+    noteRows.push(...await read('sharedNotes', [firestoreModule.where('qbankId', '==', bankItem.id)]));
+    statRows.push(...await read('answerStats', [firestoreModule.where('qbankId', '==', bankItem.id)]));
+  }
+  const ownProposals = await read('questionProposals', [firestoreModule.where('proposedById', '==', user.uid)]);
+  const reviewRows: { id: string }[] = [];
+  for (const bankItem of normalized.qbanks.filter((item) => canReviewBank(user, item, normalized.memberships))) {
+    reviewRows.push(...await read('questionProposals', [firestoreModule.where('qbankId', '==', bankItem.id)]));
+  }
+  state.proposals = unique([...ownProposals, ...reviewRows]) as CollaborationState['proposals'];
+  state.approvedQuestions = questionRows as CollaborationState['approvedQuestions'];
+  state.answerStats = Object.fromEntries((statRows as CollaborationState['answerStats'][string][]).map((item) => [item.id, item]));
+  state.sharedNotes = Object.fromEntries((noteRows as CollaborationState['sharedNotes'][string][]).map((note) => [note.id, note]));
+  state.roleApplications = (isRoot ? await read('roleApplications') : await read('roleApplications', [firestoreModule.where('userId', '==', user.uid)])) as CollaborationState['roleApplications'];
+  if (canManageAccess) {
+    const members = await read('profiles');
     state.members = members as unknown as CollaborationState['members'];
+  }
+  if (isRoot) {
+    const [ids, invites, audit] = await Promise.all([read('universityIds'), read('adminInvites'), read('auditLog')]);
     state.allowedUniversityIds = ids as CollaborationState['allowedUniversityIds'];
     state.adminInvites = invites as CollaborationState['adminInvites'];
     state.auditLog = (audit as CollaborationState['auditLog']).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
+  const securitySnapshot = await firestoreModule.getDoc(firestoreModule.doc(db, 'system', 'security'));
+  if (securitySnapshot.exists()) state.security = securitySnapshot.data() as CollaborationState['security'];
   state.lastSyncAt = new Date().toISOString();
-  return state;
+  return normalizeCollaborationState(state);
 }
 
 export async function saveCollaborationState(next: CollaborationState, previous: CollaborationState): Promise<void> {
@@ -195,11 +297,18 @@ export async function saveCollaborationState(next: CollaborationState, previous:
     changed(values, old, key).forEach((item) => writes.push({ collection, id: key(item), value: item }));
   };
   collect('qbanks', next.qbanks, previous.qbanks, (item) => item.id);
+  changed(next.qbanks, previous.qbanks, (item) => item.id).forEach((bank) => {
+    if (bank.shareToken) writes.push({ collection: 'qbankShareLinks', id: bank.shareToken, value: { id: bank.shareToken, qbankId: bank.id, ownerId: bank.ownerId, ownerName: bank.ownerName, enabled: bank.shareEnabled, updatedAt: new Date().toISOString() } });
+  });
+  collect('qbankMemberships', next.memberships, previous.memberships, (item) => item.id);
+  collect('qbankInvitations', next.invitations, previous.invitations, (item) => item.id);
   collect('profiles', next.members, previous.members, (item) => item.uid);
   collect('universityIds', next.allowedUniversityIds, previous.allowedUniversityIds, (item) => item.id);
   collect('adminInvites', next.adminInvites, previous.adminInvites, (item) => item.id);
   collect('questionProposals', next.proposals, previous.proposals, (item) => item.id);
+  collect('roleApplications', next.roleApplications, previous.roleApplications, (item) => item.id);
   collect('sharedQuestions', next.approvedQuestions, previous.approvedQuestions, (item) => item.id);
+  collect('answerStats', Object.values(next.answerStats), Object.values(previous.answerStats), (item) => item.id);
   collect('sharedNotes', Object.values(next.sharedNotes), Object.values(previous.sharedNotes), (item) => item.id);
   collect('auditLog', next.auditLog, previous.auditLog, (item) => item.id);
   for (let start = 0; start < writes.length; start += 400) {

@@ -14,6 +14,7 @@ import {
   CircleAlert,
   ClipboardList,
   ClipboardPlus,
+  Copy,
   Cloud,
   CloudOff,
   Download,
@@ -27,12 +28,14 @@ import {
   List,
   LogOut,
   Menu,
+  Moon,
   Plus,
   RefreshCw,
   Save,
   Settings,
   ShieldCheck,
   Sparkles,
+  Sun,
   Trash2,
   Users,
   X,
@@ -41,7 +44,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import questionData from '@/data/questions.json';
 import {
   createFirebaseAccount,
+  beginTotpEnrollment,
+  completeFirebaseMfaSignIn,
+  completeTotpEnrollment,
   firebaseEnabled,
+  joinFirebaseQBankByLink,
   loadCollaborationState,
   loadCloudState,
   observeFirebaseUser,
@@ -65,7 +72,9 @@ import {
   emptyProgress,
   initialCollaborationState,
   initialAppState,
+  normalizeCollaborationState,
   normalizeAppState,
+  canAccessBank,
   type AppState,
   type AppUser,
   type CollaborationState,
@@ -73,12 +82,14 @@ import {
   type Question,
   type QuestionProgress,
   type QuestionStatus,
+  type ProposalEditKind,
   type TestBuilderConfig,
   type TestSession,
 } from '@/lib/medguard-types';
 import { AdminDashboard, PendingApproval } from '@/components/collaboration-dashboard';
+import { QBankWorkspace } from '@/components/qbank-workspace';
 
-type View = 'dashboard' | 'create' | 'history' | 'progress' | 'settings' | 'manager' | 'admin' | 'test';
+type View = 'dashboard' | 'library' | 'create' | 'history' | 'progress' | 'settings' | 'manager' | 'admin' | 'test';
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'offline' | 'error';
 
 interface ModelContextLike {
@@ -96,6 +107,7 @@ const baseQuestions = questionData as Question[];
 
 const NAV_ITEMS = [
   { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'library' as const, label: 'QBank library', icon: Library },
   { id: 'create' as const, label: 'Create test', icon: ClipboardPlus },
   { id: 'history' as const, label: 'Previous tests', icon: BookOpenCheck },
   { id: 'progress' as const, label: 'Progress', icon: BarChart3 },
@@ -133,14 +145,14 @@ function mergeRanges(ranges: HighlightRange[]): HighlightRange[] {
   return merged;
 }
 
-function HighlightedText({ text, ranges }: { text: string; ranges: HighlightRange[] }) {
+function HighlightedText({ text, ranges, onRemove }: { text: string; ranges: HighlightRange[]; onRemove?: (range: HighlightRange) => void }) {
   const valid = mergeRanges(ranges).filter((range) => range.start < text.length);
   const output: React.ReactNode[] = [];
   let cursor = 0;
   valid.forEach((range, index) => {
     const end = Math.min(range.end, text.length);
     if (range.start > cursor) output.push(text.slice(cursor, range.start));
-    output.push(<mark key={`${range.start}-${end}-${index}`} className="rounded-sm bg-[#ffe66d] px-0.5 text-inherit">{text.slice(range.start, end)}</mark>);
+    output.push(<mark key={`${range.start}-${end}-${index}`} className="rounded-sm bg-[#ffe66d] px-0.5 text-slate-900"><button type="button" title="Click to remove marker" aria-label={`Remove highlight: ${text.slice(range.start, end)}`} onClick={() => onRemove?.(range)} className="cursor-pointer text-inherit">{text.slice(range.start, end)}</button></mark>);
     cursor = end;
   });
   if (cursor < text.length) output.push(text.slice(cursor));
@@ -167,18 +179,22 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
   const [universityId, setUniversityId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaCode, setMfaCode] = useState('');
 
   async function submit(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (password.length < 6) { setError('Use at least 6 characters for your password.'); return; }
+    if (!mfaRequired && password.length < 6) { setError('Use at least 6 characters for your password.'); return; }
     setBusy(true); setError('');
     try {
       const user = firebaseEnabled
-        ? register ? await createFirebaseAccount(name, email, password, universityId) : await signInFirebase(email, password)
+        ? register ? await createFirebaseAccount(name, email, password, universityId) : mfaRequired ? await completeFirebaseMfaSignIn(mfaCode) : await signInFirebase(email, password)
         : register ? await createLocalAccount(name, email, password, universityId) : await signInLocal(email, password);
       onAuthenticated(user);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to sign in.');
+      const message = caught instanceof Error ? caught.message : 'Unable to sign in.';
+      if (message === 'MFA_REQUIRED') { setMfaRequired(true); setError(''); }
+      else setError(message);
     } finally { setBusy(false); }
   }
 
@@ -203,19 +219,31 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
           <div className="mb-9 flex items-center gap-3 lg:hidden"><div className="grid size-10 place-items-center rounded-xl bg-primary text-white"><Sparkles className="size-4" /></div><strong className="text-xl">MedGuard</strong></div>
           <div className="mb-8"><p className="mb-2 text-sm font-bold text-primary">{register ? 'REQUEST MEMBERSHIP' : 'WELCOME BACK'}</p><h2 className="text-3xl font-bold tracking-tight">{register ? 'Join your cohort QBank' : 'Sign in to continue'}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{register ? 'Your student ID is checked once, then an administrator reviews your request.' : firebaseEnabled ? 'Your progress and shared contributions sync securely.' : 'Local collaborative preview mode is active.'}</p></div>
           <form onSubmit={submit} className="space-y-4">
+            {mfaRequired && <div className="rounded-xl border border-primary/20 bg-primary/5 p-4"><div className="flex items-center gap-2 font-bold text-primary"><ShieldCheck className="size-4" />Two-factor authentication</div><p className="mt-1 text-xs leading-5 text-muted-foreground">Enter the six-digit code from your authenticator app.</p></div>}
             {register && <label className="block"><span className="mb-1.5 block text-sm font-semibold">Full name</span><input required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} className="h-12 w-full rounded-xl border bg-white px-4 outline-none transition focus:border-primary focus:ring-3 focus:ring-primary/10" placeholder="Khaled" /></label>}
             {register && <label className="block"><span className="mb-1.5 block text-sm font-semibold">University ID</span><input required autoComplete="off" value={universityId} onChange={(event) => setUniversityId(event.target.value.toUpperCase())} className="h-12 w-full rounded-xl border bg-white px-4 font-mono outline-none transition focus:border-primary focus:ring-3 focus:ring-primary/10" placeholder="442001234" /><span className="mt-1 block text-[11px] text-muted-foreground">One approved account can be created for each eligible ID.</span></label>}
-            <label className="block"><span className="mb-1.5 block text-sm font-semibold">Email address</span><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className="h-12 w-full rounded-xl border bg-white px-4 outline-none transition focus:border-primary focus:ring-3 focus:ring-primary/10" placeholder="you@example.com" /></label>
-            <label className="block"><span className="mb-1.5 block text-sm font-semibold">Password</span><input required minLength={6} type="password" autoComplete={register ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} className="h-12 w-full rounded-xl border bg-white px-4 outline-none transition focus:border-primary focus:ring-3 focus:ring-primary/10" placeholder="At least 6 characters" /></label>
+            {!mfaRequired && <label className="block"><span className="mb-1.5 block text-sm font-semibold">Email address</span><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className="h-12 w-full rounded-xl border bg-white px-4 outline-none transition focus:border-primary focus:ring-3 focus:ring-primary/10" placeholder="you@example.com" /></label>}
+            {!mfaRequired && <label className="block"><span className="mb-1.5 block text-sm font-semibold">Password</span><input required minLength={6} type="password" autoComplete={register ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} className="h-12 w-full rounded-xl border bg-white px-4 outline-none transition focus:border-primary focus:ring-3 focus:ring-primary/10" placeholder="At least 6 characters" /></label>}
+            {mfaRequired && <label className="block"><span className="mb-1.5 block text-sm font-semibold">Authenticator code</span><input required inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, ''))} className="h-12 w-full rounded-xl border bg-white px-4 text-center font-mono text-xl tracking-[.4em] outline-none focus:border-primary" placeholder="000000" /></label>}
             {error && <div role="alert" className="flex gap-2 rounded-xl bg-red-50 p-3 text-sm text-red-700"><CircleAlert className="mt-0.5 size-4 shrink-0" />{error}</div>}
-            <PrimaryButton type="submit" disabled={busy} className="w-full">{busy && <RefreshCw className="size-4 animate-spin" />}{register ? 'Submit registration' : 'Sign in'}</PrimaryButton>
+            <PrimaryButton type="submit" disabled={busy || (mfaRequired && mfaCode.length !== 6)} className="w-full">{busy && <RefreshCw className="size-4 animate-spin" />}{mfaRequired ? 'Verify and sign in' : register ? 'Submit registration' : 'Sign in'}</PrimaryButton>
           </form>
-          {!firebaseEnabled && <button type="button" onClick={() => onAuthenticated({ uid: 'local-demo', email: 'demo@local.medguard', displayName: 'Root Admin', isAdmin: true, provider: 'local', role: 'super_admin', status: 'approved', universityId: 'ADMIN-DEMO' })} className="mt-3 h-11 w-full rounded-xl border border-primary/25 bg-primary/5 text-sm font-bold text-primary transition hover:bg-primary/10">Continue as root admin demo</button>}
+          {!firebaseEnabled && <button type="button" onClick={() => onAuthenticated({ uid: 'local-demo', email: 'demo@local.medguard', displayName: 'Root Admin', isAdmin: true, provider: 'local', role: 'super_admin', status: 'approved', universityId: 'ADMIN-DEMO', tier: 'pro', platformRoles: [], mfaEnrolled: true, mfaVerified: true })} className="mt-3 h-11 w-full rounded-xl border border-primary/25 bg-primary/5 text-sm font-bold text-primary transition hover:bg-primary/10">Continue as root admin demo</button>}
           <p className="mt-7 text-center text-sm text-muted-foreground">{register ? 'Already have an account?' : 'New to MedGuard?'} <button type="button" onClick={() => { setRegister(!register); setError(''); }} className="font-bold text-primary hover:underline">{register ? 'Sign in' : 'Create an account'}</button></p>
         </div>
       </section>
     </main>
   );
+}
+
+function MfaEnrollmentGate({ onComplete, onSignOut }: { onComplete: () => void; onSignOut: () => void }) {
+  const [setup, setSetup] = useState<{ secretKey: string; qrUrl: string }>();
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function begin() { setBusy(true); setError(''); try { setSetup(await beginTotpEnrollment()); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to start MFA enrollment.'); } finally { setBusy(false); } }
+  async function finish() { setBusy(true); setError(''); try { await completeTotpEnrollment(code); onComplete(); } catch (caught) { setError(caught instanceof Error ? caught.message : 'The code is invalid or expired.'); } finally { setBusy(false); } }
+  return <main className="grid min-h-screen place-items-center bg-background p-6"><section className="w-full max-w-xl rounded-3xl bg-card p-7 shadow-2xl ring-1 ring-border"><div className="grid size-14 place-items-center rounded-2xl bg-violet-50 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300"><ShieldCheck className="size-7" /></div><p className="mt-6 text-xs font-bold uppercase tracking-widest text-violet-600">Superadmin security boundary</p><h1 className="mt-2 text-2xl font-bold">Two-factor authentication is required</h1><p className="mt-3 text-sm leading-6 text-muted-foreground">The only Superadmin account cannot open MedGuard administration until an authenticator-app factor is enrolled.</p>{!setup ? <button onClick={() => void begin()} disabled={busy} className="mt-6 h-11 w-full rounded-xl bg-primary text-sm font-bold text-primary-foreground disabled:opacity-50">{busy ? 'Preparing…' : 'Set up authenticator app'}</button> : <div className="mt-6 space-y-4"><div className="rounded-xl border bg-muted/30 p-4"><span className="text-xs font-bold">Authenticator setup key</span><div className="mt-2 flex items-center gap-2"><code className="min-w-0 flex-1 break-all rounded-lg bg-card p-3 text-xs">{setup.secretKey}</code><button onClick={() => void navigator.clipboard.writeText(setup.secretKey)} className="grid size-10 place-items-center rounded-lg border" aria-label="Copy setup key"><Copy className="size-4" /></button></div><a href={setup.qrUrl} className="mt-3 inline-block text-xs font-bold text-primary underline">Open authenticator setup link</a></div><label className="block"><span className="mb-1.5 block text-sm font-semibold">Six-digit verification code</span><input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ''))} inputMode="numeric" maxLength={6} className="h-12 w-full rounded-xl border bg-card px-4 text-center font-mono text-xl tracking-[.35em]" placeholder="000000" /></label><button onClick={() => void finish()} disabled={busy || code.length !== 6} className="h-11 w-full rounded-xl bg-primary text-sm font-bold text-primary-foreground disabled:opacity-50">Verify and secure account</button></div>}{error && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-300">{error}</p>}<button onClick={onSignOut} className="mt-4 h-10 w-full rounded-xl border text-xs font-bold">Sign out</button></section></main>;
 }
 
 function AppSidebar({ view, setView, user, syncStatus, onSignOut, mobileOpen, closeMobile, qbanks, activeQBankId, onSelectQBank }: { view: View; setView: (view: View) => void; user: AppUser; syncStatus: SyncStatus; onSignOut: () => void; mobileOpen: boolean; closeMobile: () => void; qbanks: CollaborationState['qbanks']; activeQBankId: string; onSelectQBank: (id: string) => void }) {
@@ -320,8 +348,15 @@ function TestView({ test, questions, state, setState, onExit, user, collaboratio
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [finishConfirmOpen, setFinishConfirmOpen] = useState(false);
   const [reportMessage, setReportMessage] = useState('');
   const [suggestedAnswer, setSuggestedAnswer] = useState<number | undefined>();
+  const [markerActive, setMarkerActive] = useState(false);
+  const [editKinds, setEditKinds] = useState<ProposalEditKind[]>(['typo_formatting']);
+  const [proposedStem, setProposedStem] = useState('');
+  const [proposedOptions, setProposedOptions] = useState<string[]>([]);
+  const [proposedExplanation, setProposedExplanation] = useState('');
+  const [proposedSource, setProposedSource] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
   const [noteImagesDraft, setNoteImagesDraft] = useState<QuestionProgress['noteImages']>([]);
   const [uploading, setUploading] = useState(false);
@@ -330,10 +365,13 @@ function TestView({ test, questions, state, setState, onExit, user, collaboratio
   const question = activeQuestions[test.currentIndex];
   const progress = question ? getQuestionProgress(state, question.id) : emptyProgress();
   const qbankId = question?.qbankId ?? test.qbankId ?? 'smle-gs';
+  const ownsBank = collaboration.qbanks.some((bank) => bank.id === qbankId && bank.ownerId === user.uid);
   const noteKey = question ? `${qbankId}:${question.id}` : '';
   const sharedNote = noteKey ? collaboration.sharedNotes[noteKey] : undefined;
   const selected = question ? test.answers[question.id] : undefined;
   const revealed = question ? test.revealed.includes(question.id) : false;
+  const answerStat = noteKey ? collaboration.answerStats[noteKey] : undefined;
+  const answerSelections = Object.values(answerStat?.selections ?? {});
 
   useEffect(() => {
     if (test.mode !== 'timed' || test.status !== 'active') return;
@@ -349,8 +387,6 @@ function TestView({ test, questions, state, setState, onExit, user, collaboratio
   const updateTest = useCallback((updater: (current: TestSession) => TestSession) => {
     setState((current) => ({ ...current, tests: current.tests.map((item) => item.id === test.id ? updater(item) : item) }));
   }, [setState, test.id]);
-
-  if (!question) return <main className="grid min-h-screen place-items-center"><div className="text-center"><CircleAlert className="mx-auto size-8 text-red-500" /><h1 className="mt-3 font-bold">Question unavailable</h1><SecondaryButton onClick={onExit} className="mt-4">Return to dashboard</SecondaryButton></div></main>;
 
   function selectAnswer(answer: number) {
     if (revealed) return;
@@ -368,12 +404,20 @@ function TestView({ test, questions, state, setState, onExit, user, collaboratio
         tests: current.tests.map((item) => item.id === test.id ? { ...item, revealed: [...new Set([...item.revealed, question.id])], graded: [...new Set([...item.graded, question.id])], updatedAt: new Date().toISOString() } : item),
       };
     });
+    updateCollaboration((current) => {
+      const existing = current.answerStats[noteKey] ?? { id: noteKey, qbankId, questionId: question.id, selections: {} };
+      if (existing.selections[user.uid] !== undefined) return current;
+      return { ...current, answerStats: { ...current.answerStats, [noteKey]: { ...existing, selections: { ...existing.selections, [user.uid]: selected } } } };
+    });
     setNotesOpen(true);
   }
 
   function finishTest() {
-    const finish = window.confirm('End this test and save your results?');
-    if (!finish) return;
+    setFinishConfirmOpen(true);
+  }
+
+  function completeTest() {
+    setFinishConfirmOpen(false);
     setState((current) => {
       const currentTest = current.tests.find((item) => item.id === test.id) ?? test;
       const nextProgress = { ...current.progress };
@@ -387,6 +431,19 @@ function TestView({ test, questions, state, setState, onExit, user, collaboratio
         nextProgress[questionId] = { ...old, attempts: old.attempts + 1, correctAttempts: old.correctAttempts + (correct ? 1 : 0), incorrectAttempts: old.incorrectAttempts + (correct ? 0 : 1), lastAnswer: answer, lastAnsweredAt: new Date().toISOString() };
       });
       return { ...current, progress: nextProgress, tests: current.tests.map((item) => item.id === test.id ? { ...item, status: 'completed', completedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), graded: [...new Set([...item.graded, ...Object.keys(item.answers)])], revealed: [...new Set([...item.revealed, ...item.questionIds])] } : item) };
+    });
+    updateCollaboration((current) => {
+      const answerStats = { ...current.answerStats };
+      test.questionIds.forEach((questionId) => {
+        const answer = test.answers[questionId];
+        const source = questions.find((item) => item.id === questionId);
+        if (answer === undefined || !source) return;
+        const sourceBankId = source.qbankId ?? test.qbankId ?? 'smle-gs';
+        const key = `${sourceBankId}:${questionId}`;
+        const existing = answerStats[key] ?? { id: key, qbankId: sourceBankId, questionId, selections: {} };
+        if (existing.selections[user.uid] === undefined) answerStats[key] = { ...existing, selections: { ...existing.selections, [user.uid]: answer } };
+      });
+      return { ...current, answerStats };
     });
     onExit();
   }
@@ -410,6 +467,18 @@ function TestView({ test, questions, state, setState, onExit, user, collaboratio
     const end = start + range.toString().length;
     setState((current) => { const old = getQuestionProgress(current, question.id); return { ...current, progress: { ...current.progress, [question.id]: { ...old, highlights: mergeRanges([...old.highlights, { start, end }]) } } }; });
     selection.removeAllRanges();
+  }
+
+  function copySelectionAndMark() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+    const text = selection.toString().trim();
+    if (text) void navigator.clipboard.writeText(text).catch(() => undefined);
+    if (markerActive) addHighlight();
+  }
+
+  function removeHighlight(target: HighlightRange) {
+    setState((current) => { const old = getQuestionProgress(current, question.id); return { ...current, progress: { ...current.progress, [question.id]: { ...old, highlights: old.highlights.filter((range) => range.start !== target.start || range.end !== target.end) } } }; });
   }
 
   function clearHighlights() { setState((current) => { const old = getQuestionProgress(current, question.id); return { ...current, progress: { ...current.progress, [question.id]: { ...old, highlights: [] } } }; }); }
@@ -462,20 +531,60 @@ function TestView({ test, questions, state, setState, onExit, user, collaboratio
 
   function updateCaption(imageId: string, caption: string) { setNoteImagesDraft((current) => current.map((image) => image.id === imageId ? { ...image, caption } : image)); }
 
+  function openReport() {
+    setProposedStem(question.stem); setProposedOptions([...question.options]); setSuggestedAnswer(question.answer);
+    setProposedExplanation(question.explanation ?? sharedNote?.content ?? ''); setProposedSource(question.sourceReference ?? question.sourceFile ?? '');
+    setEditKinds(['typo_formatting']); setReportMessage(ownsBank ? 'Bank owner direct edit.' : ''); setReportOpen(true);
+  }
+
+  function toggleEditKind(kind: ProposalEditKind) { setEditKinds((current) => current.includes(kind) ? current.filter((item) => item !== kind) : [...current, kind]); }
+
   function submitReport() {
-    if (!reportMessage.trim() && suggestedAnswer === undefined) return;
+    if (!reportMessage.trim() || !proposedExplanation.trim() || !proposedSource.trim() || !editKinds.length || suggestedAnswer === undefined || proposedOptions.some((item) => !item.trim())) return;
     const proposedAt = new Date().toISOString();
-    updateCollaboration((current) => ({
-      ...current,
-      proposals: [{ id: crypto.randomUUID(), qbankId, type: 'question_edit', questionId: question.id, payload: { stem: question.stem, options: question.options, answer: suggestedAnswer ?? question.answer, specialty: question.specialty, topic: question.topic }, rationale: reportMessage.trim(), status: 'pending', proposedById: user.uid, proposedByName: user.displayName, proposedAt }, ...current.proposals],
-      auditLog: [{ id: crypto.randomUUID(), action: 'question_edit_proposed', entityType: 'question', entityId: question.id, actorId: user.uid, actorName: user.displayName, createdAt: proposedAt, detail: `Proposed a correction to question ${question.number}.` }, ...current.auditLog],
-    }));
+    const currentSnapshot = { stem: question.stem, options: question.options, answer: question.answer, specialty: question.specialty, topic: question.topic, explanation: question.explanation ?? sharedNote?.content ?? '', sourceReference: question.sourceReference ?? question.sourceFile ?? '' };
+    updateCollaboration((current) => {
+      const payload = { stem: proposedStem.trim(), options: proposedOptions.map((item) => item.trim()), answer: suggestedAnswer, specialty: question.specialty, topic: question.topic, explanation: proposedExplanation.trim(), sourceReference: proposedSource.trim() };
+      const bank = current.qbanks.find((item) => item.id === qbankId);
+      if (bank?.ownerId === user.uid) {
+        const updated: Question = { ...question, ...payload, answerLetter: 'ABCD'[payload.answer], sourceFile: payload.sourceReference, revision: question.revision + 1, isCustom: true };
+        return { ...current, approvedQuestions: [...current.approvedQuestions.filter((item) => item.id !== question.id), updated], auditLog: [{ id: crypto.randomUUID(), action: 'owner_question_edited', entityType: 'question', entityId: question.id, actorId: user.uid, actorName: user.displayName, createdAt: proposedAt, detail: `Bank Owner edited question ${question.number}.` }, ...current.auditLog] };
+      }
+      return { ...current, proposals: [{ id: crypto.randomUUID(), qbankId, type: 'question_edit', editKinds, questionId: question.id, currentSnapshot, payload, rationale: reportMessage.trim(), status: 'pending', proposedById: user.uid, proposedByName: user.displayName, proposedAt }, ...current.proposals], auditLog: [{ id: crypto.randomUUID(), action: 'question_edit_proposed', entityType: 'question', entityId: question.id, actorId: user.uid, actorName: user.displayName, createdAt: proposedAt, detail: `Proposed a correction to question ${question.number}.` }, ...current.auditLog] };
+    });
     setReportOpen(false); setReportMessage(''); setSuggestedAnswer(undefined);
   }
 
+  useEffect(() => {
+    const element = stemRef.current;
+    if (!element) return;
+    element.addEventListener('mouseup', copySelectionAndMark);
+    return () => element.removeEventListener('mouseup', copySelectionAndMark);
+  });
+
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (finishConfirmOpen) {
+        if (event.key === 'Escape') setFinishConfirmOpen(false);
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
+      if (!revealed && ['a', 'b', 'c', 'd'].includes(event.key.toLowerCase())) selectAnswer(event.key.toLowerCase().charCodeAt(0) - 97);
+      else if (event.key === 'ArrowLeft') move(test.currentIndex - 1);
+      else if (event.key === 'ArrowRight') move(test.currentIndex + 1);
+      else if (event.key.toLowerCase() === 'f') toggleFlag();
+      else if (event.key.toLowerCase() === 'm') setMarkerActive((value) => !value);
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  });
+
+  if (!question) return <main className="grid min-h-screen place-items-center"><div className="text-center"><CircleAlert className="mx-auto size-8 text-red-500" /><h1 className="mt-3 font-bold">Question unavailable</h1><SecondaryButton onClick={onExit} className="mt-4">Return to dashboard</SecondaryButton></div></main>;
+
   return <main className="flex min-h-screen flex-col bg-[#f5f7fa] dark:bg-background">
     <header className="sticky top-0 z-30 flex h-[64px] items-center justify-between border-b bg-white px-3 shadow-sm dark:bg-card sm:px-5">
-      <div className="flex items-center gap-2 sm:gap-3"><button aria-label="Exit test" onClick={onExit} className="grid size-9 place-items-center rounded-xl hover:bg-muted"><X className="size-5" /></button><div className="hidden h-7 w-px bg-border sm:block" /><div><strong className="block text-sm">{test.title}</strong><span className="text-[10px] font-semibold uppercase text-muted-foreground">{test.mode} mode</span></div></div>
+      <div className="flex items-center gap-2 sm:gap-3"><button aria-label="Exit test" onClick={finishTest} className="grid size-9 place-items-center rounded-xl hover:bg-muted"><X className="size-5" /></button><div className="hidden h-7 w-px bg-border sm:block" /><div><strong className="block text-sm">{test.title}</strong><span className="text-[10px] font-semibold uppercase text-muted-foreground">{test.mode} mode</span></div></div>
       <div className="flex items-center gap-2"><div className="rounded-xl bg-muted px-3 py-2 text-xs font-bold tabular-nums">{test.mode === 'timed' ? formatDuration(seconds) : `${test.currentIndex + 1} / ${test.questionIds.length}`}</div><IconButton label={progress.flagged ? 'Remove flag' : 'Flag question'} active={progress.flagged} onClick={toggleFlag}><Flag className={cx('size-4', progress.flagged && 'fill-current')} /></IconButton><SecondaryButton onClick={finishTest} className="hidden sm:flex">End block</SecondaryButton></div>
     </header>
     <div className="mx-auto flex w-full max-w-[1440px] flex-1">
@@ -484,20 +593,22 @@ function TestView({ test, questions, state, setState, onExit, user, collaboratio
         <div className="mx-auto max-w-[890px]">
           <div className="mb-4 flex items-center justify-between"><div className="flex items-center gap-2"><span className="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">{question.specialty}</span><span className="rounded-full bg-muted px-3 py-1 text-[11px] font-semibold text-muted-foreground">{question.topic}</span></div><button onClick={() => setNavigatorOpen(true)} className="text-xs font-bold text-primary xl:hidden">Question {test.currentIndex + 1} of {test.questionIds.length}</button></div>
           <article className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-border dark:bg-card sm:p-8">
-            <div className="mb-5 flex items-center justify-between border-b pb-4"><span className="text-xs font-bold text-muted-foreground">QUESTION {test.currentIndex + 1}</span><div className="flex gap-2"><IconButton label="Highlight selected text" onClick={addHighlight}><Highlighter className="size-4" /></IconButton>{progress.highlights.length > 0 && <IconButton label="Clear highlights" onClick={clearHighlights}><Trash2 className="size-4" /></IconButton>}</div></div>
-            <p ref={stemRef} className="select-text text-[15px] leading-[1.85] text-[#1d2e40] dark:text-foreground sm:text-base"><HighlightedText text={question.stem} ranges={progress.highlights} /></p>
-            <div className="mt-7 space-y-3">{question.options.map((option, index) => { const isSelected = selected === index; const isCorrect = revealed && question.answer === index; const isWrong = revealed && isSelected && index !== question.answer; return <button key={index} disabled={revealed} onClick={() => selectAnswer(index)} className={cx('flex w-full items-start gap-3 rounded-xl border p-4 text-left text-sm leading-6 transition', isCorrect ? 'border-emerald-400 bg-emerald-50 text-emerald-950' : isWrong ? 'border-red-400 bg-red-50 text-red-950' : isSelected ? 'border-primary bg-primary/5 ring-2 ring-primary/10' : 'bg-white hover:border-primary/35 hover:bg-primary/[0.025] dark:bg-card')}><span className={cx('grid size-7 shrink-0 place-items-center rounded-full border text-xs font-bold', isCorrect ? 'border-emerald-500 bg-emerald-500 text-white' : isWrong ? 'border-red-500 bg-red-500 text-white' : isSelected ? 'border-primary bg-primary text-white' : 'bg-muted/40')}>{isCorrect ? <Check className="size-4" /> : isWrong ? <X className="size-4" /> : 'ABCD'[index]}</span><span className="pt-0.5">{option}</span></button>; })}</div>
+            <div className="mb-5 flex items-center justify-between border-b pb-4"><div><span className="text-xs font-bold text-muted-foreground">QUESTION {test.currentIndex + 1}</span>{markerActive && <span className="ml-2 rounded-full bg-yellow-100 px-2 py-1 text-[10px] font-bold text-yellow-800">MARKER ON</span>}</div><div className="flex gap-2"><IconButton label={markerActive ? 'Turn marker off' : 'Keep marker on'} active={markerActive} onClick={() => setMarkerActive((value) => !value)}><Highlighter className="size-4" /></IconButton>{progress.highlights.length > 0 && <IconButton label="Clear highlights" onClick={clearHighlights}><Trash2 className="size-4" /></IconButton>}</div></div>
+            <p ref={stemRef} className="select-text text-[15px] leading-[1.85] text-[#1d2e40] dark:text-foreground sm:text-base"><HighlightedText text={question.stem} ranges={progress.highlights} onRemove={removeHighlight} /></p>
+            <p className="mt-2 text-[10px] text-muted-foreground">Select text with left click to copy it. When Marker is on, the selection is also saved; click a yellow marker to remove it.</p>
+            <div className="mt-7 space-y-3">{question.options.map((option, index) => { const isSelected = selected === index; const isCorrect = revealed && question.answer === index; const isWrong = revealed && isSelected && index !== question.answer; const count = answerSelections.filter((answer) => answer === index).length; const percent = answerSelections.length ? Math.round((count / answerSelections.length) * 100) : 0; return <button key={index} disabled={revealed} onClick={() => selectAnswer(index)} className={cx('flex w-full items-start gap-3 rounded-xl border p-4 text-left text-sm leading-6 transition', isCorrect ? 'border-emerald-400 bg-emerald-50 text-emerald-950 dark:bg-emerald-500/10 dark:text-emerald-100' : isWrong ? 'border-red-400 bg-red-50 text-red-950 dark:bg-red-500/10 dark:text-red-100' : isSelected ? 'border-primary bg-primary/5 ring-2 ring-primary/10' : 'bg-card hover:border-primary/35 hover:bg-primary/[0.025]')}><span className={cx('grid size-7 shrink-0 place-items-center rounded-full border text-xs font-bold', isCorrect ? 'border-emerald-500 bg-emerald-500 text-white' : isWrong ? 'border-red-500 bg-red-500 text-white' : isSelected ? 'border-primary bg-primary text-white' : 'bg-muted/40')}>{isCorrect ? <Check className="size-4" /> : isWrong ? <X className="size-4" /> : 'ABCD'[index]}</span><span className="min-w-0 flex-1 pt-0.5">{option}</span>{revealed && <span className="mt-0.5 rounded-full bg-card/80 px-2.5 py-0.5 text-[11px] font-bold tabular-nums ring-1 ring-current/10">{percent}%</span>}</button>; })}</div>
             {test.mode === 'tutor' && !revealed && <div className="mt-6 flex justify-end"><PrimaryButton onClick={gradeCurrent} disabled={selected === undefined}>Submit answer</PrimaryButton></div>}
-            {revealed && <div className={cx('mt-6 rounded-xl border p-4 text-sm font-semibold', selected === question.answer ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800')}>{selected === question.answer ? 'Correct answer.' : `The keyed answer is ${question.answerLetter}.`} <span className="font-normal opacity-75">Source page {question.sourcePage} · Revision {question.revision}</span></div>}
+            {revealed && <><div className={cx('mt-6 rounded-xl border p-4 text-sm font-semibold', selected === question.answer ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-200' : 'border-red-200 bg-red-50 text-red-800 dark:bg-red-500/10 dark:text-red-200')}>{selected === question.answer ? 'Correct answer.' : `The keyed answer is ${question.answerLetter}.`} <span className="font-normal opacity-75">{answerSelections.length} learner{answerSelections.length === 1 ? '' : 's'} in response data · Revision {question.revision}</span></div>{question.explanation && <section className="mt-4 rounded-xl border bg-muted/25 p-4"><h3 className="text-xs font-bold uppercase tracking-wide text-primary">Explanation</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-7">{question.explanation}</p>{question.sourceReference && <p className="mt-3 border-t pt-3 text-xs text-muted-foreground"><strong>Source:</strong> {question.sourceReference}</p>}</section>}</>}
           </article>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3"><div className="flex gap-2"><SecondaryButton onClick={() => move(test.currentIndex - 1)} disabled={test.currentIndex === 0}><ChevronLeft className="size-4" />Previous</SecondaryButton><SecondaryButton onClick={() => move(test.currentIndex + 1)} disabled={test.currentIndex === test.questionIds.length - 1}>Next<ChevronRight className="size-4" /></SecondaryButton></div><div className="flex gap-2"><SecondaryButton onClick={() => setReportOpen(true)}><CircleAlert className="size-4" />Suggest correction</SecondaryButton><PrimaryButton onClick={() => setNotesOpen(!notesOpen)}><FileText className="size-4" />Shared notes {sharedNote?.content || sharedNote?.images.length ? '•' : ''}</PrimaryButton></div></div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3"><div className="flex gap-2"><SecondaryButton onClick={() => move(test.currentIndex - 1)} disabled={test.currentIndex === 0}><ChevronLeft className="size-4" />Previous</SecondaryButton><SecondaryButton onClick={() => move(test.currentIndex + 1)} disabled={test.currentIndex === test.questionIds.length - 1}>Next<ChevronRight className="size-4" /></SecondaryButton></div><div className="flex gap-2"><SecondaryButton onClick={openReport}><CircleAlert className="size-4" />Suggest edit</SecondaryButton><PrimaryButton onClick={() => setNotesOpen(!notesOpen)}><FileText className="size-4" />Shared notes {sharedNote?.content || sharedNote?.images.length ? '•' : ''}</PrimaryButton></div></div>
           {notesOpen && <section className="mt-4 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-border dark:bg-card"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h3 className="font-bold">Shared explanation & notes</h3><p className="text-xs text-muted-foreground">Everyone can improve this note. Every saved version is attributed.</p></div>{sharedNote && <span className="rounded-full bg-emerald-50 px-3 py-1 text-[10px] font-bold text-emerald-700">EDITED BY {sharedNote.updatedByName.toUpperCase()} · {formatDate(sharedNote.updatedAt)}</span>}</div><div className="mt-4 flex gap-1 border-b pb-2"><IconButton label="Bold" onClick={() => insertNoteToken('**')}><Bold className="size-4" /></IconButton><IconButton label="Italic" onClick={() => insertNoteToken('_')}><Italic className="size-4" /></IconButton><IconButton label="Bullet list" onClick={() => insertNoteToken('\n• ', '')}><List className="size-4" /></IconButton><label title="Add images" className="grid size-10 cursor-pointer place-items-center rounded-xl border text-muted-foreground hover:bg-muted"><span className="sr-only">Add note images</span><ImagePlus className="size-4" /><input aria-label="Add note images" type="file" accept="image/*" multiple hidden onChange={(event) => { void attachImages(event.target.files); event.target.value = ''; }} /></label></div><textarea id="question-note" dir="auto" value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="Write or improve the shared explanation…" className="mt-3 min-h-40 w-full resize-y rounded-xl border bg-muted/20 p-4 text-sm leading-7 outline-none focus:border-primary focus:ring-3 focus:ring-primary/10" />{uploading && <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><RefreshCw className="size-3 animate-spin" />Uploading images…</div>}{noteImagesDraft.length > 0 && <div className="mt-4 grid gap-3 sm:grid-cols-2">{noteImagesDraft.map((image) => <div key={image.id} className="overflow-hidden rounded-xl border"><div className="relative bg-muted"><img src={image.url} alt={image.caption || image.name} className="h-40 w-full object-contain" /><button onClick={() => removeImage(image.id)} className="absolute right-2 top-2 grid size-8 place-items-center rounded-lg bg-white/90 text-red-600 shadow"><Trash2 className="size-4" /></button></div><input value={image.caption} onChange={(event) => updateCaption(image.id, event.target.value)} placeholder="Add a caption" className="h-10 w-full border-t px-3 text-xs outline-none" /></div>)}</div>}<div className="mt-4 flex flex-wrap items-center justify-between gap-3"><span className="text-xs text-muted-foreground">Saving adds your name and timestamp to version history.</span><PrimaryButton onClick={saveNote}><Save className="size-4" />Save shared note</PrimaryButton></div>{sharedNote?.history.length ? <details className="mt-4 rounded-xl border bg-muted/20 p-3"><summary className="cursor-pointer text-xs font-bold">Version history · {sharedNote.history.length}</summary><div className="mt-3 space-y-2">{[...sharedNote.history].reverse().slice(0, 10).map((revision, index) => <div key={revision.id} className="flex items-center justify-between gap-3 rounded-lg bg-white p-2 text-xs dark:bg-card"><span><strong>v{sharedNote.history.length - index}</strong> · {revision.editedByName}</span><time className="text-muted-foreground">{formatDate(revision.editedAt)}</time></div>)}</div></details> : null}</section>}
         </div>
       </section>
     </div>
     <button onClick={finishTest} className="fixed bottom-4 right-4 z-20 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-xl sm:hidden">End block</button>
+    {finishConfirmOpen && <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) setFinishConfirmOpen(false); }}><section role="alertdialog" aria-modal="true" aria-labelledby="end-test-title" aria-describedby="end-test-description" className="w-full max-w-md overflow-hidden rounded-[24px] bg-card shadow-[0_28px_90px_rgba(2,12,27,.35)] ring-1 ring-white/10"><div className="border-b bg-gradient-to-br from-primary/10 via-card to-card p-6"><div className="flex items-start gap-4"><div className="grid size-12 shrink-0 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-[0_8px_24px_rgba(8,107,196,.25)]"><Flag className="size-5" /></div><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Test checkpoint</p><h2 id="end-test-title" className="mt-1 text-xl font-bold">End this test?</h2><p id="end-test-description" className="mt-2 text-sm leading-6 text-muted-foreground">Your answered questions will be graded and all progress will be saved. You can review the completed block from Test history.</p></div></div></div><div className="p-6"><div className="grid grid-cols-3 divide-x rounded-2xl bg-muted/60 py-4 text-center"><div><strong className="block text-lg text-foreground">{Object.keys(test.answers).length}</strong><span className="text-[10px] font-semibold uppercase text-muted-foreground">Answered</span></div><div><strong className="block text-lg text-foreground">{test.questionIds.length - Object.keys(test.answers).length}</strong><span className="text-[10px] font-semibold uppercase text-muted-foreground">Unanswered</span></div><div><strong className="block text-lg text-foreground">{formatDuration(seconds)}</strong><span className="text-[10px] font-semibold uppercase text-muted-foreground">Elapsed</span></div></div>{test.questionIds.length > Object.keys(test.answers).length && <div className="mt-4 flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200"><CircleAlert className="mt-0.5 size-4 shrink-0" /><span>You still have unanswered questions. They will remain unanswered when the test ends.</span></div>}<div className="mt-6 grid gap-2 sm:grid-cols-2"><SecondaryButton onClick={() => setFinishConfirmOpen(false)} className="h-11 w-full">Keep studying</SecondaryButton><PrimaryButton onClick={completeTest} className="w-full"><CheckCircle2 className="size-4" />End &amp; save</PrimaryButton></div><p className="mt-3 text-center text-[10px] text-muted-foreground">Press Esc or click outside to continue the test.</p></div></section></div>}
     {navigatorOpen && <div className="fixed inset-0 z-50 flex items-end bg-slate-950/35" onClick={() => setNavigatorOpen(false)}><div onClick={(event) => event.stopPropagation()} className="max-h-[70vh] w-full rounded-t-3xl bg-white p-5 dark:bg-card"><div className="mb-4 flex items-center justify-between"><strong>Questions</strong><button onClick={() => setNavigatorOpen(false)}><X className="size-5" /></button></div><div className="grid grid-cols-8 gap-2 overflow-y-auto">{activeQuestions.map((item, index) => <button key={item.id} onClick={() => { move(index); setNavigatorOpen(false); }} className={cx('grid aspect-square place-items-center rounded-lg border text-xs font-bold', index === test.currentIndex ? 'bg-primary text-white' : test.answers[item.id] !== undefined ? 'bg-primary/10 text-primary' : '')}>{index + 1}</button>)}</div></div></div>}
-    {reportOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/35 p-4 backdrop-blur-sm"><div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl dark:bg-card"><div className="flex items-center justify-between"><div><h3 className="font-bold">Suggest a correction</h3><p className="text-xs text-muted-foreground">Question {question.number} · requires admin approval</p></div><button onClick={() => setReportOpen(false)}><X className="size-5" /></button></div><label className="mt-5 block"><span className="mb-1.5 block text-sm font-semibold">What should be corrected?</span><textarea value={reportMessage} onChange={(event) => setReportMessage(event.target.value)} className="min-h-28 w-full rounded-xl border p-3 text-sm outline-none focus:border-primary" placeholder="Describe the issue and the evidence for your correction…" /></label><label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold">Suggested correct answer (optional)</span><select value={suggestedAnswer ?? ''} onChange={(event) => setSuggestedAnswer(event.target.value === '' ? undefined : Number(event.target.value))} className="h-11 w-full rounded-xl border bg-white px-3 text-sm dark:bg-card"><option value="">Keep current answer</option>{question.options.map((option, index) => <option key={index} value={index}>{'ABCD'[index]}. {option}</option>)}</select></label><div className="mt-4 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900">The live question will not change until an administrator reviews and approves this proposal.</div><div className="mt-5 flex justify-end gap-2"><SecondaryButton onClick={() => setReportOpen(false)}>Cancel</SecondaryButton><PrimaryButton onClick={submitReport} disabled={!reportMessage.trim() && suggestedAnswer === undefined}><Save className="size-4" />Submit for approval</PrimaryButton></div></div></div>}
+    {reportOpen && <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm"><div className="mx-auto my-6 w-full max-w-4xl rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border"><div className="flex items-center justify-between"><div><h3 className="font-bold">Suggest edit</h3><p className="text-xs text-muted-foreground">Question {question.number} · Suggest Edit → Review → Approve / Reject</p></div><button onClick={() => setReportOpen(false)} aria-label="Close"><X className="size-5" /></button></div><fieldset className="mt-5"><legend className="text-sm font-semibold">What kind of change are you proposing?</legend><div className="mt-2 flex flex-wrap gap-2">{([['question_text', 'Question text'], ['options', 'Options'], ['correct_answer', 'Correct answer'], ['explanation', 'Explanation'], ['source', 'Source'], ['typo_formatting', 'Typo / formatting'], ['duplicate', 'Duplicate question'], ['outdated_guideline', 'Outdated guideline']] as Array<[ProposalEditKind, string]>).map(([kind, label]) => <button type="button" key={kind} onClick={() => toggleEditKind(kind)} className={cx('rounded-full border px-3 py-2 text-xs font-bold', editKinds.includes(kind) ? 'border-primary bg-primary text-primary-foreground' : 'bg-card')}>{label}</button>)}</div></fieldset><div className="mt-5 grid gap-4 lg:grid-cols-2"><label className="block"><span className="mb-1.5 block text-sm font-semibold">Proposed question text</span><textarea required value={proposedStem} onChange={(event) => setProposedStem(event.target.value)} className="min-h-32 w-full rounded-xl border bg-card p-3 text-sm" /></label><div className="space-y-2"><span className="block text-sm font-semibold">Proposed options</span>{proposedOptions.map((option, index) => <input key={index} value={option} onChange={(event) => setProposedOptions((current) => current.map((item, i) => i === index ? event.target.value : item))} className="h-10 w-full rounded-xl border bg-card px-3 text-sm" aria-label={`Proposed option ${'ABCD'[index]}`} />)}</div></div><div className="mt-4 grid gap-4 sm:grid-cols-2"><label><span className="mb-1.5 block text-sm font-semibold">Proposed correct answer</span><select value={suggestedAnswer ?? ''} onChange={(event) => setSuggestedAnswer(Number(event.target.value))} className="h-11 w-full rounded-xl border bg-card px-3 text-sm">{proposedOptions.map((option, index) => <option key={index} value={index}>{'ABCD'[index]}. {option}</option>)}</select></label><label><span className="mb-1.5 block text-sm font-semibold">Source <strong className="text-red-600">required</strong></span><input required value={proposedSource} onChange={(event) => setProposedSource(event.target.value)} className="h-11 w-full rounded-xl border bg-card px-3 text-sm" placeholder="Guideline, textbook, DOI, or URL" /></label></div><label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold">Explanation <strong className="text-red-600">required</strong></span><textarea required value={proposedExplanation} onChange={(event) => setProposedExplanation(event.target.value)} className="min-h-28 w-full rounded-xl border bg-card p-3 text-sm" placeholder="Explain the medically correct change." /></label><label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold">Why should this change be made?</span><textarea required value={reportMessage} onChange={(event) => setReportMessage(event.target.value)} className="min-h-20 w-full rounded-xl border bg-card p-3 text-sm" placeholder="Give the reviewer enough context to decide." /></label><div className="mt-4 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">Nothing changes immediately. An authorized reviewer will see a field-by-field comparison before deciding.</div><div className="mt-5 flex justify-end gap-2"><SecondaryButton onClick={() => setReportOpen(false)}>Cancel</SecondaryButton><PrimaryButton onClick={submitReport} disabled={!reportMessage.trim() || !proposedExplanation.trim() || !proposedSource.trim() || !editKinds.length}><Save className="size-4" />Submit for review</PrimaryButton></div></div></div>}
   </main>;
 }
 
@@ -522,7 +633,7 @@ function ProgressView({ state, questions }: { state: AppState; questions: Questi
   }, [questions, state]);
   const completion = Math.round((summary.completed / questions.length) * 100);
   const accuracy = summary.completed ? Math.round((summary.correct / summary.completed) * 100) : 0;
-  return <><PageHeader title="Progress" subtitle="A clear view of your QBank performance" openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))} /><div className="mx-auto max-w-6xl p-4 sm:p-7"><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><StatCard label="Completed" value={summary.completed} detail={`${completion}% of the bank`} /><StatCard label="Correct" value={summary.correct} detail={`${accuracy}% accuracy`} color="green" /><StatCard label="Incorrect" value={summary.incorrect} detail="Ready for review" color="red" /><StatCard label="Flagged" value={summary.flagged} detail="Saved questions" color="amber" /></div><section className="mt-6 rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border sm:p-6"><div><h2 className="font-bold">Progress by topic</h2><p className="mt-1 text-sm text-muted-foreground">Completion and latest-answer accuracy.</p></div><div className="mt-6 space-y-5">{summary.topics.map((topic) => { const topicCompletion = Math.round((topic.completed / topic.total) * 100); return <div key={topic.topic}><div className="mb-2 flex flex-col justify-between gap-1 text-sm sm:flex-row sm:items-center"><strong>{topic.topic}</strong><span className="text-xs text-muted-foreground">{topic.completed}/{topic.total} completed · {topic.accuracy}% accuracy</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${topicCompletion}%` }} /></div></div>; })}</div></section></div></>;
+  return <><PageHeader title="Progress" subtitle="A clear view of your QBank performance" openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))} /><div className="mx-auto max-w-6xl p-4 sm:p-7"><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><StatCard label="Completed" value={summary.completed} detail={`${completion}% of the bank`} /><StatCard label="Correct" value={summary.correct} detail={`${accuracy}% accuracy`} color="green" /><StatCard label="Incorrect" value={summary.incorrect} detail="Ready for review" color="red" /><StatCard label="Flagged" value={summary.flagged} detail="Saved questions" color="amber" /></div><section className="mt-6 rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border sm:p-6"><div><h2 className="font-bold">Progress by topic</h2><p className="mt-1 text-sm text-muted-foreground">Topics stay collapsed until you choose one.</p></div><div className="mt-5 space-y-2">{summary.topics.map((topic) => { const topicCompletion = Math.round((topic.completed / topic.total) * 100); return <details key={topic.topic} className="group rounded-xl border bg-background/40"><summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-4 text-sm"><strong>{topic.topic}</strong><span className="text-xs text-muted-foreground">{topic.completed}/{topic.total} · {topic.accuracy}% accuracy <ChevronRight className="ml-2 inline size-4 transition group-open:rotate-90" /></span></summary><div className="border-t p-4"><div className="mb-2 flex justify-between text-xs"><span>Completion</span><strong>{topicCompletion}%</strong></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${topicCompletion}%` }} /></div><div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs"><div className="rounded-lg bg-muted/50 p-2"><strong className="block text-base">{topic.total}</strong>Total</div><div className="rounded-lg bg-muted/50 p-2"><strong className="block text-base">{topic.completed}</strong>Completed</div><div className="rounded-lg bg-muted/50 p-2"><strong className="block text-base">{topic.accuracy}%</strong>Accuracy</div></div></div></details>; })}</div></section></div></>;
 }
 
 function escapeHtml(value: string) { return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character] ?? character); }
@@ -544,9 +655,20 @@ function downloadBackup(state: AppState, collaboration: CollaborationState) {
   const anchor = document.createElement('a'); anchor.href = URL.createObjectURL(blob); anchor.download = `medguard-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(anchor.href);
 }
 
-function SettingsView({ state, setState, syncStatus, onSync, questions, collaboration }: { state: AppState; setState: React.Dispatch<React.SetStateAction<AppState>>; syncStatus: SyncStatus; onSync: () => void; questions: Question[]; collaboration: CollaborationState }) {
+function SettingsView({ state, setState, syncStatus, onSync, questions, collaboration, user, updateCollaboration }: { state: AppState; setState: React.Dispatch<React.SetStateAction<AppState>>; syncStatus: SyncStatus; onSync: () => void; questions: Question[]; collaboration: CollaborationState; user: AppUser; updateCollaboration: (updater: (current: CollaborationState) => CollaborationState) => void }) {
+  const [roleReason, setRoleReason] = useState('');
+  const [requestedRole, setRequestedRole] = useState<'pro' | 'reviewer' | 'access_manager'>('pro');
+  const pendingRole = collaboration.roleApplications.find((item) => item.userId === user.uid && item.status === 'pending');
+  function applyForRole() {
+    if (!roleReason.trim() || pendingRole) return;
+    const createdAt = new Date().toISOString();
+    updateCollaboration((current) => ({ ...current, roleApplications: [{ id: crypto.randomUUID(), userId: user.uid, userName: user.displayName, userEmail: user.email, requestedRole, reason: roleReason.trim(), status: 'pending', createdAt }, ...current.roleApplications] }));
+    setRoleReason('');
+  }
   return <><PageHeader title="Settings" subtitle="Study preferences, sync, and exports" openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))} /><div className="mx-auto max-w-4xl space-y-5 p-4 sm:p-7"><section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><h2 className="font-bold">Cloud sync</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{firebaseEnabled ? 'Firebase is connected. Changes sync automatically and can be forced at any time.' : 'Local preview mode. Add your Firebase values to enable account-based cloud sync.'}</p></div><PrimaryButton onClick={onSync} disabled={syncStatus === 'syncing' || !firebaseEnabled}><RefreshCw className={cx('size-4', syncStatus === 'syncing' && 'animate-spin')} />Sync now</PrimaryButton></div><div className={cx('mt-4 flex items-center gap-2 rounded-xl p-3 text-xs font-bold', firebaseEnabled ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800')}>{firebaseEnabled ? <Cloud className="size-4" /> : <CloudOff className="size-4" />}{firebaseEnabled ? `Cloud ready${state.lastSyncAt ? ` · Last manual sync ${new Date(state.lastSyncAt).toLocaleString()}` : ''}` : 'Firebase setup required before cloud deployment'}</div></section>
+    <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6"><h2 className="font-bold">Appearance</h2><p className="mt-1 text-sm text-muted-foreground">Light, dark, or follow your device.</p><div className="mt-4 grid grid-cols-3 gap-2">{(['light', 'dark', 'system'] as const).map((theme) => <button key={theme} onClick={() => setState((current) => ({ ...current, settings: { ...current.settings, theme } }))} className={cx('flex h-11 items-center justify-center gap-2 rounded-xl border text-xs font-bold capitalize', state.settings.theme === theme && 'border-primary bg-primary text-primary-foreground')}>{theme === 'light' ? <Sun className="size-4" /> : theme === 'dark' ? <Moon className="size-4" /> : <Settings className="size-4" />}{theme}</button>)}</div></section>
     <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6"><h2 className="font-bold">Daily study goal</h2><p className="mt-1 text-sm text-muted-foreground">Used by the quick-start button on your dashboard.</p><div className="mt-5 flex items-center gap-4"><input type="range" min="5" max="100" step="5" value={state.settings.dailyGoal} onChange={(event) => setState((current) => ({ ...current, settings: { ...current.settings, dailyGoal: Number(event.target.value) } }))} className="flex-1 accent-primary" /><strong className="min-w-20 rounded-xl bg-primary/10 px-3 py-2 text-center text-primary">{state.settings.dailyGoal}</strong></div></section>
+    {user.role !== 'super_admin' && <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6"><h2 className="font-bold">Request an additional role</h2><p className="mt-1 text-sm text-muted-foreground">The Superadmin reviews every Pro, Reviewer, and Access Manager request.</p>{pendingRole ? <div className="mt-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">Your <strong>{pendingRole.requestedRole}</strong> request is waiting for review.</div> : <div className="mt-4 grid gap-3 sm:grid-cols-[180px_1fr_auto]"><select value={requestedRole} onChange={(event) => setRequestedRole(event.target.value as typeof requestedRole)} className="h-11 rounded-xl border bg-card px-3 text-sm"><option value="pro">Pro user</option><option value="reviewer">Public QBank reviewer</option><option value="access_manager">Access Manager</option></select><input value={roleReason} onChange={(event) => setRoleReason(event.target.value)} className="h-11 rounded-xl border bg-card px-3 text-sm" placeholder="Why do you need this role?" /><button onClick={applyForRole} disabled={!roleReason.trim()} className="h-11 rounded-xl bg-primary px-4 text-xs font-bold text-primary-foreground disabled:opacity-40">Submit request</button></div>}</section>}
     <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6"><h2 className="font-bold">Export and backup</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">Create a printable PDF with answers, shared notes, editor attribution, and images.</p><div className="mt-5 flex flex-wrap gap-3"><PrimaryButton onClick={() => exportAsPdf(questions, collaboration)}><FileText className="size-4" />Export current QBank</PrimaryButton><SecondaryButton onClick={() => downloadBackup(state, collaboration)}><Download className="size-4" />Download backup</SecondaryButton></div></section>
     <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6"><h2 className="font-bold">PWA installation</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">On iPad, open MedGuard in Safari, tap Share, then choose <strong>Add to Home Screen</strong>. The interface is optimized for touch, split view, and offline study.</p></section>
   </div></>;
@@ -560,21 +682,30 @@ function QuestionManager({ user, collaboration, updateCollaboration, questions, 
   const [specialty, setSpecialty] = useState(questions[0]?.specialty ?? 'General');
   const [topic, setTopic] = useState(questions[0]?.topic ?? 'General');
   const [rationale, setRationale] = useState('');
+  const [explanation, setExplanation] = useState('');
+  const [sourceReference, setSourceReference] = useState('');
   const topics = Array.from(new Set(questions.map((question) => question.topic))).sort();
   function addQuestion(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!stem.trim() || options.some((option) => !option.trim())) return;
+    if (!stem.trim() || options.some((option) => !option.trim()) || !explanation.trim() || !sourceReference.trim()) return;
     const proposedAt = new Date().toISOString();
-    updateCollaboration((current) => ({
-      ...current,
-      proposals: [{ id: crypto.randomUUID(), qbankId: activeQBankId, type: 'new_question', payload: { stem: stem.trim(), options: options.map((option) => option.trim()), answer, specialty: specialty.trim() || 'General', topic: topic.trim() || 'General' }, rationale: rationale.trim(), status: 'pending', proposedById: user.uid, proposedByName: user.displayName, proposedAt }, ...current.proposals],
-      auditLog: [{ id: crypto.randomUUID(), action: 'new_question_proposed', entityType: 'question', entityId: activeQBankId, actorId: user.uid, actorName: user.displayName, createdAt: proposedAt, detail: `Proposed a new question for ${activeQBankId}.` }, ...current.auditLog],
-    }));
-    setStem(''); setOptions(['', '', '', '']); setAnswer(0); setRationale(''); setOpen(false);
+    updateCollaboration((current) => {
+      const bank = current.qbanks.find((item) => item.id === activeQBankId);
+      const payload = { stem: stem.trim(), options: options.map((option) => option.trim()), answer, specialty: specialty.trim() || 'General', topic: topic.trim() || 'General', explanation: explanation.trim(), sourceReference: sourceReference.trim() };
+      if (bank?.ownerId === user.uid) {
+        const bankQuestions = current.approvedQuestions.filter((item) => item.qbankId === activeQBankId);
+        const question: Question = { id: `shared-${crypto.randomUUID()}`, qbankId: activeQBankId, number: Math.max(0, ...bankQuestions.map((item) => item.number)) + 1, ...payload, answerLetter: 'ABCD'[answer], sourcePage: 0, sourceFile: sourceReference.trim(), revision: 1, isCustom: true };
+        return { ...current, approvedQuestions: [...current.approvedQuestions, question], auditLog: [{ id: crypto.randomUUID(), action: 'owner_question_added', entityType: 'question', entityId: question.id, actorId: user.uid, actorName: user.displayName, createdAt: proposedAt, detail: `Bank Owner added a question to ${activeQBankId}.` }, ...current.auditLog] };
+      }
+      return { ...current, proposals: [{ id: crypto.randomUUID(), qbankId: activeQBankId, type: 'new_question', editKinds: ['question_text', 'options', 'correct_answer', 'explanation', 'source'], payload, rationale: rationale.trim() || 'New question contribution.', status: 'pending', proposedById: user.uid, proposedByName: user.displayName, proposedAt }, ...current.proposals], auditLog: [{ id: crypto.randomUUID(), action: 'new_question_proposed', entityType: 'question', entityId: activeQBankId, actorId: user.uid, actorName: user.displayName, createdAt: proposedAt, detail: `Proposed a new question for ${activeQBankId}.` }, ...current.auditLog] };
+    });
+    setStem(''); setOptions(['', '', '', '']); setAnswer(0); setRationale(''); setExplanation(''); setSourceReference(''); setOpen(false);
   }
   const mine = collaboration.proposals.filter((proposal) => proposal.proposedById === user.uid && proposal.qbankId === activeQBankId);
   const qbank = collaboration.qbanks.find((item) => item.id === activeQBankId);
-  return <><PageHeader title="Community contributions" subtitle={`${qbank?.name ?? 'QBank'} · proposed questions require admin approval`} openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))} actions={<PrimaryButton onClick={() => setOpen(true)}><Plus className="size-4" />Propose question</PrimaryButton>} /><div className="mx-auto max-w-6xl p-4 sm:p-7"><div className="grid gap-4 sm:grid-cols-3"><StatCard label="Live questions" value={questions.length} detail="Approved and available in tests" /><StatCard label="Your proposals" value={mine.length} detail={`${mine.filter((item) => item.status === 'approved').length} approved`} /><StatCard label="Awaiting review" value={mine.filter((item) => item.status === 'pending').length} detail="Visible to the admin team" color="amber" /></div><section className="mt-6 overflow-hidden rounded-2xl bg-card ring-1 ring-border"><div className="border-b p-5"><h2 className="font-bold">Your contribution history</h2><p className="mt-1 text-sm text-muted-foreground">Proposals are attributed to your account and remain auditable.</p></div>{mine.length === 0 ? <div className="p-10 text-center text-sm text-muted-foreground">You have not proposed a question or correction in this QBank yet.</div> : <div className="divide-y">{mine.map((proposal) => <div key={proposal.id} className="grid gap-2 p-4 text-sm sm:grid-cols-[120px_1fr_auto]"><span className={cx('w-fit rounded-full px-2 py-1 text-[10px] font-bold uppercase', proposal.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : proposal.status === 'rejected' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}>{proposal.status}</span><span className="line-clamp-2">{proposal.payload.stem}</span><span className="text-xs text-muted-foreground">{formatDate(proposal.proposedAt)}</span></div>)}</div>}</section></div>
+  const isOwner = qbank?.ownerId === user.uid;
+  if (open) return <><PageHeader title={isOwner ? 'Add question' : 'Propose a question'} subtitle={`${qbank?.name ?? 'QBank'} · explanation and source are required`} openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))} /><form onSubmit={addQuestion} className="mx-auto my-6 w-[calc(100%-2rem)] max-w-3xl rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border sm:p-7"><div className="flex items-center justify-between"><div><h2 className="font-bold">Question content</h2><p className="text-xs text-muted-foreground">{isOwner ? 'As Bank Owner, you can publish directly to your own bank.' : 'This question will enter the review queue.'}</p></div><button type="button" onClick={() => setOpen(false)} aria-label="Close composer"><X className="size-5" /></button></div><label className="mt-5 block"><span className="mb-1.5 block text-sm font-semibold">Question stem</span><textarea required value={stem} onChange={(event) => setStem(event.target.value)} className="min-h-28 w-full rounded-xl border bg-card p-3 text-sm" /></label><div className="mt-4 space-y-2">{options.map((option, index) => <label key={index} className="flex items-center gap-3"><input aria-label={`Mark option ${'ABCD'[index]} as correct`} type="radio" name="answer" checked={answer === index} onChange={() => setAnswer(index)} className="size-4 accent-primary" /><span className="grid size-7 place-items-center rounded-full bg-muted text-xs font-bold">{'ABCD'[index]}</span><input required value={option} onChange={(event) => setOptions((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} className="h-11 flex-1 rounded-xl border bg-card px-3 text-sm" /></label>)}</div><div className="mt-4 grid gap-3 sm:grid-cols-2"><label><span className="mb-1.5 block text-sm font-semibold">Specialty</span><input value={specialty} onChange={(event) => setSpecialty(event.target.value)} className="h-11 w-full rounded-xl border bg-card px-3 text-sm" /></label><label><span className="mb-1.5 block text-sm font-semibold">Topic</span><input value={topic} onChange={(event) => setTopic(event.target.value)} className="h-11 w-full rounded-xl border bg-card px-3 text-sm" /></label></div><label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold">Explanation <strong className="text-red-600">required</strong></span><textarea required value={explanation} onChange={(event) => setExplanation(event.target.value)} className="min-h-28 w-full rounded-xl border bg-card p-3 text-sm" placeholder="Explain why the keyed answer is correct." /></label><label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold">Source <strong className="text-red-600">required</strong></span><input required value={sourceReference} onChange={(event) => setSourceReference(event.target.value)} className="h-11 w-full rounded-xl border bg-card px-3 text-sm" placeholder="Guideline, textbook, DOI, or URL" /></label>{!isOwner && <label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold">Reviewer context</span><textarea value={rationale} onChange={(event) => setRationale(event.target.value)} className="min-h-20 w-full rounded-xl border bg-card p-3 text-sm" placeholder="Optional context for the reviewer" /></label>}<div className="mt-6 flex justify-end gap-2"><SecondaryButton onClick={() => setOpen(false)}>Cancel</SecondaryButton><PrimaryButton type="submit"><Save className="size-4" />{isOwner ? 'Publish question' : 'Submit for review'}</PrimaryButton></div></form></>;
+  return <><PageHeader title="Community contributions" subtitle={`${qbank?.name ?? 'QBank'} · ${isOwner ? 'owner publishing workspace' : 'reviewed contribution workflow'}`} openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))} actions={<PrimaryButton onClick={() => setOpen(true)}><Plus className="size-4" />{isOwner ? 'Add question' : 'Propose question'}</PrimaryButton>} /><div className="mx-auto max-w-6xl p-4 sm:p-7"><div className="grid gap-4 sm:grid-cols-3"><StatCard label="Live questions" value={questions.length} detail="Approved and available in tests" /><StatCard label="Your proposals" value={mine.length} detail={`${mine.filter((item) => item.status === 'approved').length} approved`} /><StatCard label="Awaiting review" value={mine.filter((item) => item.status === 'pending').length} detail="Visible to the authorized reviewers" color="amber" /></div><section className="mt-6 overflow-hidden rounded-2xl bg-card ring-1 ring-border"><div className="border-b p-5"><h2 className="font-bold">Your contribution history</h2><p className="mt-1 text-sm text-muted-foreground">Proposals are attributed to your account and remain auditable.</p></div>{mine.length === 0 ? <div className="p-10 text-center text-sm text-muted-foreground">You have not proposed a question or correction in this QBank yet.</div> : <div className="divide-y">{mine.map((proposal) => <div key={proposal.id} className="grid gap-2 p-4 text-sm sm:grid-cols-[120px_1fr_auto]"><span className={cx('w-fit rounded-full px-2 py-1 text-[10px] font-bold uppercase', proposal.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : proposal.status === 'rejected' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}>{proposal.status}</span><span className="line-clamp-2">{proposal.payload.stem}</span><span className="text-xs text-muted-foreground">{formatDate(proposal.proposedAt)}</span></div>)}</div>}</section></div>
     {open && <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-slate-950/35 p-4 backdrop-blur-sm"><form onSubmit={addQuestion} className="my-8 w-full max-w-2xl rounded-2xl bg-white p-5 shadow-2xl dark:bg-card"><div className="flex items-center justify-between"><div><h2 className="font-bold">Propose a question</h2><p className="text-xs text-muted-foreground">It will enter the shared admin approval queue.</p></div><button type="button" onClick={() => setOpen(false)}><X className="size-5" /></button></div><label className="mt-5 block"><span className="mb-1.5 block text-sm font-semibold">Question stem</span><textarea required value={stem} onChange={(event) => setStem(event.target.value)} className="min-h-28 w-full rounded-xl border p-3 text-sm outline-none focus:border-primary" /></label><div className="mt-4 space-y-2">{options.map((option, index) => <label key={index} className="flex items-center gap-3"><input aria-label={`Mark option ${'ABCD'[index]} as correct`} type="radio" name="answer" checked={answer === index} onChange={() => setAnswer(index)} className="size-4 accent-primary" /><span className="grid size-7 place-items-center rounded-full bg-muted text-xs font-bold">{'ABCD'[index]}</span><input required value={option} onChange={(event) => setOptions((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} className="h-11 flex-1 rounded-xl border px-3 text-sm outline-none focus:border-primary" placeholder={`Option ${'ABCD'[index]}`} /></label>)}</div><div className="mt-4 grid gap-3 sm:grid-cols-2"><label><span className="mb-1.5 block text-sm font-semibold">Specialty</span><input value={specialty} onChange={(event) => setSpecialty(event.target.value)} className="h-11 w-full rounded-xl border px-3 text-sm" /></label><label><span className="mb-1.5 block text-sm font-semibold">Topic</span><input list="topic-options" value={topic} onChange={(event) => setTopic(event.target.value)} className="h-11 w-full rounded-xl border px-3 text-sm" /><datalist id="topic-options">{topics.map((item) => <option key={item} value={item} />)}</datalist></label></div><label className="mt-4 block"><span className="mb-1.5 block text-sm font-semibold">Source or rationale (recommended)</span><textarea value={rationale} onChange={(event) => setRationale(event.target.value)} className="min-h-20 w-full rounded-xl border p-3 text-sm" placeholder="Why should this question be added?" /></label><div className="mt-6 flex justify-end gap-2"><SecondaryButton onClick={() => setOpen(false)}>Cancel</SecondaryButton><PrimaryButton type="submit"><Save className="size-4" />Submit for approval</PrimaryButton></div></form></div>}
   </>;
 }
@@ -599,7 +730,9 @@ export default function MedGuardApp() {
     [...imported, ...state.customQuestions.map((question) => ({ ...question, qbankId: question.qbankId ?? 'smle-gs' })), ...collaboration.approvedQuestions].forEach((question) => merged.set(question.id, { ...question, ...state.questionOverrides[question.id] }));
     return [...merged.values()];
   }, [state.customQuestions, state.questionOverrides, collaboration.approvedQuestions]);
-  const activeQBankId = state.settings.activeQBankId || 'smle-gs';
+  const accessibleQBanks = useMemo(() => collaboration.qbanks.filter((bank) => !bank.archived && user && canAccessBank(user, bank, collaboration.memberships)), [collaboration.memberships, collaboration.qbanks, user]);
+  const requestedQBankId = state.settings.activeQBankId || 'smle-gs';
+  const activeQBankId = accessibleQBanks.some((bank) => bank.id === requestedQBankId) ? requestedQBankId : accessibleQBanks[0]?.id ?? 'smle-gs';
   const questions = useMemo(() => allQuestions.filter((question) => (question.qbankId ?? 'smle-gs') === activeQBankId), [allQuestions, activeQBankId]);
   const activeTest = state.tests.find((test) => test.id === activeTestId) ?? state.tests.find((test) => test.status === 'active');
 
@@ -614,6 +747,14 @@ export default function MedGuardApp() {
   }, []);
 
   useEffect(() => {
+    const theme = state.settings.theme;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => document.documentElement.classList.toggle('dark', theme === 'dark' || (theme === 'system' && media.matches));
+    apply(); media.addEventListener('change', apply);
+    return () => media.removeEventListener('change', apply);
+  }, [state.settings.theme]);
+
+  useEffect(() => {
     let cleanup: (() => void) | undefined;
     let cancelled = false;
     async function initialize() {
@@ -626,14 +767,15 @@ export default function MedGuardApp() {
 
   useEffect(() => {
     if (!user) return;
+    if (firebaseEnabled && user.role === 'super_admin' && !user.mfaEnrolled) return;
     let cancelled = false;
     async function hydrate() {
       try {
         const local = await loadLocalState(user!.uid);
         let resolved = normalizeAppState(local);
-        let shared = (await loadLocalCollaboration()) ?? initialCollaborationState();
+        let shared = normalizeCollaborationState((await loadLocalCollaboration()) ?? initialCollaborationState());
         if (user!.provider === 'local' && !shared.members.some((member) => member.uid === user!.uid)) {
-          shared = { ...shared, members: [...shared.members, { uid: user!.uid, email: user!.email, displayName: user!.displayName, universityId: user!.universityId ?? 'ADMIN-DEMO', role: user!.role, status: user!.status, createdAt: user!.createdAt ?? new Date().toISOString() }] };
+          shared = { ...shared, members: [...shared.members, { uid: user!.uid, email: user!.email, displayName: user!.displayName, universityId: user!.universityId ?? 'ADMIN-DEMO', role: user!.role, status: user!.status, tier: user!.tier, platformRoles: user!.platformRoles, mfaEnrolled: user!.mfaEnrolled, createdAt: user!.createdAt ?? new Date().toISOString() }], security: user!.role === 'super_admin' ? { superAdminUid: user!.uid, updatedAt: new Date().toISOString() } : shared.security };
         }
         if (firebaseEnabled && navigator.onLine && user!.status === 'approved') {
           const cloud = await loadCloudState(user!.uid);
@@ -647,6 +789,27 @@ export default function MedGuardApp() {
     void hydrate();
     return () => { cancelled = true; };
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !collaborationHydrated) return;
+    const params = new URLSearchParams(window.location.search);
+    const qbankId = params.get('join_qbank'); const token = params.get('token');
+    if (!qbankId || !token) return;
+    const bank = collaboration.qbanks.find((item) => item.id === qbankId && item.shareEnabled && item.shareToken === token);
+    if (!bank && firebaseEnabled) {
+      void joinFirebaseQBankByLink(user, qbankId, token).then(() => loadCollaborationState(user)).then((shared) => { setCollaboration(shared); setState((current) => ({ ...current, settings: { ...current.settings, activeQBankId: qbankId } })); window.history.replaceState({}, '', window.location.pathname); }).catch(() => undefined);
+      return;
+    }
+    if (!bank) return;
+    queueMicrotask(() => {
+      if (!canAccessBank(user, bank, collaboration.memberships)) {
+        const createdAt = new Date().toISOString();
+        setCollaboration((current) => ({ ...current, memberships: [...current.memberships, { id: `${qbankId}_${user.uid}`, qbankId, userId: user.uid, userName: user.displayName, role: 'viewer', grantedById: bank.ownerId, grantedByName: bank.ownerName, createdAt, viaLink: true, accessToken: token }] }));
+      }
+      setState((current) => ({ ...current, settings: { ...current.settings, activeQBankId: qbankId } }));
+      window.history.replaceState({}, '', window.location.pathname);
+    });
+  }, [collaboration.memberships, collaboration.qbanks, collaborationHydrated, user]);
 
   useEffect(() => {
     if (!user || !hydrated) return;
@@ -728,11 +891,12 @@ export default function MedGuardApp() {
     return () => lifecycle.abort();
   }, [user, hydrated, collaborationHydrated, state, questions, quickTest]);
 
-  if (user === undefined) return <main className="grid min-h-screen place-items-center bg-[#f4f8fc]"><div className="text-center"><div className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary text-white"><Sparkles className="size-5 animate-pulse" /></div><p className="mt-3 text-sm font-semibold text-muted-foreground">Preparing MedGuard…</p></div></main>;
+  if (user === undefined) return <main className="grid min-h-screen place-items-center bg-background"><div className="text-center"><div className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary text-white"><Sparkles className="size-5 animate-pulse" /></div><p className="mt-3 text-sm font-semibold text-muted-foreground">Preparing MedGuard…</p></div></main>;
   if (!user) return <AuthScreen onAuthenticated={setUser} />;
-  if (user.status !== 'approved') return <PendingApproval user={user} onSignOut={() => void signOut()} />;
-  if (!hydrated || !collaborationHydrated) return <main className="grid min-h-screen place-items-center bg-[#f4f8fc]"><div className="text-center"><RefreshCw className="mx-auto size-7 animate-spin text-primary" /><p className="mt-3 text-sm font-semibold text-muted-foreground">Loading your collaborative workspace…</p></div></main>;
+  if (user.status !== 'approved' || user.suspended) return <PendingApproval user={user} onSignOut={() => void signOut()} />;
+  if (user.role === 'super_admin' && firebaseEnabled && !user.mfaEnrolled) return <MfaEnrollmentGate onComplete={() => setUser({ ...user, mfaEnrolled: true, mfaVerified: true })} onSignOut={() => void signOut()} />;
+  if (!hydrated || !collaborationHydrated) return <main className="grid min-h-screen place-items-center bg-background"><div className="text-center"><RefreshCw className="mx-auto size-7 animate-spin text-primary" /><p className="mt-3 text-sm font-semibold text-muted-foreground">Loading your collaborative workspace…</p></div></main>;
   if (view === 'test' && activeTest) return <TestView user={user} test={activeTest} questions={allQuestions} state={state} setState={setState} collaboration={collaboration} updateCollaboration={(updater) => setCollaboration(updater)} onExit={() => { setActiveTestId(undefined); setView(activeTest.status === 'completed' ? 'history' : 'dashboard'); }} />;
 
-  return <main className="min-h-screen bg-background text-foreground"><div className="flex min-h-screen"><AppSidebar view={view} setView={setView} user={user} syncStatus={syncStatus} onSignOut={() => void signOut()} mobileOpen={mobileOpen} closeMobile={() => setMobileOpen(false)} qbanks={collaboration.qbanks} activeQBankId={activeQBankId} onSelectQBank={(id) => setState((current) => ({ ...current, settings: { ...current.settings, activeQBankId: id } }))} /><section className="min-w-0 flex-1">{view === 'dashboard' && <Dashboard state={state} questions={questions} setView={setView} startQuickTest={quickTest} />}{view === 'create' && <CreateTest questions={questions} state={state} onStart={createTest} />}{view === 'history' && <HistoryView state={{ ...state, tests: state.tests.filter((test) => (test.qbankId ?? 'smle-gs') === activeQBankId) }} questions={questions} onOpen={(test) => { setActiveTestId(test.id); setView('test'); }} />}{view === 'progress' && <ProgressView state={state} questions={questions} />}{view === 'settings' && <SettingsView state={state} setState={setState} syncStatus={syncStatus} onSync={() => void manualSync()} questions={questions} collaboration={collaboration} />}{view === 'manager' && <QuestionManager user={user} collaboration={collaboration} updateCollaboration={(updater) => setCollaboration(updater)} questions={questions} activeQBankId={activeQBankId} />}{view === 'admin' && user.isAdmin && <AdminDashboard user={user} collaboration={collaboration} update={(updater) => setCollaboration(updater)} />}</section></div></main>;
+  return <main className="min-h-screen bg-background text-foreground"><div className="flex min-h-screen"><AppSidebar view={view} setView={setView} user={user} syncStatus={syncStatus} onSignOut={() => void signOut()} mobileOpen={mobileOpen} closeMobile={() => setMobileOpen(false)} qbanks={accessibleQBanks} activeQBankId={activeQBankId} onSelectQBank={(id) => setState((current) => ({ ...current, settings: { ...current.settings, activeQBankId: id } }))} /><section className="min-w-0 flex-1">{view === 'dashboard' && <Dashboard state={state} questions={questions} setView={setView} startQuickTest={quickTest} />}{view === 'library' && <QBankWorkspace user={user} collaboration={collaboration} update={(updater) => setCollaboration(updater)} activeQBankId={activeQBankId} onSelect={(id) => setState((current) => ({ ...current, settings: { ...current.settings, activeQBankId: id } }))} />}{view === 'create' && <CreateTest questions={questions} state={state} onStart={createTest} />}{view === 'history' && <HistoryView state={{ ...state, tests: state.tests.filter((test) => (test.qbankId ?? 'smle-gs') === activeQBankId) }} questions={questions} onOpen={(test) => { setActiveTestId(test.id); setView('test'); }} />}{view === 'progress' && <ProgressView state={state} questions={questions} />}{view === 'settings' && <SettingsView state={state} setState={setState} syncStatus={syncStatus} onSync={() => void manualSync()} questions={questions} collaboration={collaboration} user={user} updateCollaboration={(updater) => setCollaboration(updater)} />}{view === 'manager' && <QuestionManager user={user} collaboration={collaboration} updateCollaboration={(updater) => setCollaboration(updater)} questions={questions} activeQBankId={activeQBankId} />}{view === 'admin' && user.isAdmin && <AdminDashboard user={user} collaboration={collaboration} update={(updater) => setCollaboration(updater)} />}</section></div></main>;
 }

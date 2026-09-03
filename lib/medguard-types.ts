@@ -1,8 +1,13 @@
 export type TestMode = 'tutor' | 'timed';
 export type QuestionStatus = 'new' | 'previous' | 'correct' | 'incorrect' | 'flagged';
-export type UserRole = 'super_admin' | 'admin' | 'student';
+export type UserRole = 'super_admin' | 'admin' | 'reviewer' | 'access_manager' | 'student';
+export type AccountTier = 'lite' | 'pro';
+export type PlatformRole = 'reviewer' | 'access_manager';
+export type BankRole = 'owner' | 'reviewer' | 'viewer';
+export type QBankVisibility = 'public' | 'private';
 export type AccountStatus = 'pending' | 'approved' | 'rejected';
 export type ProposalStatus = 'pending' | 'approved' | 'rejected';
+export type ProposalEditKind = 'question_text' | 'options' | 'correct_answer' | 'explanation' | 'source' | 'typo_formatting' | 'duplicate' | 'outdated_guideline';
 
 export interface Question {
   id: string;
@@ -18,6 +23,8 @@ export interface Question {
   revision: number;
   isCustom?: boolean;
   qbankId?: string;
+  explanation?: string;
+  sourceReference?: string;
 }
 
 export interface HighlightRange {
@@ -107,6 +114,11 @@ export interface AppUser {
   status: AccountStatus;
   universityId?: string;
   createdAt?: string;
+  tier: AccountTier;
+  platformRoles: PlatformRole[];
+  suspended?: boolean;
+  mfaEnrolled?: boolean;
+  mfaVerified?: boolean;
 }
 
 export interface QBank {
@@ -118,6 +130,40 @@ export interface QBank {
   createdById: string;
   createdByName: string;
   archived: boolean;
+  ownerId: string;
+  ownerName: string;
+  visibility: QBankVisibility;
+  shareEnabled: boolean;
+  shareToken?: string;
+  reviewerIds: string[];
+  viewerIds: string[];
+}
+
+export interface QBankMembership {
+  id: string;
+  qbankId: string;
+  userId: string;
+  userName: string;
+  role: BankRole;
+  grantedById: string;
+  grantedByName: string;
+  createdAt: string;
+  viaLink?: boolean;
+  accessToken?: string;
+  inviteId?: string;
+}
+
+export interface QBankInvitation {
+  id: string;
+  qbankId: string;
+  email: string;
+  role: Exclude<BankRole, 'owner'>;
+  invitedById: string;
+  invitedByName: string;
+  createdAt: string;
+  status: 'pending' | 'accepted' | 'revoked';
+  acceptedById?: string;
+  acceptedAt?: string;
 }
 
 export interface MemberProfile {
@@ -128,6 +174,10 @@ export interface MemberProfile {
   role: UserRole;
   status: AccountStatus;
   createdAt: string;
+  tier: AccountTier;
+  platformRoles: PlatformRole[];
+  suspended?: boolean;
+  mfaEnrolled?: boolean;
   approvedAt?: string;
   approvedById?: string;
   approvedByName?: string;
@@ -157,14 +207,18 @@ export interface QuestionProposalPayload {
   answer: number;
   specialty: string;
   topic: string;
+  explanation: string;
+  sourceReference: string;
 }
 
 export interface QuestionProposal {
   id: string;
   qbankId: string;
   type: 'new_question' | 'question_edit';
+  editKinds: ProposalEditKind[];
   questionId?: string;
   payload: QuestionProposalPayload;
+  currentSnapshot?: QuestionProposalPayload;
   rationale: string;
   status: ProposalStatus;
   proposedById: string;
@@ -174,6 +228,33 @@ export interface QuestionProposal {
   reviewedByName?: string;
   reviewedAt?: string;
   reviewNote?: string;
+}
+
+export interface RoleApplication {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  requestedRole: 'pro' | PlatformRole;
+  qbankId?: string;
+  reason: string;
+  status: ProposalStatus;
+  createdAt: string;
+  reviewedAt?: string;
+  reviewedById?: string;
+  reviewedByName?: string;
+}
+
+export interface AnswerStat {
+  id: string;
+  qbankId: string;
+  questionId: string;
+  selections: Record<string, number>;
+}
+
+export interface PlatformSecurity {
+  superAdminUid: string;
+  updatedAt: string;
 }
 
 export interface SharedNoteRevision {
@@ -201,7 +282,7 @@ export interface SharedQuestionNote {
 export interface AuditEntry {
   id: string;
   action: string;
-  entityType: 'account' | 'admin' | 'university_id' | 'qbank' | 'question' | 'note';
+  entityType: 'account' | 'admin' | 'university_id' | 'qbank' | 'question' | 'note' | 'role' | 'sharing';
   entityId: string;
   actorId: string;
   actorName: string;
@@ -211,13 +292,18 @@ export interface AuditEntry {
 
 export interface CollaborationState {
   qbanks: QBank[];
+  memberships: QBankMembership[];
+  invitations: QBankInvitation[];
   members: MemberProfile[];
   allowedUniversityIds: AllowedUniversityId[];
   adminInvites: AdminInvite[];
   proposals: QuestionProposal[];
+  roleApplications: RoleApplication[];
   approvedQuestions: Question[];
+  answerStats: Record<string, AnswerStat>;
   sharedNotes: Record<string, SharedQuestionNote>;
   auditLog: AuditEntry[];
+  security: PlatformSecurity;
   lastSyncAt?: string;
 }
 
@@ -265,15 +351,70 @@ export function initialCollaborationState(): CollaborationState {
       createdById: 'system',
       createdByName: 'MedGuard',
       archived: false,
+      ownerId: 'system',
+      ownerName: 'MedGuard',
+      visibility: 'public',
+      shareEnabled: false,
+      reviewerIds: [],
+      viewerIds: [],
     }],
+    memberships: [],
+    invitations: [],
     members: [],
     allowedUniversityIds: [],
     adminInvites: [],
     proposals: [],
+    roleApplications: [],
     approvedQuestions: [],
+    answerStats: {},
     sharedNotes: {},
     auditLog: [],
+    security: { superAdminUid: '', updatedAt: '2026-09-02T00:00:00.000Z' },
   };
+}
+
+export function normalizeCollaborationState(input?: Partial<CollaborationState>): CollaborationState {
+  const base = initialCollaborationState();
+  if (!input) return base;
+  const qbanks = (input.qbanks?.length ? input.qbanks : base.qbanks).map((bank) => ({
+    ...bank,
+    ownerId: bank.ownerId ?? bank.createdById,
+    ownerName: bank.ownerName ?? bank.createdByName,
+    visibility: bank.visibility ?? 'public',
+    shareEnabled: bank.shareEnabled ?? false,
+    reviewerIds: bank.reviewerIds ?? [],
+    viewerIds: bank.viewerIds ?? [],
+  }));
+  return {
+    ...base,
+    ...input,
+    qbanks,
+    memberships: input.memberships ?? [],
+    invitations: input.invitations ?? [],
+    members: (input.members ?? []).map((member) => ({ ...member, tier: member.tier ?? 'lite', platformRoles: member.platformRoles ?? [] })),
+    proposals: (input.proposals ?? []).map((proposal) => ({ ...proposal, editKinds: proposal.editKinds ?? (proposal.type === 'new_question' ? ['question_text'] : ['typo_formatting']), payload: { ...proposal.payload, explanation: proposal.payload.explanation ?? '', sourceReference: proposal.payload.sourceReference ?? proposal.rationale ?? '' } })),
+    roleApplications: input.roleApplications ?? [],
+    approvedQuestions: input.approvedQuestions ?? [],
+    answerStats: input.answerStats ?? {},
+    sharedNotes: input.sharedNotes ?? {},
+    auditLog: input.auditLog ?? [],
+    security: input.security ?? base.security,
+  };
+}
+
+export function bankRoleFor(user: AppUser, bank: QBank, memberships: QBankMembership[]): BankRole | undefined {
+  if (bank.ownerId === user.uid) return 'owner';
+  return memberships.find((item) => item.qbankId === bank.id && item.userId === user.uid)?.role;
+}
+
+export function canAccessBank(user: AppUser, bank: QBank, memberships: QBankMembership[]): boolean {
+  return user.role === 'super_admin' || bank.visibility === 'public' || Boolean(bankRoleFor(user, bank, memberships));
+}
+
+export function canReviewBank(user: AppUser, bank: QBank, memberships: QBankMembership[]): boolean {
+  const bankRole = bankRoleFor(user, bank, memberships);
+  if (bankRole === 'owner' || bankRole === 'reviewer') return true;
+  return bank.visibility === 'public' && (user.role === 'super_admin' || user.platformRoles.includes('reviewer'));
 }
 
 export function normalizeAppState(input?: Partial<AppState>): AppState {

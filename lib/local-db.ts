@@ -1,4 +1,4 @@
-import { initialCollaborationState, type AppState, type AppUser, type CollaborationState } from './medguard-types';
+import { initialCollaborationState, normalizeCollaborationState, type AppState, type AppUser, type CollaborationState } from './medguard-types';
 
 const DATABASE = 'medguard-qbank';
 const STORE = 'key-value';
@@ -46,7 +46,8 @@ interface LocalAccount extends AppUser { passwordHash: string }
 
 function normalizeUser(user: AppUser): AppUser {
   const role = user.role ?? (user.isAdmin ? 'super_admin' : 'student');
-  return { ...user, role, status: user.status ?? 'approved', isAdmin: role === 'admin' || role === 'super_admin' };
+  const platformRoles: AppUser['platformRoles'] = user.platformRoles ?? (role === 'reviewer' ? ['reviewer'] : role === 'access_manager' || role === 'admin' ? ['access_manager'] : []);
+  return { ...user, role, status: user.status ?? 'approved', tier: user.tier ?? (role === 'super_admin' || role === 'admin' || role === 'access_manager' ? 'pro' : 'lite'), platformRoles, isAdmin: role === 'super_admin' || platformRoles.length > 0 };
 }
 
 export async function loadSession(): Promise<AppUser | undefined> {
@@ -78,6 +79,8 @@ export async function createLocalAccount(name: string, email: string, password: 
     status: 'pending',
     universityId: normalizedUniversityId,
     createdAt: now,
+    tier: 'lite',
+    platformRoles: [],
     passwordHash: await sha256(password),
   };
   await writeValue(`account:${normalizedEmail}`, user);
@@ -90,6 +93,8 @@ export async function createLocalAccount(name: string, email: string, password: 
     role: user.role,
     status: user.status,
     createdAt: now,
+    tier: user.tier,
+    platformRoles: user.platformRoles,
   };
   await saveLocalCollaboration({
     ...shared,
@@ -110,7 +115,7 @@ export async function signInLocal(email: string, password: string): Promise<AppU
   const { passwordHash: _, ...safeUser } = account;
   const shared = await loadLocalCollaboration();
   const member = shared?.members.find((item) => item.uid === safeUser.uid);
-  const current = member ? { ...safeUser, role: member.role, status: member.status, universityId: member.universityId, isAdmin: member.role === 'admin' || member.role === 'super_admin' } : safeUser;
+  const current = member ? { ...safeUser, role: member.role, status: member.status, universityId: member.universityId, tier: member.tier, platformRoles: member.platformRoles, suspended: member.suspended, mfaEnrolled: member.mfaEnrolled, isAdmin: member.role === 'super_admin' || member.platformRoles.length > 0 } : safeUser;
   await saveSession(current);
   return normalizeUser(current);
 }
@@ -120,7 +125,8 @@ export async function loadLocalState(uid: string): Promise<AppState | undefined>
 }
 
 export async function loadLocalCollaboration(): Promise<CollaborationState | undefined> {
-  return readValue<CollaborationState>('collaboration:shared');
+  const state = await readValue<CollaborationState>('collaboration:shared');
+  return state ? normalizeCollaborationState(state) : undefined;
 }
 
 export async function saveLocalCollaboration(state: CollaborationState): Promise<void> {
