@@ -1,6 +1,6 @@
 {
-  "name": "MedGuard Collaborative QBank",
-  "short_name": "MedGuard",
+  "name": "Qraft Collaborative QBank",
+  "short_name": "Qraft",
   "description": "A secure collaborative platform for building, reviewing, and studying multiple medical QBanks.",
   "start_url": "/",
   "display": "standalone",

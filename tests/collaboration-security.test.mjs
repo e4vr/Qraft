@@ -53,7 +53,7 @@ test('edit proposals require classified changes, explanation, source, and review
   assert.match(rules, /editKinds\.size\(\) > 0/);
   assert.match(rules, /payload\.explanation\.size\(\) > 0/);
   assert.match(rules, /payload\.sourceReference\.size\(\) > 0/);
-  assert.match(app, /Suggest Edit → Review → Approve \/ Reject/);
+  assert.match(app, /Suggest Edit → Review → Approve\s*\/\s*Reject/);
   assert.match(review, /Proposed · \{label\}/);
 });
 
@@ -62,8 +62,8 @@ test('study experience includes persistent marker, answer statistics, dark mode,
   assert.match(app, /MARKER ON/);
   assert.match(app, /copySelectionAndMark/);
   assert.match(app, /answerStats/);
-  assert.match(app, /prefers-color-scheme: dark/);
-  assert.match(app, /<details key=\{topic\.topic\}/);
+  assert.match(app, /prefers-color-scheme:\s*dark/);
+  assert.match(app, /<details\s+key=\{topic\.topic\}/);
 });
 
 test('ending a test uses the branded save confirmation instead of a browser alert', async () => {
@@ -119,11 +119,11 @@ test('review workspace, test deletion, question images, and Qraft JSON import ar
   const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
   const review = await readFile(new URL('components/review-workspace.tsx', root), 'utf8');
   const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
-  assert.match(app, />Review<\/button>/);
+  assert.match(app, />\s*Review\s*<\/span>/);
   assert.match(app, /Delete this test\?/);
   assert.match(app, /aria-label="Question images"/);
-  assert.match(review, /New · \{pending\.length\}/);
-  assert.match(review, /Reviewed · \{reviewed\.length\}/);
+  assert.match(review, /New ·\s*\{pending\.length\}/);
+  assert.match(review, /Reviewed ·\s*\{reviewed\.length\}/);
   assert.match(manager, /qraft-question-bank-v1/);
   assert.match(manager, /One question per slide/);
   assert.match(manager, /Upload Qraft JSON/);

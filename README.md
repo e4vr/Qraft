@@ -1,6 +1,6 @@
-# MedGuard Collaborative QBank
+# Qraft Collaborative QBank
 
-MedGuard is a private, installable collaborative QBank PWA. The initial **SMLE
+Qraft is a private, installable collaborative QBank PWA. The initial **SMLE
 General Surgery** bank contains 217 questions imported from
 `MedGard - GS first 51.pdf`; answer keys are preserved and extraction artifacts
 are corrected without changing the source meaning.

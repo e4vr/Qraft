@@ -133,14 +133,14 @@ export async function beginTotpEnrollment(): Promise<{ secretKey: string; qrUrl:
   }
   const session = await authModule.multiFactor(auth.currentUser).getSession();
   pendingTotpSecret = await authModule.TotpMultiFactorGenerator.generateSecret(session);
-  return { secretKey: pendingTotpSecret.secretKey, qrUrl: pendingTotpSecret.generateQrCodeUrl(auth.currentUser.email ?? 'admin', 'MedGuard') };
+  return { secretKey: pendingTotpSecret.secretKey, qrUrl: pendingTotpSecret.generateQrCodeUrl(auth.currentUser.email ?? 'admin', 'Qraft') };
 }
 
 export async function completeTotpEnrollment(code: string): Promise<void> {
   const { auth, authModule } = await services();
   if (!auth.currentUser || !pendingTotpSecret) throw new Error('Start MFA enrollment again.');
   const assertion = authModule.TotpMultiFactorGenerator.assertionForEnrollment(pendingTotpSecret, code.trim());
-  await authModule.multiFactor(auth.currentUser).enroll(assertion, 'MedGuard authenticator');
+  await authModule.multiFactor(auth.currentUser).enroll(assertion, 'Qraft authenticator');
   pendingTotpSecret = undefined;
 }
 

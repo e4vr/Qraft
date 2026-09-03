@@ -7,14 +7,48 @@ import { cn as cx, nowIso } from '@/lib/utils';
 import { ReviewWorkspace } from '@/components/review-workspace';
 
 type Tab = 'overview' | 'registrations' | 'roles' | 'qbanks' | 'proposals' | 'student-ids' | 'audit';
-function formatDate(value?: string) { return value ? new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—'; }
-function audit(user: AppUser, action: string, entityType: AuditEntry['entityType'], entityId: string, detail: string): AuditEntry { return { id: crypto.randomUUID(), action, entityType, entityId, actorId: user.uid, actorName: user.displayName, createdAt: nowIso(), detail }; }
+function formatDate(value?: string) {
+  return value
+    ? new Intl.DateTimeFormat('en', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(new Date(value))
+    : '—';
+}
+function audit(user: AppUser, action: string, entityType: AuditEntry['entityType'], entityId: string, detail: string): AuditEntry {
+  return {
+    id: crypto.randomUUID(),
+    action,
+    entityType,
+    entityId,
+    actorId: user.uid,
+    actorName: user.displayName,
+    createdAt: nowIso(),
+    detail,
+  };
+}
 
 export function AdminDashboard({ user, collaboration, update }: { user: AppUser; collaboration: CollaborationState; update: (updater: (current: CollaborationState) => CollaborationState) => void }) {
   const canAccess = user.role === 'super_admin' || user.platformRoles.includes('access_manager') || user.role === 'admin' || user.role === 'access_manager';
   const isRoot = user.role === 'super_admin';
   const isReviewer = isRoot || user.platformRoles.includes('reviewer') || user.role === 'reviewer';
-  const tabs = useMemo(() => ([['overview', 'Overview'], ...(canAccess ? [['registrations', 'Registrations']] : []), ...(isRoot ? [['student-ids', 'Student IDs'], ['roles', 'Role requests']] : []), ...(isRoot || isReviewer ? [['qbanks', isRoot ? 'All QBanks' : 'QBanks']] : []), ...(isReviewer || collaboration.qbanks.some((bank) => canReviewBank(user, bank, collaboration.memberships)) ? [['proposals', 'Edit review']] : []), ...(isRoot ? [['audit', 'Audit log']] : [])] as Array<[Tab, string]>), [canAccess, collaboration, isReviewer, isRoot, user]);
+  const tabs = useMemo(
+    () =>
+      [
+        ['overview', 'Overview'],
+        ...(canAccess ? [['registrations', 'Registrations']] : []),
+        ...(isRoot
+          ? [
+              ['student-ids', 'Student IDs'],
+              ['roles', 'Role requests'],
+            ]
+          : []),
+        ...(isRoot || isReviewer ? [['qbanks', isRoot ? 'All QBanks' : 'QBanks']] : []),
+        ...(isReviewer || collaboration.qbanks.some((bank) => canReviewBank(user, bank, collaboration.memberships)) ? [['proposals', 'Edit review']] : []),
+        ...(isRoot ? [['audit', 'Audit log']] : []),
+      ] as Array<[Tab, string]>,
+    [canAccess, collaboration, isReviewer, isRoot, user],
+  );
   const [tab, setTab] = useState<Tab>('overview');
   const [idText, setIdText] = useState('');
   const pendingMembers = collaboration.members.filter((item) => item.status === 'pending');
@@ -23,18 +57,51 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
 
   function reviewMember(uid: string, status: AccountStatus) {
     const reviewedAt = nowIso();
-    update((current) => ({ ...current, members: current.members.map((item) => item.uid === uid ? { ...item, status, approvedAt: status === 'approved' ? reviewedAt : item.approvedAt, approvedById: user.uid, approvedByName: user.displayName } : item), auditLog: [audit(user, `registration_${status}`, 'account', uid, `${status} membership request.`), ...current.auditLog] }));
+    update((current) => ({
+      ...current,
+      members: current.members.map((item) =>
+        item.uid === uid
+          ? {
+              ...item,
+              status,
+              approvedAt: status === 'approved' ? reviewedAt : item.approvedAt,
+              approvedById: user.uid,
+              approvedByName: user.displayName,
+            }
+          : item,
+      ),
+      auditLog: [audit(user, `registration_${status}`, 'account', uid, `${status} membership request.`), ...current.auditLog],
+    }));
   }
 
   function toggleSuspended(member: MemberProfile) {
-    update((current) => ({ ...current, members: current.members.map((item) => item.uid === member.uid ? { ...item, suspended: !item.suspended } : item), auditLog: [audit(user, member.suspended ? 'account_restored' : 'account_blocked', 'account', member.uid, `${member.displayName} access ${member.suspended ? 'restored' : 'blocked'}.`), ...current.auditLog] }));
+    update((current) => ({
+      ...current,
+      members: current.members.map((item) => (item.uid === member.uid ? { ...item, suspended: !item.suspended } : item)),
+      auditLog: [audit(user, member.suspended ? 'account_restored' : 'account_blocked', 'account', member.uid, `${member.displayName} access ${member.suspended ? 'restored' : 'blocked'}.`), ...current.auditLog],
+    }));
   }
 
   function addStudentIds() {
-    const values = [...new Set(idText.split(/[\s,;]+/).map((item) => item.trim().toUpperCase()).filter(Boolean))];
+    const values = [
+      ...new Set(
+        idText
+          .split(/[\s,;]+/)
+          .map((item) => item.trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    ];
     if (!values.length) return;
     const createdAt = nowIso();
-    update((current) => { const existing = new Set(current.allowedUniversityIds.map((item) => item.id)); const added = values.filter((id) => !existing.has(id)).map((id) => ({ id, addedAt: createdAt, addedById: user.uid })); return { ...current, allowedUniversityIds: [...added, ...current.allowedUniversityIds], auditLog: added.length ? [audit(user, 'student_ids_added', 'university_id', added[0].id, `${added.length} eligible IDs added.`), ...current.auditLog] : current.auditLog }; });
+    update((current) => {
+      const existing = new Set(current.allowedUniversityIds.map((item) => item.id));
+      const added = values.filter((id) => !existing.has(id)).map((id) => ({ id, addedAt: createdAt, addedById: user.uid }));
+      return {
+        ...current,
+        allowedUniversityIds: [...added, ...current.allowedUniversityIds],
+        auditLog: added.length ? [audit(user, 'student_ids_added', 'university_id', added[0].id, `${added.length} eligible IDs added.`), ...current.auditLog] : current.auditLog,
+      };
+    });
     setIdText('');
   }
 
@@ -44,25 +111,224 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
     const reviewedAt = nowIso();
     update((current) => ({
       ...current,
-      roleApplications: current.roleApplications.map((item) => item.id === applicationId ? { ...item, status: approved ? 'approved' : 'rejected', reviewedAt, reviewedById: user.uid, reviewedByName: user.displayName } : item),
-      members: approved ? current.members.map((member) => member.uid === application.userId ? { ...member, tier: application.requestedRole === 'pro' || application.requestedRole === 'access_manager' ? 'pro' : member.tier, platformRoles: application.requestedRole === 'pro' ? member.platformRoles : [...new Set([...member.platformRoles, application.requestedRole as PlatformRole])] } : member) : current.members,
+      roleApplications: current.roleApplications.map((item) =>
+        item.id === applicationId
+          ? {
+              ...item,
+              status: approved ? 'approved' : 'rejected',
+              reviewedAt,
+              reviewedById: user.uid,
+              reviewedByName: user.displayName,
+            }
+          : item,
+      ),
+      members: approved
+        ? current.members.map((member) =>
+            member.uid === application.userId
+              ? {
+                  ...member,
+                  tier: application.requestedRole === 'pro' || application.requestedRole === 'access_manager' ? 'pro' : member.tier,
+                  platformRoles: application.requestedRole === 'pro' ? member.platformRoles : [...new Set([...member.platformRoles, application.requestedRole as PlatformRole])],
+                }
+              : member,
+          )
+        : current.members,
       auditLog: [audit(user, approved ? 'role_request_approved' : 'role_request_rejected', 'role', application.id, `${application.requestedRole} request by ${application.userName}.`), ...current.auditLog],
     }));
   }
 
-  return <><header className="sticky top-0 z-30 border-b bg-card/90 px-4 py-4 backdrop-blur-xl sm:px-7"><div className="mx-auto flex max-w-[1260px] items-center justify-between gap-4"><div className="flex min-w-0 items-center gap-3"><button aria-label="Open navigation" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))} className="grid size-10 shrink-0 place-items-center rounded-xl border lg:hidden"><Menu className="size-5" /></button><div><div className="flex items-center gap-2"><ShieldCheck className="size-5 text-primary" /><h1 className="font-bold">Administration</h1></div><p className="text-xs text-muted-foreground">Least-privilege access and QBank governance</p></div></div><span className="rounded-full bg-emerald-50 px-3 py-1.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{isRoot ? 'SUPERADMIN · MFA' : user.platformRoles.join(' · ').toUpperCase()}</span></div></header><div className="mx-auto max-w-[1260px] p-4 sm:p-7"><div className="mb-6 flex gap-2 overflow-x-auto">{tabs.map(([id, label]) => <button key={id} onClick={() => setTab(id)} className={cx('shrink-0 rounded-full border px-4 py-2 text-xs font-bold', tab === id ? 'bg-primary text-primary-foreground' : 'bg-card')}>{label}{id === 'registrations' && pendingMembers.length ? ` · ${pendingMembers.length}` : ''}{id === 'proposals' && reviewable.length ? ` · ${reviewable.length}` : ''}</button>)}</div>
-  {tab === 'overview' && <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{[['Pending registrations', pendingMembers.length], ['Role requests', roleRequests.length], ['Visible QBanks', collaboration.qbanks.length], ['Edits to review', reviewable.length]].map(([label, value]) => <article key={label} className="rounded-2xl bg-card p-5 ring-1 ring-border"><p className="text-sm font-semibold text-muted-foreground">{label}</p><strong className="mt-2 block text-3xl">{value}</strong></article>)}</div>}
-  {tab === 'registrations' && <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border"><div className="border-b p-5"><h2 className="font-bold">Registration and access</h2><p className="text-xs text-muted-foreground">Access Managers can approve, reject, block, or restore accounts only.</p></div><div className="divide-y">{collaboration.members.map((member) => <div key={member.uid} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><strong className="text-sm">{member.displayName}</strong><p className="truncate text-xs text-muted-foreground">{member.email} · {member.universityId} · {member.tier}</p></div><span className="text-[10px] font-bold uppercase text-muted-foreground">{member.suspended ? 'blocked' : member.status}</span><div className="flex gap-2">{member.status === 'pending' && <><button onClick={() => reviewMember(member.uid, 'rejected')} className="h-9 rounded-lg border px-3 text-xs font-bold text-red-600"><UserRoundX className="mr-1 inline size-4" />Reject</button><button onClick={() => reviewMember(member.uid, 'approved')} className="h-9 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground"><UserCheck className="mr-1 inline size-4" />Approve</button></>}{member.status === 'approved' && member.role !== 'super_admin' && <button onClick={() => toggleSuspended(member)} className="h-9 rounded-lg border px-3 text-xs font-bold">{member.suspended ? 'Restore' : 'Block'}</button>}</div></div>)}</div></section>}
-  {tab === 'student-ids' && <div className="grid gap-5 lg:grid-cols-[360px_1fr]"><section className="rounded-2xl bg-card p-5 ring-1 ring-border"><h2 className="flex items-center gap-2 font-bold"><Fingerprint className="size-5 text-primary" />Import eligible IDs</h2><textarea value={idText} onChange={(event) => setIdText(event.target.value)} className="mt-4 min-h-40 w-full rounded-xl border bg-card p-3 font-mono text-sm" placeholder={'442001234\n442001235'} /><button onClick={addStudentIds} className="mt-3 h-10 w-full rounded-xl bg-primary text-xs font-bold text-primary-foreground">Add IDs</button></section><section className="max-h-[620px] overflow-y-auto rounded-2xl bg-card ring-1 ring-border"><div className="divide-y">{collaboration.allowedUniversityIds.map((item) => <div key={item.id} className="flex justify-between p-4 text-sm"><strong className="font-mono">{item.id}</strong><span className="text-xs text-muted-foreground">{item.claimedByName || 'Available'}</span></div>)}</div></section></div>}
-  {tab === 'roles' && <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border"><div className="border-b p-5"><h2 className="font-bold">Role applications</h2><p className="text-xs text-muted-foreground">Only the single Superadmin can approve Pro, Reviewer, or Access Manager privileges.</p></div>{roleRequests.length ? <div className="divide-y">{roleRequests.map((item) => <div key={item.id} className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center"><div className="flex-1"><strong>{item.userName}</strong><p className="text-xs text-muted-foreground">Requests {item.requestedRole} · {item.reason}</p></div><button onClick={() => reviewRole(item.id, false)} className="h-9 rounded-lg border px-3 text-xs font-bold text-red-600">Reject</button><button onClick={() => reviewRole(item.id, true)} className="h-9 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground">Approve</button></div>)}</div> : <div className="p-10 text-center text-sm text-muted-foreground">No pending role applications.</div>}</section>}
-  {tab === 'qbanks' && <section className="grid gap-4 md:grid-cols-2">{collaboration.qbanks.map((bank) => <article key={bank.id} className="rounded-2xl bg-card p-5 ring-1 ring-border"><div className="flex justify-between"><span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] font-bold text-primary">{bank.visibility.toUpperCase()}</span>{bank.visibility === 'private' && isRoot && bank.ownerId !== user.uid && <span className="text-[10px] font-bold text-amber-700">READ-ONLY AUDIT</span>}</div><h3 className="mt-3 font-bold">{bank.name}</h3><p className="mt-1 text-sm text-muted-foreground">{bank.description || 'No description.'}</p><p className="mt-4 border-t pt-3 text-xs text-muted-foreground">Owner: {bank.ownerName} · {bank.reviewerIds.length} reviewers · {bank.viewerIds.length} viewers</p></article>)}</section>}
-  {tab === 'proposals' && <ReviewWorkspace user={user} collaboration={collaboration} update={update} embedded />}
-  {tab === 'audit' && <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border"><div className="border-b p-5"><h2 className="font-bold">Audit log</h2></div><div className="divide-y">{collaboration.auditLog.map((item) => <div key={item.id} className="grid gap-1 p-4 text-sm sm:grid-cols-[170px_160px_1fr_auto]"><strong>{item.actorName}</strong><span className="text-xs font-bold uppercase text-primary">{item.action.replaceAll('_', ' ')}</span><span>{item.detail}</span><time className="text-xs text-muted-foreground">{formatDate(item.createdAt)}</time></div>)}</div></section>}
-  </div></>;
+  return (
+    <>
+      <header className="sticky top-0 z-30 border-b bg-card/90 px-4 py-4 backdrop-blur-xl sm:px-7">
+        <div className="mx-auto flex max-w-[1260px] items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <button aria-label="Open navigation" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))} className="grid size-10 shrink-0 place-items-center rounded-xl border lg:hidden">
+              <Menu className="size-5" />
+            </button>
+            <div>
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="size-5 text-primary" />
+                <h1 className="font-bold">Administration</h1>
+              </div>
+              <p className="text-xs text-muted-foreground">Least-privilege access and QBank governance</p>
+            </div>
+          </div>
+          <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{isRoot ? 'SUPERADMIN · MFA' : user.platformRoles.join(' · ').toUpperCase()}</span>
+        </div>
+      </header>
+      <div className="mx-auto max-w-[1260px] p-4 sm:p-7">
+        <div className="mb-6 flex gap-2 overflow-x-auto">
+          {tabs.map(([id, label]) => (
+            <button key={id} onClick={() => setTab(id)} className={cx('shrink-0 rounded-full border px-4 py-2 text-xs font-bold', tab === id ? 'bg-primary text-primary-foreground' : 'bg-card')}>
+              {label}
+              {id === 'registrations' && pendingMembers.length ? ` · ${pendingMembers.length}` : ''}
+              {id === 'proposals' && reviewable.length ? ` · ${reviewable.length}` : ''}
+            </button>
+          ))}
+        </div>
+        {tab === 'overview' && (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              ['Pending registrations', pendingMembers.length],
+              ['Role requests', roleRequests.length],
+              ['Visible QBanks', collaboration.qbanks.length],
+              ['Edits to review', reviewable.length],
+            ].map(([label, value]) => (
+              <article key={label} className="rounded-2xl bg-card p-5 ring-1 ring-border">
+                <p className="text-sm font-semibold text-muted-foreground">{label}</p>
+                <strong className="mt-2 block text-3xl">{value}</strong>
+              </article>
+            ))}
+          </div>
+        )}
+        {tab === 'registrations' && (
+          <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
+            <div className="border-b p-5">
+              <h2 className="font-bold">Registration and access</h2>
+              <p className="text-xs text-muted-foreground">Access Managers can approve, reject, block, or restore accounts only.</p>
+            </div>
+            <div className="divide-y">
+              {collaboration.members.map((member) => (
+                <div key={member.uid} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
+                  <div className="min-w-0 flex-1">
+                    <strong className="text-sm">{member.displayName}</strong>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {member.email} · {member.universityId} · {member.tier}
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-bold uppercase text-muted-foreground">{member.suspended ? 'blocked' : member.status}</span>
+                  <div className="flex gap-2">
+                    {member.status === 'pending' && (
+                      <>
+                        <button onClick={() => reviewMember(member.uid, 'rejected')} className="h-9 rounded-lg border px-3 text-xs font-bold text-red-600 dark:text-red-300">
+                          <UserRoundX className="mr-1 inline size-4" />
+                          Reject
+                        </button>
+                        <button onClick={() => reviewMember(member.uid, 'approved')} className="h-9 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground">
+                          <UserCheck className="mr-1 inline size-4" />
+                          Approve
+                        </button>
+                      </>
+                    )}
+                    {member.status === 'approved' && member.role !== 'super_admin' && (
+                      <button onClick={() => toggleSuspended(member)} className="h-9 rounded-lg border px-3 text-xs font-bold">
+                        {member.suspended ? 'Restore' : 'Block'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+        {tab === 'student-ids' && (
+          <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
+            <section className="rounded-2xl bg-card p-5 ring-1 ring-border">
+              <h2 className="flex items-center gap-2 font-bold">
+                <Fingerprint className="size-5 text-primary" />
+                Import eligible IDs
+              </h2>
+              <textarea value={idText} onChange={(event) => setIdText(event.target.value)} className="mt-4 min-h-40 w-full rounded-xl border bg-card p-3 font-mono text-sm" placeholder={'442001234\n442001235'} />
+              <button onClick={addStudentIds} className="mt-3 h-10 w-full rounded-xl bg-primary text-xs font-bold text-primary-foreground">
+                Add IDs
+              </button>
+            </section>
+            <section className="max-h-[620px] overflow-y-auto rounded-2xl bg-card ring-1 ring-border">
+              <div className="divide-y">
+                {collaboration.allowedUniversityIds.map((item) => (
+                  <div key={item.id} className="flex justify-between p-4 text-sm">
+                    <strong className="font-mono">{item.id}</strong>
+                    <span className="text-xs text-muted-foreground">{item.claimedByName || 'Available'}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
+        {tab === 'roles' && (
+          <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
+            <div className="border-b p-5">
+              <h2 className="font-bold">Role applications</h2>
+              <p className="text-xs text-muted-foreground">Only the single Superadmin can approve Pro, Reviewer, or Access Manager privileges.</p>
+            </div>
+            {roleRequests.length ? (
+              <div className="divide-y">
+                {roleRequests.map((item) => (
+                  <div key={item.id} className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center">
+                    <div className="flex-1">
+                      <strong>{item.userName}</strong>
+                      <p className="text-xs text-muted-foreground">
+                        Requests {item.requestedRole} · {item.reason}
+                      </p>
+                    </div>
+                    <button onClick={() => reviewRole(item.id, false)} className="h-9 rounded-lg border px-3 text-xs font-bold text-red-600 dark:text-red-300">
+                      Reject
+                    </button>
+                    <button onClick={() => reviewRole(item.id, true)} className="h-9 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground">
+                      Approve
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-10 text-center text-sm text-muted-foreground">No pending role applications.</div>
+            )}
+          </section>
+        )}
+        {tab === 'qbanks' && (
+          <section className="grid gap-4 md:grid-cols-2">
+            {collaboration.qbanks.map((bank) => (
+              <article key={bank.id} className="rounded-2xl bg-card p-5 ring-1 ring-border">
+                <div className="flex justify-between">
+                  <span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] font-bold text-primary">{bank.visibility.toUpperCase()}</span>
+                  {bank.visibility === 'private' && isRoot && bank.ownerId !== user.uid && <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300">READ-ONLY AUDIT</span>}
+                </div>
+                <h3 className="mt-3 font-bold">{bank.name}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">{bank.description || 'No description.'}</p>
+                <p className="mt-4 border-t pt-3 text-xs text-muted-foreground">
+                  Owner: {bank.ownerName} · {bank.reviewerIds.length} reviewers · {bank.viewerIds.length} viewers
+                </p>
+              </article>
+            ))}
+          </section>
+        )}
+        {tab === 'proposals' && <ReviewWorkspace user={user} collaboration={collaboration} update={update} embedded />}
+        {tab === 'audit' && (
+          <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
+            <div className="border-b p-5">
+              <h2 className="font-bold">Audit log</h2>
+            </div>
+            <div className="divide-y">
+              {collaboration.auditLog.map((item) => (
+                <div key={item.id} className="grid gap-1 p-4 text-sm sm:grid-cols-[170px_160px_1fr_auto]">
+                  <strong>{item.actorName}</strong>
+                  <span className="text-xs font-bold uppercase text-primary">{item.action.replaceAll('_', ' ')}</span>
+                  <span>{item.detail}</span>
+                  <time className="text-xs text-muted-foreground">{formatDate(item.createdAt)}</time>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    </>
+  );
 }
 
 export function PendingApproval({ user, onSignOut }: { user: AppUser; onSignOut: () => void }) {
   const blocked = user.suspended;
   const rejected = user.status === 'rejected';
-  return <main className="grid min-h-screen place-items-center bg-background p-6"><section className="w-full max-w-lg rounded-[26px] bg-card p-8 text-center shadow-xl ring-1 ring-border"><div className="mx-auto grid size-16 place-items-center rounded-2xl bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">{blocked || rejected ? <UserRoundX className="size-7" /> : <Clock3 className="size-7" />}</div><p className="mt-6 text-xs font-bold uppercase tracking-widest text-primary">MedGuard membership</p><h1 className="mt-2 text-2xl font-bold">{blocked ? 'Account access blocked' : rejected ? 'Registration not approved' : 'Waiting for approval'}</h1><p className="mx-auto mt-3 text-sm leading-6 text-muted-foreground">{blocked ? 'An Access Manager or the Superadmin must restore this account.' : rejected ? 'Contact your cohort Access Manager if you believe this is a mistake.' : 'Your university ID is reserved until an Access Manager reviews the request.'}</p><button onClick={onSignOut} className="mt-6 h-11 w-full rounded-xl border text-sm font-bold">Sign out</button></section></main>;
+  return (
+    <main className="grid min-h-screen place-items-center bg-background p-6">
+      <section className="w-full max-w-lg rounded-[26px] bg-card p-8 text-center shadow-xl ring-1 ring-border">
+        <div className="mx-auto grid size-16 place-items-center rounded-2xl bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">{blocked || rejected ? <UserRoundX className="size-7" /> : <Clock3 className="size-7" />}</div>
+        <p className="mt-6 text-xs font-bold uppercase tracking-widest text-primary">Qraft membership</p>
+        <h1 className="mt-2 text-2xl font-bold">{blocked ? 'Account access blocked' : rejected ? 'Registration not approved' : 'Waiting for approval'}</h1>
+        <p className="mx-auto mt-3 text-sm leading-6 text-muted-foreground">{blocked ? 'An Access Manager or the Superadmin must restore this account.' : rejected ? 'Contact your cohort Access Manager if you believe this is a mistake.' : 'Your university ID is reserved until an Access Manager reviews the request.'}</p>
+        <button onClick={onSignOut} className="mt-6 h-11 w-full rounded-xl border text-sm font-bold">
+          Sign out
+        </button>
+      </section>
+    </main>
+  );
 }
