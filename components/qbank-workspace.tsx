@@ -266,7 +266,7 @@ export function QBankWorkspace({
                 <option value="viewer">Viewer</option>
                 <option value="reviewer">Reviewer</option>
               </select>
-              <button onClick={invite} disabled={!inviteBankId || !inviteEmail.includes('@')} className="h-11 rounded-xl bg-primary px-5 text-xs font-bold text-primary-foreground disabled:opacity-40">
+              <button onClick={invite} disabled={!inviteBankId || !inviteEmail.includes('@')} className="h-11 min-w-[128px] whitespace-nowrap rounded-xl bg-primary px-4 text-xs font-bold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40">
                 Send invite
               </button>
             </div>
