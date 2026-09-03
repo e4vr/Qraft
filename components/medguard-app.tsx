@@ -1983,6 +1983,7 @@ function HistoryView({ state, questions, onOpen, onDelete }: { state: AppState; 
         ) : (
           <div className="space-y-3">
             {tests.map((test) => {
+              const isCompleted = test.status === 'completed';
               const answered = Object.keys(test.answers).length;
               const correct = test.questionIds.filter((id) => {
                 const question = questions.find((item) => item.id === id);
@@ -1994,7 +1995,7 @@ function HistoryView({ state, questions, onOpen, onDelete }: { state: AppState; 
                   <div
                     className={cx(
                       'grid size-12 shrink-0 place-items-center rounded-2xl',
-                      test.status === 'active' ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/12 dark:text-amber-200' : score >= 70 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200' : 'bg-blue-50 text-blue-700 dark:bg-blue-500/12 dark:text-blue-200',
+                      !isCompleted ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/12 dark:text-amber-200' : score >= 70 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200' : 'bg-blue-50 text-blue-700 dark:bg-blue-500/12 dark:text-blue-200',
                     )}
                   >
                     <FileText className="size-5" />
@@ -2002,7 +2003,7 @@ function HistoryView({ state, questions, onOpen, onDelete }: { state: AppState; 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-bold">{test.title}</h3>
-                      <span className={cx('rounded-full px-2 py-0.5 text-[10px] font-bold uppercase', test.status === 'active' ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/12 dark:text-amber-200' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200')}>{test.status}</span>
+                      <span className={cx('rounded-full px-2 py-0.5 text-[10px] font-bold uppercase', !isCompleted ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/12 dark:text-amber-200' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200')}>{isCompleted ? 'Completed' : 'Not completed'}</span>
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {formatDate(test.startedAt)} · {test.mode} · {answered}/{test.questionIds.length} answered
@@ -2010,11 +2011,11 @@ function HistoryView({ state, questions, onOpen, onDelete }: { state: AppState; 
                   </div>
                   <div className="flex items-center justify-between gap-3 sm:justify-end">
                     <div className="text-right">
-                      <strong className="block text-xl">{test.status === 'active' ? `${test.currentIndex + 1}/${test.questionIds.length}` : `${score}%`}</strong>
-                      <span className="text-[10px] text-muted-foreground">{test.status === 'active' ? 'position' : 'score'}</span>
+                      <strong className="block text-xl">{!isCompleted ? `${test.currentIndex + 1}/${test.questionIds.length}` : `${score}%`}</strong>
+                      <span className="text-[10px] text-muted-foreground">{!isCompleted ? 'position' : 'score'}</span>
                     </div>
                     <SecondaryButton onClick={() => onOpen(test)}>
-                      {test.status === 'active' ? 'Resume' : 'Review'}
+                      {!isCompleted ? 'Resume' : 'Review'}
                       <ArrowRight className="size-4" />
                     </SecondaryButton>
                     <IconButton label={`Delete ${test.title}`} onClick={() => setDeleteId(test.id)}>
