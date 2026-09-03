@@ -2707,6 +2707,7 @@ export default function MedGuardApp() {
                 email: user!.email,
                 displayName: user!.displayName,
                 universityId: user!.universityId ?? 'ADMIN-DEMO',
+                phone: user!.phone,
                 role: user!.role,
                 status: user!.status,
                 tier: user!.tier,
