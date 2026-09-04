@@ -116,12 +116,14 @@ test('Question IDs are globally reserved and never reused', async () => {
 });
 
 test('review workspace, test deletion, question images, and Qraft JSON import are available', async () => {
+  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
   const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
   const review = await readFile(new URL('components/review-workspace.tsx', root), 'utf8');
   const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
   assert.match(app, />\s*Review\s*<\/span>/);
   assert.match(app, /Delete this test\?/);
   assert.match(app, /Question ID/);
+  assert.match(app, /Edit & resubmit/);
   assert.match(app, /aria-label="Question images"/);
   assert.match(review, /New ·\s*\{pending\.length\}/);
   assert.match(review, /Reviewed ·\s*\{reviewed\.length\}/);
@@ -129,6 +131,7 @@ test('review workspace, test deletion, question images, and Qraft JSON import ar
   assert.match(manager, /One question per slide/);
   assert.match(manager, /Upload Qraft JSON/);
   assert.match(review, /questionId: status === 'approved'/);
+  assert.match(rules, /resource\.data\.status in \['pending', 'rejected'\]/);
 });
 
 test('access blocklist covers phone, university ID, and email registrations', async () => {

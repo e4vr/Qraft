@@ -30,6 +30,7 @@ import {
   LogOut,
   Menu,
   Moon,
+  Pencil,
   Plus,
   RefreshCw,
   Save,
@@ -75,6 +76,7 @@ import {
   type HighlightRange,
   type Question,
   type QuestionProgress,
+  type QuestionProposal,
   type QuestionStatus,
   type ProposalEditKind,
   type TestBuilderConfig,
@@ -2369,6 +2371,7 @@ function QuestionManager({
   activeQBankId: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [editingProposal, setEditingProposal] = useState<QuestionProposal>();
   const [stem, setStem] = useState('');
   const [options, setOptions] = useState(['', '', '', '']);
   const [answer, setAnswer] = useState(0);
@@ -2377,10 +2380,73 @@ function QuestionManager({
   const [rationale, setRationale] = useState('');
   const [explanation, setExplanation] = useState('');
   const [sourceReference, setSourceReference] = useState('');
+  function resetComposer() {
+    setStem('');
+    setOptions(['', '', '', '']);
+    setAnswer(0);
+    setSpecialty(questions[0]?.specialty ?? 'General');
+    setTopic(questions[0]?.topic ?? 'General');
+    setRationale('');
+    setExplanation('');
+    setSourceReference('');
+  }
+
+  function startNewContribution() {
+    setEditingProposal(undefined);
+    resetComposer();
+    setOpen(true);
+  }
+
+  function startEditing(proposal: QuestionProposal) {
+    setEditingProposal(proposal);
+    setStem(proposal.payload.stem);
+    setOptions([...proposal.payload.options, '', '', '', ''].slice(0, 4));
+    setAnswer(proposal.payload.answer);
+    setSpecialty(proposal.payload.specialty);
+    setTopic(proposal.payload.topic);
+    setRationale(proposal.rationale);
+    setExplanation(proposal.payload.explanation);
+    setSourceReference(proposal.payload.sourceReference);
+    setOpen(true);
+  }
+
   async function addQuestion(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!stem.trim() || options.some((option) => !option.trim()) || !explanation.trim() || !sourceReference.trim()) return;
     const proposedAt = new Date().toISOString();
+    const payload = {
+      stem: stem.trim(),
+      options: options.map((option) => option.trim()),
+      answer,
+      specialty: specialty.trim() || 'General',
+      topic: topic.trim() || 'General',
+      explanation: explanation.trim(),
+      sourceReference: sourceReference.trim(),
+      images: editingProposal?.payload.images ?? [],
+    };
+    if (editingProposal) {
+      updateCollaboration((current) => ({
+        ...current,
+        proposals: current.proposals.map((item) => item.id === editingProposal.id && item.proposedById === user.uid && item.status !== 'approved' ? { ...item, payload, rationale: rationale.trim() || 'Updated question contribution.', status: 'pending', proposedAt } : item),
+        auditLog: [
+          {
+            id: crypto.randomUUID(),
+            action: editingProposal.status === 'rejected' ? 'question_proposal_resubmitted' : 'question_proposal_updated',
+            entityType: 'question',
+            entityId: editingProposal.id,
+            actorId: user.uid,
+            actorName: user.displayName,
+            createdAt: proposedAt,
+            detail: editingProposal.status === 'rejected' ? 'Resubmitted a rejected question contribution.' : 'Updated a pending question contribution.',
+          },
+          ...current.auditLog,
+        ],
+      }));
+      resetComposer();
+      setEditingProposal(undefined);
+      setOpen(false);
+      return;
+    }
     const ownedBank = collaboration.qbanks.find((item) => item.id === activeQBankId && item.ownerId === user.uid);
     const reservedQuestionId = ownedBank
       ? (
@@ -2394,16 +2460,6 @@ function QuestionManager({
       : undefined;
     updateCollaboration((current) => {
       const bank = current.qbanks.find((item) => item.id === activeQBankId);
-      const payload = {
-        stem: stem.trim(),
-        options: options.map((option) => option.trim()),
-        answer,
-        specialty: specialty.trim() || 'General',
-        topic: topic.trim() || 'General',
-        explanation: explanation.trim(),
-        sourceReference: sourceReference.trim(),
-        images: [],
-      };
       if (bank?.ownerId === user.uid) {
         const bankQuestions = current.approvedQuestions.filter((item) => item.qbankId === activeQBankId);
         const question: Question = {
@@ -2474,6 +2530,7 @@ function QuestionManager({
     setRationale('');
     setExplanation('');
     setSourceReference('');
+    setEditingProposal(undefined);
     setOpen(false);
   }
   const mine = collaboration.proposals.filter((proposal) => proposal.proposedById === user.uid && proposal.qbankId === activeQBankId);
@@ -2482,12 +2539,12 @@ function QuestionManager({
   if (open)
     return (
       <>
-        <PageHeader title={isOwner ? 'Add question' : 'Propose a question'} subtitle={`${qbank?.name ?? 'QBank'} · explanation and source are required`} openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))} />
+        <PageHeader title={editingProposal ? (editingProposal.status === 'rejected' ? 'Resubmit contribution' : 'Edit contribution') : isOwner ? 'Add question' : 'Propose a question'} subtitle={`${qbank?.name ?? 'QBank'} · explanation and source are required`} openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))} />
         <form onSubmit={addQuestion} className="mx-auto my-6 w-[calc(100%-2rem)] max-w-3xl rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border sm:p-7">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="font-bold">Question content</h2>
-              <p className="text-xs text-muted-foreground">{isOwner ? 'As Bank Owner, you can publish directly to your own bank.' : 'This question will enter the review queue.'}</p>
+              <h2 className="font-bold">{editingProposal ? 'Update contribution' : 'Question content'}</h2>
+              <p className="text-xs text-muted-foreground">{editingProposal ? editingProposal.status === 'rejected' ? 'Update the details and send this contribution back to the review queue.' : 'You can update this contribution while it is pending review.' : isOwner ? 'As Bank Owner, you can publish directly to your own bank.' : 'This question will enter the review queue.'}</p>
             </div>
             <button type="button" onClick={() => setOpen(false)} aria-label="Close composer">
               <X className="size-5" />
@@ -2538,7 +2595,7 @@ function QuestionManager({
             <SecondaryButton onClick={() => setOpen(false)}>Cancel</SecondaryButton>
             <PrimaryButton type="submit">
               <Save className="size-4" />
-              {isOwner ? 'Publish question' : 'Submit for review'}
+              {editingProposal ? editingProposal.status === 'rejected' ? 'Resubmit for review' : 'Save changes' : isOwner ? 'Publish question' : 'Submit for review'}
             </PrimaryButton>
           </div>
         </form>
@@ -2551,7 +2608,7 @@ function QuestionManager({
         subtitle={`${qbank?.name ?? 'QBank'} · ${isOwner ? 'owner publishing workspace' : 'reviewed contribution workflow'}`}
         openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
         actions={
-          <PrimaryButton onClick={() => setOpen(true)}>
+          <PrimaryButton onClick={startNewContribution}>
             <Plus className="size-4" />
             {isOwner ? 'Add question' : 'Propose question'}
           </PrimaryButton>
@@ -2589,7 +2646,15 @@ function QuestionManager({
                       <span className="block text-[9px] font-bold uppercase tracking-wide text-muted-foreground">Question ID</span>
                       <strong className="font-mono text-xs">{contributedQuestion?.questionId ?? 'Not assigned'}</strong>
                     </div>
-                    <span className="text-xs text-muted-foreground">{formatDate(proposal.proposedAt)}</span>
+                    <div className="flex items-center justify-between gap-3 sm:flex-col sm:items-end">
+                      <span className="text-xs text-muted-foreground">{formatDate(proposal.proposedAt)}</span>
+                      {(proposal.status === 'pending' || proposal.status === 'rejected') && (
+                        <SecondaryButton onClick={() => startEditing(proposal)} className="h-9 px-3 text-xs">
+                          <Pencil className="size-3.5" />
+                          {proposal.status === 'rejected' ? 'Edit & resubmit' : 'Edit'}
+                        </SecondaryButton>
+                      )}
+                    </div>
                   </div>
                 );
               })}

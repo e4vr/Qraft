@@ -174,7 +174,14 @@ service cloud.firestore {
         && request.resource.data.payload.explanation.size() > 0
         && request.resource.data.payload.sourceReference.size() > 0;
       allow update: if canReviewBank(resource.data.qbankId)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'questionId', 'reviewedById', 'reviewedByName', 'reviewedAt', 'reviewNote']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'questionId', 'reviewedById', 'reviewedByName', 'reviewedAt', 'reviewNote'])
+        || (active()
+          && request.auth.uid == resource.data.proposedById
+          && resource.data.status in ['pending', 'rejected']
+          && request.resource.data.qbankId == resource.data.qbankId
+          && request.resource.data.proposedById == resource.data.proposedById
+          && request.resource.data.status == 'pending'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'payload', 'rationale', 'proposedAt']));
       allow delete: if active() && bank(resource.data.qbankId).ownerId == request.auth.uid;
     }
 
