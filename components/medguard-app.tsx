@@ -44,29 +44,30 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  UserPlus,
   Users,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import questionData from '@/data/questions.json';
 import {
-  createFirebaseAccount,
+  createCloudflareAccount,
   beginTotpEnrollment,
-  completeFirebaseMfaSignIn,
+  completeCloudflareMfaSignIn,
   completeTotpEnrollment,
-  firebaseEnabled,
-  joinFirebaseQBankByLink,
+  joinCloudflareQBankByLink,
   loadCollaborationState,
   loadCloudState,
-  observeFirebaseUser,
-  reserveQuestionIds,
+  observeCloudflareUser,
+  previewCloudflareQBankInvitation,
   saveCloudState,
   saveCollaborationState,
-  signInFirebase,
-  signOutFirebase,
+  signInCloudflare,
+  signOutCloudflare,
   uploadNoteImage,
-} from '@/lib/firebase-client';
-import { createLocalAccount, loadLocalCollaboration, loadLocalState, loadSession, saveLocalState, saveLocalCollaboration, saveSession, signInLocal } from '@/lib/local-db';
+  type QBankLinkInvitation,
+} from '@/lib/cloudflare-client';
+import { loadLocalCollaboration, loadLocalState, saveLocalState, saveLocalCollaboration } from '@/lib/local-db';
 import {
   emptyProgress,
   initialCollaborationState,
@@ -74,6 +75,7 @@ import {
   normalizeCollaborationState,
   normalizeAppState,
   canAccessBank,
+  canManageBank,
   optionLabel,
   type AppState,
   type AppUser,
@@ -92,6 +94,17 @@ import { QBankWorkspace } from '@/components/qbank-workspace';
 import { QBankManagement } from '@/components/qbank-management';
 import { ReviewWorkspace } from '@/components/review-workspace';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn as cx } from '@/lib/utils';
 
@@ -232,6 +245,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
   const [password, setPassword] = useState('');
   const [universityId, setUniversityId] = useState('');
   const [phone, setPhone] = useState('');
+  const [setupToken, setSetupToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [mfaRequired, setMfaRequired] = useState(false);
@@ -239,26 +253,22 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
 
   async function submit(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!mfaRequired && password.length < 6) {
-      setError('Use at least 6 characters for your password.');
+    if (!mfaRequired && password.length < 10) {
+      setError('Use at least 10 characters for your password.');
       return;
     }
-    if (register && phone.trim().length < 7) {
+    if (register && !setupToken.trim() && phone.trim().length < 7) {
       setError('Enter a valid mobile number.');
       return;
     }
     setBusy(true);
     setError('');
     try {
-      const user = firebaseEnabled
-        ? register
-          ? await createFirebaseAccount(name, email, password, universityId, phone)
-          : mfaRequired
-            ? await completeFirebaseMfaSignIn(mfaCode)
-            : await signInFirebase(email, password)
-        : register
-          ? await createLocalAccount(name, email, password, universityId, phone)
-          : await signInLocal(email, password);
+      const user = register
+        ? await createCloudflareAccount(name, email, password, universityId, phone, setupToken)
+        : mfaRequired
+          ? await completeCloudflareMfaSignIn(mfaCode)
+          : await signInCloudflare(email, password);
       onAuthenticated(user);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Unable to sign in.';
@@ -321,7 +331,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
           <div className="mb-8">
             <p className="mb-2 text-sm font-bold text-primary">{register ? 'REQUEST MEMBERSHIP' : 'WELCOME BACK'}</p>
             <h2 className="text-3xl font-bold tracking-tight">{register ? 'Join your cohort QBank' : 'Sign in to continue'}</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{register ? 'Your student ID is checked once, then an administrator reviews your request.' : firebaseEnabled ? 'Your progress and shared contributions sync securely.' : 'Local collaborative preview mode is active.'}</p>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">{register ? 'Your student ID is verified once, then an administrator reviews your request.' : 'Your account and progress are protected and synchronized through Cloudflare.'}</p>
           </div>
           <form onSubmit={submit} className="space-y-4">
             {mfaRequired && (
@@ -350,7 +360,6 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
               <label className="block">
                 <span className="mb-1.5 block text-sm font-semibold">Mobile number</span>
                 <input
-                  required
                   type="tel"
                   autoComplete="tel"
                   value={phone}
@@ -358,21 +367,20 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
                   className="h-12 w-full rounded-xl border bg-white px-4 text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-primary focus:ring-3 focus:ring-primary/10 dark:bg-card dark:text-foreground dark:placeholder:text-muted-foreground"
                   placeholder="05XXXXXXXX"
                 />
-                <span className="mt-1 block text-[11px] text-muted-foreground">Used to help administrators verify your registration.</span>
+                <span className="mt-1 block text-[11px] text-muted-foreground">Required for student accounts; leave blank only when creating the configured Superadmin.</span>
               </label>
             )}
             {register && (
               <label className="block">
                 <span className="mb-1.5 block text-sm font-semibold">University ID</span>
                 <input
-                  required
                   autoComplete="off"
                   value={universityId}
                   onChange={(event) => setUniversityId(event.target.value.toUpperCase())}
                   className="h-12 w-full rounded-xl border bg-white px-4 font-mono text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-primary focus:ring-3 focus:ring-primary/10 dark:bg-card dark:text-foreground dark:placeholder:text-muted-foreground"
                   placeholder="442001234"
                 />
-                <span className="mt-1 block text-[11px] text-muted-foreground">One approved account can be created for each eligible ID.</span>
+                <span className="mt-1 block text-[11px] text-muted-foreground">Required for students. Unlisted IDs can still request registration and will be checked manually.</span>
               </label>
             )}
             {!mfaRequired && (
@@ -394,14 +402,20 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
                 <span className="mb-1.5 block text-sm font-semibold">Password</span>
                 <input
                   required
-                  minLength={6}
+                  minLength={10}
                   type="password"
                   autoComplete={register ? 'new-password' : 'current-password'}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   className="h-12 w-full rounded-xl border bg-white px-4 text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-primary focus:ring-3 focus:ring-primary/10 dark:bg-card dark:text-foreground dark:placeholder:text-muted-foreground"
-                  placeholder="At least 6 characters"
+                  placeholder="At least 10 characters"
                 />
+              </label>
+            )}
+            {register && (
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-semibold">Superadmin setup code <span className="font-normal text-muted-foreground">(optional)</span></span>
+                <input type="password" autoComplete="off" value={setupToken} onChange={(event) => setSetupToken(event.target.value)} className="h-12 w-full rounded-xl border bg-white px-4 text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-primary focus:ring-3 focus:ring-primary/10 dark:bg-card dark:text-foreground" placeholder="Only for the configured Superadmin email" />
               </label>
             )}
             {mfaRequired && (
@@ -431,30 +445,6 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AppUser) => v
               {mfaRequired ? 'Verify and sign in' : register ? 'Submit registration' : 'Sign in'}
             </PrimaryButton>
           </form>
-          {!firebaseEnabled && (
-            <button
-              type="button"
-              onClick={() =>
-                onAuthenticated({
-                  uid: 'local-demo',
-                  email: 'demo@local.qraft',
-                  displayName: 'Root Admin',
-                  isAdmin: true,
-                  provider: 'local',
-                  role: 'super_admin',
-                  status: 'approved',
-                  universityId: 'ADMIN-DEMO',
-                  tier: 'pro',
-                  platformRoles: [],
-                  mfaEnrolled: true,
-                  mfaVerified: true,
-                })
-              }
-              className="mt-3 h-11 w-full rounded-xl border border-primary/25 bg-primary/5 text-sm font-bold text-primary transition hover:bg-primary/10"
-            >
-              Continue as root admin demo
-            </button>
-          )}
           <p className="mt-7 text-center text-sm text-muted-foreground">
             {register ? 'Already have an account?' : 'New to Qraft?'}{' '}
             <button
@@ -1055,7 +1045,6 @@ function TestView({
   const question = activeQuestions[test.currentIndex];
   const progress = question ? getQuestionProgress(state, question.id) : emptyProgress();
   const qbankId = question?.qbankId ?? test.qbankId ?? 'smle-gs';
-  const ownsBank = collaboration.qbanks.some((bank) => bank.id === qbankId && bank.ownerId === user.uid);
   const noteKey = question ? `${qbankId}:${question.id}` : '';
   const sharedNote = noteKey ? collaboration.sharedNotes[noteKey] : undefined;
   const displayedExplanation = sharedNote?.content.trim() || question?.explanation?.trim() || 'No explanation has been added yet.';
@@ -1428,15 +1417,7 @@ function TestView({
           .map(async (file) => {
             if (!file.type.startsWith('image/')) throw new Error('Only image files are supported.');
             if (file.size > 10 * 1024 * 1024) throw new Error('Each image must be smaller than 10 MB.');
-            let url: string;
-            if (firebaseEnabled) url = await uploadNoteImage(user.uid, file, qbankId, question.id);
-            else
-              url = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => (typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Unable to read image.')));
-                reader.onerror = () => reject(reader.error);
-                reader.readAsDataURL(file);
-              });
+            const url = await uploadNoteImage(user.uid, file, qbankId, question.id);
             return {
               id: crypto.randomUUID(),
               url,
@@ -1468,7 +1449,7 @@ function TestView({
     setProposedExplanation(question.explanation ?? sharedNote?.content ?? '');
     setProposedSource(question.sourceReference ?? question.sourceFile ?? '');
     setEditKinds(['typo_formatting']);
-    setReportMessage(ownsBank ? 'Bank owner direct edit.' : '');
+    setReportMessage('');
     setReportOpen(true);
   }
 
@@ -1500,34 +1481,6 @@ function TestView({
         sourceReference: proposedSource.trim(),
         images: question.images ?? [],
       };
-      const bank = current.qbanks.find((item) => item.id === qbankId);
-      if (bank?.ownerId === user.uid) {
-        const updated: Question = {
-          ...question,
-          ...payload,
-          answerLetter: optionLabel(payload.answer),
-          sourceFile: payload.sourceReference,
-          revision: question.revision + 1,
-          isCustom: true,
-        };
-        return {
-          ...current,
-          approvedQuestions: [...current.approvedQuestions.filter((item) => item.id !== question.id), updated],
-          auditLog: [
-            {
-              id: crypto.randomUUID(),
-              action: 'owner_question_edited',
-              entityType: 'question',
-              entityId: question.id,
-              actorId: user.uid,
-              actorName: user.displayName,
-              createdAt: proposedAt,
-              detail: `Bank Owner edited question ${question.number}.`,
-            },
-            ...current.auditLog,
-          ],
-        };
-      }
       return {
         ...current,
         proposals: [
@@ -1704,6 +1657,12 @@ function TestView({
               <p ref={stemRef} className="select-text text-[15px] leading-[1.85] text-[#1d2e40] dark:text-foreground sm:text-base">
                 <HighlightedText text={question.stem} ranges={progress.highlights} onRemove={removeHighlight} />
               </p>
+              {(question.writtenByName || question.reviewedByName) && (
+                <p className="mt-3 text-xs font-medium text-muted-foreground">
+                  Written by <strong className="text-foreground">{question.writtenByName ?? 'Qraft'}</strong>
+                  {' · '}Reviewed by <strong className="text-foreground">{question.reviewedByName ?? 'Pending'}</strong>
+                </p>
+              )}
               <p className="mt-2 text-[10px] text-muted-foreground">Select text with left click to copy it. When Marker is on, the selection is also saved; click a yellow marker to remove it.</p>
               {question.images?.length > 0 && (
                 <section className="mt-6 rounded-2xl border bg-muted/20 p-3 sm:p-4" aria-label="Question images">
@@ -2389,16 +2348,16 @@ function SettingsView({
           <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
               <h2 className="font-bold">Cloud sync</h2>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">{firebaseEnabled ? 'Firebase is connected. Changes sync automatically and can be forced at any time.' : 'Local preview mode. Add your Firebase values to enable account-based cloud sync.'}</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">Cloudflare D1 and R2 are connected. Changes sync automatically and can be forced at any time.</p>
             </div>
-            <PrimaryButton onClick={onSync} disabled={syncStatus === 'syncing' || !firebaseEnabled}>
+            <PrimaryButton onClick={onSync} disabled={syncStatus === 'syncing'}>
               <RefreshCw className={cx('size-4', syncStatus === 'syncing' && 'animate-spin')} />
               Sync now
             </PrimaryButton>
           </div>
-          <div className={cx('mt-4 flex items-center gap-2 rounded-xl p-3 text-xs font-bold', firebaseEnabled ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200' : 'bg-amber-50 text-amber-800 dark:bg-amber-500/12 dark:text-amber-200')}>
-            {firebaseEnabled ? <Cloud className="size-4" /> : <CloudOff className="size-4" />}
-            {firebaseEnabled ? `Cloud ready${state.lastSyncAt ? ` · Last manual sync ${new Date(state.lastSyncAt).toLocaleString()}` : ''}` : 'Firebase setup required before cloud deployment'}
+          <div className="mt-4 flex items-center gap-2 rounded-xl bg-emerald-50 p-3 text-xs font-bold text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200">
+            <Cloud className="size-4" />
+            {`Cloudflare ready${state.lastSyncAt ? ` · Last manual sync ${new Date(state.lastSyncAt).toLocaleString()}` : ''}`}
           </div>
         </section>
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
@@ -2586,51 +2545,7 @@ function QuestionManager({
       setOpen(false);
       return;
     }
-    const ownedBank = collaboration.qbanks.find((item) => item.id === activeQBankId && item.ownerId === user.uid);
-    const reservedQuestionId = ownedBank
-      ? (
-          await reserveQuestionIds(
-            1,
-            activeQBankId,
-            user,
-            allQuestions.map((item) => item.questionId),
-          )
-        )[0]
-      : undefined;
     updateCollaboration((current) => {
-      const bank = current.qbanks.find((item) => item.id === activeQBankId);
-      if (bank?.ownerId === user.uid) {
-        const bankQuestions = current.approvedQuestions.filter((item) => item.qbankId === activeQBankId);
-        const question: Question = {
-          id: `shared-${crypto.randomUUID()}`,
-          questionId: reservedQuestionId!,
-          qbankId: activeQBankId,
-          number: Math.max(0, ...bankQuestions.map((item) => item.number)) + 1,
-          ...payload,
-          answerLetter: optionLabel(answer),
-          sourcePage: 0,
-          sourceFile: sourceReference.trim(),
-          revision: 1,
-          isCustom: true,
-        };
-        return {
-          ...current,
-          approvedQuestions: [...current.approvedQuestions, question],
-          auditLog: [
-            {
-              id: crypto.randomUUID(),
-              action: 'owner_question_added',
-              entityType: 'question',
-              entityId: question.id,
-              actorId: user.uid,
-              actorName: user.displayName,
-              createdAt: proposedAt,
-              detail: `Bank Owner added a question to ${activeQBankId}.`,
-            },
-            ...current.auditLog,
-          ],
-        };
-      }
       return {
         ...current,
         proposals: [
@@ -2674,7 +2589,7 @@ function QuestionManager({
   }
   const mine = collaboration.proposals.filter((proposal) => proposal.proposedById === user.uid && proposal.qbankId === activeQBankId);
   const qbank = collaboration.qbanks.find((item) => item.id === activeQBankId);
-  const isOwner = qbank?.ownerId === user.uid;
+  const isOwner = Boolean(qbank && canManageBank(user, qbank));
   if (open)
     return (
       <>
@@ -2683,7 +2598,7 @@ function QuestionManager({
           <div className="flex items-center justify-between">
             <div>
               <h2 className="font-bold">{editingProposal ? 'Update contribution' : 'Question content'}</h2>
-              <p className="text-xs text-muted-foreground">{editingProposal ? editingProposal.status === 'rejected' ? 'Update the details and send this contribution back to the review queue.' : 'You can update this contribution while it is pending review.' : isOwner ? 'As Bank Owner, you can publish directly to your own bank.' : 'This question will enter the review queue.'}</p>
+              <p className="text-xs text-muted-foreground">{editingProposal ? editingProposal.status === 'rejected' ? 'Update the details and send this contribution back to the review queue.' : 'You can update this contribution while it is pending review.' : 'Every new question is published only after another reviewer approves it.'}</p>
             </div>
             <button type="button" onClick={() => setOpen(false)} aria-label="Close composer">
               <X className="size-5" />
@@ -2740,17 +2655,15 @@ function QuestionManager({
             </span>
             <input required value={sourceReference} onChange={(event) => setSourceReference(event.target.value)} className="h-11 w-full rounded-xl border bg-card px-3 text-sm" placeholder="Guideline, textbook, DOI, or URL" />
           </label>
-          {!isOwner && (
-            <label className="mt-4 block">
-              <span className="mb-1.5 block text-sm font-semibold">Reviewer context</span>
-              <textarea value={rationale} onChange={(event) => setRationale(event.target.value)} className="min-h-20 w-full rounded-xl border bg-card p-3 text-sm" placeholder="Optional context for the reviewer" />
-            </label>
-          )}
+          <label className="mt-4 block">
+            <span className="mb-1.5 block text-sm font-semibold">Reviewer context</span>
+            <textarea value={rationale} onChange={(event) => setRationale(event.target.value)} className="min-h-20 w-full rounded-xl border bg-card p-3 text-sm" placeholder="Optional context for the reviewer" />
+          </label>
           <div className="mt-6 flex justify-end gap-2">
             <SecondaryButton onClick={() => setOpen(false)}>Cancel</SecondaryButton>
             <PrimaryButton type="submit">
               <Save className="size-4" />
-              {editingProposal ? editingProposal.status === 'rejected' ? 'Resubmit for review' : 'Save changes' : isOwner ? 'Publish question' : 'Submit for review'}
+              {editingProposal ? editingProposal.status === 'rejected' ? 'Resubmit for review' : 'Save changes' : 'Submit for review'}
             </PrimaryButton>
           </div>
         </form>
@@ -2760,7 +2673,7 @@ function QuestionManager({
     <>
       <PageHeader
         title="Community contributions"
-        subtitle={`${qbank?.name ?? 'QBank'} · ${isOwner ? 'owner publishing workspace' : 'reviewed contribution workflow'}`}
+        subtitle={`${qbank?.name ?? 'QBank'} · every new question requires independent review`}
         openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
         actions={
           <PrimaryButton onClick={startNewContribution}>
@@ -2833,11 +2746,15 @@ export default function MedGuardApp() {
     id: string;
     section: 'settings' | 'questions';
   }>();
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>(firebaseEnabled ? 'syncing' : 'local');
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('syncing');
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [linkInvitation, setLinkInvitation] = useState<(QBankLinkInvitation & { token: string }) | null>(null);
+  const [linkInvitationBusy, setLinkInvitationBusy] = useState(false);
+  const [linkInvitationError, setLinkInvitationError] = useState('');
   const saveTimer = useRef<number | undefined>(undefined);
   const collaborationSaveTimer = useRef<number | undefined>(undefined);
   const lastSavedCollaboration = useRef<CollaborationState>(initialCollaborationState());
+  const handledInvitationLink = useRef('');
 
   const allQuestions = useMemo(() => {
     const imported = baseQuestions.map((question, index) => ({
@@ -2878,7 +2795,7 @@ export default function MedGuardApp() {
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => undefined);
     const openMenu = () => setMobileOpen(true);
     window.addEventListener('medguard-open-menu', openMenu);
-    const online = () => setSyncStatus(firebaseEnabled ? 'syncing' : 'local');
+    const online = () => setSyncStatus('syncing');
     const offline = () => setSyncStatus('offline');
     window.addEventListener('online', online);
     window.addEventListener('offline', offline);
@@ -2902,11 +2819,13 @@ export default function MedGuardApp() {
     let cleanup: (() => void) | undefined;
     let cancelled = false;
     async function initialize() {
-      if (firebaseEnabled)
-        cleanup = await observeFirebaseUser((account) => {
+      try {
+        cleanup = await observeCloudflareUser((account) => {
           if (!cancelled) setUser(account ?? null);
         });
-      else setUser((await loadSession()) ?? null);
+      } catch {
+        if (!cancelled) setUser(null);
+      }
     }
     void initialize();
     return () => {
@@ -2917,42 +2836,14 @@ export default function MedGuardApp() {
 
   useEffect(() => {
     if (!user) return;
-    if (firebaseEnabled && user.role === 'super_admin' && !user.mfaEnrolled) return;
+    if (user.role === 'super_admin' && !user.mfaEnrolled) return;
     let cancelled = false;
     async function hydrate() {
       try {
         const local = await loadLocalState(user!.uid);
         let resolved = normalizeAppState(local);
         let shared = normalizeCollaborationState((await loadLocalCollaboration()) ?? initialCollaborationState());
-        if (user!.provider === 'local' && !shared.members.some((member) => member.uid === user!.uid)) {
-          shared = {
-            ...shared,
-            members: [
-              ...shared.members,
-              {
-                uid: user!.uid,
-                email: user!.email,
-                displayName: user!.displayName,
-                universityId: user!.universityId ?? 'ADMIN-DEMO',
-                phone: user!.phone,
-                role: user!.role,
-                status: user!.status,
-                tier: user!.tier,
-                platformRoles: user!.platformRoles,
-                mfaEnrolled: user!.mfaEnrolled,
-                createdAt: user!.createdAt ?? new Date().toISOString(),
-              },
-            ],
-            security:
-              user!.role === 'super_admin'
-                ? {
-                    superAdminUid: user!.uid,
-                    updatedAt: new Date().toISOString(),
-                  }
-                : shared.security,
-          };
-        }
-        if (firebaseEnabled && navigator.onLine && user!.status === 'approved') {
+        if (navigator.onLine && user!.status === 'approved') {
           const cloud = await loadCloudState(user!.uid);
           if (cloud) resolved = normalizeAppState(cloud);
           shared = await loadCollaborationState(user!);
@@ -2973,7 +2864,7 @@ export default function MedGuardApp() {
           lastSavedCollaboration.current = shared;
           setHydrated(true);
           setCollaborationHydrated(true);
-          setSyncStatus(firebaseEnabled ? 'error' : 'local');
+          setSyncStatus('error');
         }
       }
     }
@@ -2989,58 +2880,58 @@ export default function MedGuardApp() {
     const qbankId = params.get('join_qbank');
     const token = params.get('token');
     if (!qbankId || !token) return;
-    const bank = collaboration.qbanks.find((item) => item.id === qbankId && item.shareEnabled && item.shareToken === token);
-    if (!bank && firebaseEnabled) {
-      void joinFirebaseQBankByLink(user, qbankId, token)
-        .then(() => loadCollaborationState(user))
-        .then((shared) => {
-          setCollaboration(shared);
-          setState((current) => ({
-            ...current,
-            settings: { ...current.settings, activeQBankId: qbankId },
-          }));
-          window.history.replaceState({}, '', window.location.pathname);
-        })
-        .catch(() => undefined);
-      return;
-    }
-    if (!bank) return;
-    queueMicrotask(() => {
-      if (!canAccessBank(user, bank, collaboration.memberships)) {
-        const createdAt = new Date().toISOString();
-        setCollaboration((current) => ({
-          ...current,
-          memberships: [
-            ...current.memberships,
-            {
-              id: `${qbankId}_${user.uid}`,
-              qbankId,
-              userId: user.uid,
-              userName: user.displayName,
-              role: 'viewer',
-              grantedById: bank.ownerId,
-              grantedByName: bank.ownerName,
-              createdAt,
-              viaLink: true,
-              accessToken: token,
-            },
-          ],
-        }));
-      }
+    const linkKey = `${user.uid}:${qbankId}:${token}`;
+    if (handledInvitationLink.current === linkKey) return;
+    handledInvitationLink.current = linkKey;
+    void previewCloudflareQBankInvitation(qbankId, token)
+      .then((invitation) => setLinkInvitation({ ...invitation, token }))
+      .catch((error) => {
+        setLinkInvitationError(error instanceof Error ? error.message : 'This QBank invitation could not be opened.');
+        handledInvitationLink.current = '';
+      });
+  }, [collaborationHydrated, user]);
+
+  function clearInvitationLink() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('join_qbank');
+    url.searchParams.delete('token');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function declineLinkInvitation() {
+    setLinkInvitation(null);
+    setLinkInvitationError('');
+    clearInvitationLink();
+  }
+
+  async function acceptLinkInvitation() {
+    if (!user || !linkInvitation || linkInvitationBusy) return;
+    setLinkInvitationBusy(true);
+    setLinkInvitationError('');
+    try {
+      await joinCloudflareQBankByLink(user, linkInvitation.qbankId, linkInvitation.token);
+      const shared = await loadCollaborationState(user);
+      setCollaboration(shared);
       setState((current) => ({
         ...current,
-        settings: { ...current.settings, activeQBankId: qbankId },
+        settings: { ...current.settings, activeQBankId: linkInvitation.qbankId },
       }));
-      window.history.replaceState({}, '', window.location.pathname);
-    });
-  }, [collaboration.memberships, collaboration.qbanks, collaborationHydrated, user]);
+      setView('library');
+      setLinkInvitation(null);
+      clearInvitationLink();
+    } catch (error) {
+      setLinkInvitationError(error instanceof Error ? error.message : 'The invitation could not be accepted.');
+    } finally {
+      setLinkInvitationBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!user || !hydrated) return;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
       void saveLocalState(user.uid, state);
-      if (firebaseEnabled && state.settings.autoSync && navigator.onLine) {
+      if (state.settings.autoSync && navigator.onLine && user.status === 'approved') {
         setSyncStatus('syncing');
         void saveCloudState(user.uid, state)
           .then(() => setSyncStatus('synced'))
@@ -3056,9 +2947,10 @@ export default function MedGuardApp() {
     if (!user || !collaborationHydrated || user.status !== 'approved') return;
     if (collaborationSaveTimer.current) window.clearTimeout(collaborationSaveTimer.current);
     collaborationSaveTimer.current = window.setTimeout(() => {
+      collaborationSaveTimer.current = undefined;
       const previous = lastSavedCollaboration.current;
       void saveLocalCollaboration(collaboration);
-      if (firebaseEnabled && navigator.onLine) {
+      if (navigator.onLine) {
         setSyncStatus('syncing');
         void saveCollaborationState(collaboration, previous)
           .then(() => {
@@ -3073,11 +2965,34 @@ export default function MedGuardApp() {
     }, 650);
     return () => {
       if (collaborationSaveTimer.current) window.clearTimeout(collaborationSaveTimer.current);
+      collaborationSaveTimer.current = undefined;
     };
   }, [collaboration, user, collaborationHydrated]);
 
+  useEffect(() => {
+    if (!user || view !== 'review' || !collaborationHydrated || user.status !== 'approved') return;
+    let cancelled = false;
+    const refreshReviews = async () => {
+      if (!navigator.onLine || document.visibilityState !== 'visible' || collaborationSaveTimer.current || syncStatus !== 'synced') return;
+      try {
+        const shared = await loadCollaborationState(user);
+        if (!cancelled) {
+          lastSavedCollaboration.current = shared;
+          setCollaboration(shared);
+        }
+      } catch {
+        // The existing review list remains available while the next refresh retries.
+      }
+    };
+    const interval = window.setInterval(() => void refreshReviews(), 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [collaborationHydrated, syncStatus, user, view]);
+
   async function manualSync() {
-    if (!user || !firebaseEnabled || !navigator.onLine) {
+    if (!user || !navigator.onLine) {
       setSyncStatus(navigator.onLine ? 'local' : 'offline');
       return;
     }
@@ -3095,8 +3010,7 @@ export default function MedGuardApp() {
   }
 
   async function signOut() {
-    if (firebaseEnabled) await signOutFirebase();
-    else await saveSession();
+    await signOutCloudflare();
     setUser(null);
     setHydrated(false);
     setCollaborationHydrated(false);
@@ -3216,7 +3130,7 @@ export default function MedGuardApp() {
     );
   if (!user) return <AuthScreen onAuthenticated={setUser} />;
   if (user.status !== 'approved' || user.suspended) return <PendingApproval user={user} onSignOut={() => void signOut()} />;
-  if (user.role === 'super_admin' && firebaseEnabled && !user.mfaEnrolled) return <MfaEnrollmentGate onComplete={() => setUser({ ...user, mfaEnrolled: true, mfaVerified: true })} onSignOut={() => void signOut()} />;
+  if (user.role === 'super_admin' && !user.mfaEnrolled) return <MfaEnrollmentGate onComplete={() => setUser({ ...user, mfaEnrolled: true, mfaVerified: true })} onSignOut={() => void signOut()} />;
   if (!hydrated || !collaborationHydrated)
     return (
       <main className="grid min-h-screen place-items-center bg-background">
@@ -3251,7 +3165,6 @@ export default function MedGuardApp() {
         initialSection={managedBank.section}
         collaboration={collaboration}
         questions={allQuestions.filter((question) => (question.qbankId ?? 'smle-gs') === managedBank.id)}
-        allQuestions={allQuestions}
         update={(updater) => setCollaboration(updater)}
         onBack={() => setView('library')}
         onDeleted={() => {
@@ -3267,6 +3180,28 @@ export default function MedGuardApp() {
 
   return (
     <main className="min-h-screen bg-background text-foreground">
+      <AlertDialog open={Boolean(linkInvitation)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300">
+              <UserPlus className="size-5" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>QBank invitation</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong className="text-foreground">{linkInvitation?.ownerName}</strong> invited you to join{' '}
+              <strong className="text-foreground">{linkInvitation?.bankName}</strong> as a viewer.
+              {linkInvitation?.description && <span className="mt-2 block">{linkInvitation.description}</span>}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {linkInvitationError && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{linkInvitationError}</p>}
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={declineLinkInvitation} disabled={linkInvitationBusy}>Decline</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void acceptLinkInvitation()} disabled={linkInvitationBusy}>
+              {linkInvitationBusy ? 'Joining…' : 'Accept'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="flex min-h-screen">
         <AppSidebar
           view={view}
@@ -3294,6 +3229,24 @@ export default function MedGuardApp() {
               collaboration={collaboration}
               update={(updater) => setCollaboration(updater)}
               activeQBankId={activeQBankId}
+              organization={{
+                favoriteIds: state.settings.favoriteQBankIds,
+                pinnedIds: state.settings.pinnedQBankIds,
+                categories: state.settings.qbankCategories,
+                categoryByBankId: state.settings.qbankCategoryById,
+              }}
+              updateOrganization={(organization) =>
+                setState((current) => ({
+                  ...current,
+                  settings: {
+                    ...current.settings,
+                    favoriteQBankIds: organization.favoriteIds,
+                    pinnedQBankIds: organization.pinnedIds,
+                    qbankCategories: organization.categories,
+                    qbankCategoryById: organization.categoryByBankId,
+                  },
+                }))
+              }
               onSelect={(id) =>
                 setState((current) => ({
                   ...current,

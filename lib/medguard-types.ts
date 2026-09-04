@@ -27,6 +27,11 @@ export interface Question {
   explanation?: string;
   sourceReference?: string;
   images: NoteImage[];
+  writtenById?: string;
+  writtenByName?: string;
+  reviewedById?: string;
+  reviewedByName?: string;
+  reviewedAt?: string;
 }
 
 export interface HighlightRange {
@@ -106,6 +111,10 @@ export interface AppSettings {
   theme: 'light' | 'dark' | 'system';
   autoSync: boolean;
   activeQBankId: string;
+  favoriteQBankIds: string[];
+  pinnedQBankIds: string[];
+  qbankCategories: string[];
+  qbankCategoryById: Record<string, string>;
 }
 
 export interface AppState {
@@ -125,7 +134,7 @@ export interface AppUser {
   email: string;
   displayName: string;
   isAdmin: boolean;
-  provider: 'firebase' | 'local';
+  provider: 'cloudflare';
   role: UserRole;
   status: AccountStatus;
   universityId?: string;
@@ -147,6 +156,7 @@ export interface QBank {
   createdById: string;
   createdByName: string;
   archived: boolean;
+  essential: boolean;
   ownerId: string;
   ownerName: string;
   visibility: QBankVisibility;
@@ -199,6 +209,8 @@ export interface MemberProfile {
   approvedAt?: string;
   approvedById?: string;
   approvedByName?: string;
+  universityIdRegistered?: boolean;
+  universityIdVerifiedManually?: boolean;
 }
 
 export interface AllowedUniversityId {
@@ -362,7 +374,7 @@ export function initialAppState(): AppState {
     revisions: [],
     questionOverrides: {},
     customQuestions: [],
-    settings: { dailyGoal: 20, theme: 'light', autoSync: true, activeQBankId: 'smle-gs' },
+    settings: { dailyGoal: 20, theme: 'light', autoSync: true, activeQBankId: 'smle-gs', favoriteQBankIds: [], pinnedQBankIds: [], qbankCategories: [], qbankCategoryById: {} },
   };
 }
 
@@ -377,6 +389,7 @@ export function initialCollaborationState(): CollaborationState {
       createdById: 'system',
       createdByName: 'Qraft',
       archived: false,
+      essential: true,
       ownerId: 'system',
       ownerName: 'Qraft',
       visibility: 'public',
@@ -409,6 +422,7 @@ export function normalizeCollaborationState(input?: Partial<CollaborationState>)
     ownerName: bank.ownerName ?? bank.createdByName,
     visibility: bank.visibility ?? 'public',
     shareEnabled: bank.shareEnabled ?? false,
+    essential: bank.essential ?? bank.id === 'smle-gs',
     reviewerIds: bank.reviewerIds ?? [],
     viewerIds: bank.viewerIds ?? [],
   }));
@@ -455,10 +469,16 @@ export function canAccessBank(user: AppUser, bank: QBank, memberships: QBankMemb
   return user.role === 'super_admin' || bank.visibility === 'public' || Boolean(bankRoleFor(user, bank, memberships));
 }
 
+export function canManageBank(user: AppUser, bank: QBank): boolean {
+  if (bank.essential || bank.id === 'smle-gs') return user.role === 'super_admin';
+  return bank.ownerId === user.uid;
+}
+
 export function canReviewBank(user: AppUser, bank: QBank, memberships: QBankMembership[]): boolean {
+  if (user.role === 'super_admin' || user.role === 'reviewer' || user.platformRoles.includes('reviewer')) return true;
   const bankRole = bankRoleFor(user, bank, memberships);
   if (bankRole === 'owner' || bankRole === 'reviewer') return true;
-  return bank.visibility === 'public' && (user.role === 'super_admin' || user.platformRoles.includes('reviewer'));
+  return false;
 }
 
 export function normalizeAppState(input?: Partial<AppState>): AppState {

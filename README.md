@@ -22,7 +22,7 @@ are corrected without changing the source meaning.
 - A single MFA-protected Superadmin, synchronized role applications, and a
   least-privilege administration workspace.
 - Printable per-QBank PDF export with answers and attributed shared explanations.
-- IndexedDB offline support, Firebase synchronization, and an iPad-ready PWA.
+- IndexedDB offline cache, Cloudflare D1/R2 synchronization, and an iPad-ready PWA.
 
 ## Permission model
 
@@ -39,59 +39,47 @@ are corrected without changing the source meaning.
   platform roles.
 - `pending` or `rejected` accounts cannot read QBank data or save progress.
 
-The interface is not the security boundary. `firestore.rules` and
-`storage.rules` independently enforce approval, roles, single-use student IDs,
-proposal review, note attribution, note version increments, and image limits.
+The interface is not the security boundary. The authenticated Cloudflare Worker
+API independently enforces approval, roles, single-use student IDs, Essential
+QBank ownership, proposal review, note attribution/versioning, and image limits.
 
 ## Run locally
 
-```bash
-npm install
-npm run dev
-```
+1. Copy `.dev.vars.example` to `.dev.vars` and replace both sample values. Use
+   the intended Superadmin email and a long, random one-time setup code.
+2. Install dependencies and initialize the local D1 database:
 
-Open `http://localhost:3000`. The root-admin demo stores its personal and shared
-workspace state in IndexedDB on the current device. It is intended for product
-testing only.
+   ```bash
+   npm install
+   npm run db:migrate:local
+   npm run dev
+   ```
 
-## Connect Firebase
+3. Open `http://localhost:3000` and create the first Superadmin account with the
+   configured email and setup code. The former root-admin demo entry no longer
+   exists.
+4. Enroll the Superadmin in authenticator-app MFA, optionally import known university
+   IDs, then approve student registrations from the administration workspace.
 
-1. Create a Firebase project and Web app.
-2. Upgrade Firebase Authentication with Identity Platform, enable
-   **Email/Password**, email verification, and **TOTP MFA**.
-3. Create Firestore and Cloud Storage.
-4. Copy `.env.example` to `.env.local`, fill the Firebase values, and set
-   `NEXT_PUBLIC_ADMIN_EMAIL` to the owner email.
-5. Create the owner in Firebase Authentication. Copy its `uid`, then create
-   `profiles/{uid}` in Firestore with these fields:
-   - `uid`: the same Authentication UID
-   - `email`: owner email
-   - `displayName`: owner name
-   - `universityId`: `ADMIN`
-   - `role`: `super_admin`
-   - `tier`: `pro`
-   - `platformRoles`: `[]`
-   - `status`: `approved`
-   - `createdAt`: an ISO timestamp
-6. Create `system/security` with `superAdminUid` set to that exact UID and
-   `updatedAt` set to an ISO timestamp. Rules prevent changing the root UID or
-   creating a second Superadmin.
-7. Create the public `qbanks/smle-gs` metadata document using the fields in
-   `initialCollaborationState()`.
-8. Deploy `firestore.rules` and `storage.rules`.
-9. Sign in as the Superadmin, verify the email, complete authenticator-app MFA,
-   import the permitted university IDs, then students
-   can submit registration requests. Each student ID can be claimed only once.
+Progress is cached locally for offline resilience, while authenticated shared
+data is stored in D1 and uploaded images are stored in R2.
 
-Do not put Firebase service-account credentials in this project. Firebase Web
-configuration values are public identifiers; authorization is enforced by the
-included server-side rules.
+## Configure Cloudflare
+
+1. Let the Cloudflare deployment flow provision the configured D1 database and
+   R2 bucket, or create them beforehand using the names `qraft-qbank` and
+   `qraft-qbank-media`.
+2. Add `ROOT_ADMIN_EMAIL` and `ROOT_ADMIN_SETUP_TOKEN` as Worker secrets. Never
+   commit their real values.
+3. Apply the `drizzle/` migrations to the remote D1 database.
+4. Run `npm run build` and `npm run cloudflare:check` before deployment.
 
 ## Validation
 
 ```bash
 npm test
 npm run lint
+npx tsc --noEmit
 npm run build
 ```
 

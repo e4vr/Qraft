@@ -69,6 +69,7 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
   const [idText, setIdText] = useState('');
   const [blockText, setBlockText] = useState<Record<BlockKind, string>>({ phones: '', universityIds: '', emails: '' });
   const pendingMembers = collaboration.members.filter((item) => item.status === 'pending');
+  const pendingManualIdChecks = pendingMembers.filter((item) => item.role !== 'super_admin' && !item.universityIdRegistered);
   const reviewable = collaboration.proposals.filter((proposal) => proposal.status === 'pending' && collaboration.qbanks.some((bank) => bank.id === proposal.qbankId && canReviewBank(user, bank, collaboration.memberships)));
   const roleRequests = collaboration.roleApplications.filter((item) => item.status === 'pending');
 
@@ -84,6 +85,7 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
               approvedAt: status === 'approved' ? reviewedAt : item.approvedAt,
               approvedById: user.uid,
               approvedByName: user.displayName,
+              universityIdVerifiedManually: status === 'approved' && !item.universityIdRegistered ? true : item.universityIdVerifiedManually,
             }
           : item,
       ),
@@ -112,7 +114,17 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
     const createdAt = nowIso();
     update((current) => {
       const existing = new Set(current.allowedUniversityIds.map((item) => item.id));
-      const added = values.filter((id) => !existing.has(id)).map((id) => ({ id, addedAt: createdAt, addedById: user.uid }));
+      const added = values.filter((id) => !existing.has(id)).map((id) => {
+        const claimant = current.members.find((member) => normalizeUniversityId(member.universityId) === normalizeUniversityId(id));
+        return {
+          id,
+          addedAt: createdAt,
+          addedById: user.uid,
+          claimedById: claimant?.uid ?? null,
+          claimedByName: claimant?.displayName ?? null,
+          claimedAt: claimant?.createdAt ?? null,
+        };
+      });
       return {
         ...current,
         allowedUniversityIds: [...added, ...current.allowedUniversityIds],
@@ -210,9 +222,10 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
           ))}
         </div>
         {tab === 'overview' && (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             {[
               ['Pending registrations', pendingMembers.length],
+              ['IDs needing manual check', pendingManualIdChecks.length],
               ['Role requests', roleRequests.length],
               ['Visible QBanks', collaboration.qbanks.length],
               ['Edits to review', reviewable.length],
@@ -261,7 +274,18 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
                           </span>
                         </td>
                         <td className="px-5 py-4 font-mono text-xs">{member.phone || '—'}</td>
-                        <td className="px-5 py-4 font-mono text-xs font-semibold">{member.universityId}</td>
+                        <td className="px-5 py-4">
+                          <strong className="block font-mono text-xs">{member.universityId}</strong>
+                          {member.role === 'super_admin' ? (
+                            <span className="mt-1 inline-flex rounded-full bg-primary/10 px-2 py-1 text-[10px] font-bold text-primary">SYSTEM ACCOUNT</span>
+                          ) : member.universityIdRegistered ? (
+                            <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">REGISTERED IN SYSTEM</span>
+                          ) : member.universityIdVerifiedManually ? (
+                            <span className="mt-1 inline-flex rounded-full bg-sky-50 px-2 py-1 text-[10px] font-bold text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">MANUALLY VERIFIED</span>
+                          ) : (
+                            <span className="mt-1 inline-flex max-w-[190px] rounded-lg bg-amber-50 px-2 py-1 text-[10px] font-bold leading-4 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">NOT REGISTERED · VERIFY MANUALLY</span>
+                          )}
+                        </td>
                         <td className="px-5 py-4">
                           <span className={cx('inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold uppercase', member.suspended ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300' : member.status === 'pending' ? 'bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200' : member.status === 'approved' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'bg-muted text-muted-foreground')}>
                             {member.suspended ? 'Blocked' : member.status}
@@ -286,7 +310,7 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
                                 </button>
                                 <button onClick={() => reviewMember(member.uid, 'approved')} className="h-9 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground">
                                   <UserCheck className="mr-1 inline size-4" />
-                                  Approve
+                                  {member.universityIdRegistered ? 'Approve' : 'Verify & approve'}
                                 </button>
                               </>
                             )}
@@ -448,7 +472,7 @@ export function PendingApproval({ user, onSignOut }: { user: AppUser; onSignOut:
         <div className="mx-auto grid size-16 place-items-center rounded-2xl bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">{blocked || rejected ? <UserRoundX className="size-7" /> : <Clock3 className="size-7" />}</div>
         <p className="mt-6 text-xs font-bold uppercase tracking-widest text-primary">Qraft membership</p>
         <h1 className="mt-2 text-2xl font-bold">{blocked ? 'Account access blocked' : rejected ? 'Registration not approved' : 'Waiting for approval'}</h1>
-        <p className="mx-auto mt-3 text-sm leading-6 text-muted-foreground">{blocked ? 'An Access Manager or the Superadmin must restore this account.' : rejected ? 'Contact your cohort Access Manager if you believe this is a mistake.' : 'Your university ID is reserved until an Access Manager reviews the request.'}</p>
+        <p className="mx-auto mt-3 text-sm leading-6 text-muted-foreground">{blocked ? 'An Access Manager or the Superadmin must restore this account.' : rejected ? 'Contact your cohort Access Manager if you believe this is a mistake.' : 'Your registration details and university ID are waiting for manual review.'}</p>
         <button onClick={onSignOut} className="mt-6 h-11 w-full rounded-xl border text-sm font-bold">
           Sign out
         </button>

@@ -1,4 +1,4 @@
-import { initialCollaborationState, normalizeCollaborationState, normalizeEmail, normalizePhone, normalizeUniversityId, type AppState, type AppUser, type CollaborationState } from './medguard-types';
+import { normalizeCollaborationState, type AppState, type CollaborationState } from './medguard-types';
 
 const DATABASE = 'medguard-qbank';
 const STORE = 'key-value';
@@ -34,99 +34,6 @@ async function writeValue<T>(key: string, value: T): Promise<void> {
     transaction.oncomplete = () => { db.close(); resolve(); };
     transaction.onerror = () => reject(transaction.error);
   });
-}
-
-async function sha256(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-interface LocalAccount extends AppUser { passwordHash: string }
-
-function normalizeUser(user: AppUser): AppUser {
-  const role = user.role ?? (user.isAdmin ? 'super_admin' : 'student');
-  const platformRoles: AppUser['platformRoles'] = user.platformRoles ?? (role === 'reviewer' ? ['reviewer'] : role === 'access_manager' || role === 'admin' ? ['access_manager'] : []);
-  return { ...user, role, status: user.status ?? 'approved', tier: user.tier ?? (role === 'super_admin' || role === 'admin' || role === 'access_manager' ? 'pro' : 'lite'), platformRoles, isAdmin: role === 'super_admin' || platformRoles.length > 0 };
-}
-
-export async function loadSession(): Promise<AppUser | undefined> {
-  const user = await readValue<AppUser>('active-session');
-  return user ? normalizeUser(user) : undefined;
-}
-
-export async function saveSession(user?: AppUser): Promise<void> {
-  await writeValue('active-session', user ?? null);
-}
-
-export async function createLocalAccount(name: string, email: string, password: string, universityId: string, phone: string): Promise<AppUser> {
-  const normalizedEmail = normalizeEmail(email);
-  const normalizedUniversityId = normalizeUniversityId(universityId);
-  const normalizedPhone = normalizePhone(phone);
-  const existing = await readValue<LocalAccount>(`account:${normalizedEmail}`);
-  if (existing) throw new Error('An account with this email already exists.');
-  const accountCount = (await readValue<number>('local-account-count')) ?? 0;
-  const shared = (await loadLocalCollaboration()) ?? initialCollaborationState();
-  if (shared.blockedAccess.emails.includes(normalizedEmail) || shared.blockedAccess.universityIds.includes(normalizedUniversityId) || shared.blockedAccess.phones.includes(normalizedPhone)) {
-    throw new Error('This email, university ID, or mobile number is blocked.');
-  }
-  const allowed = shared.allowedUniversityIds.find((item) => item.id === normalizedUniversityId);
-  if (!allowed || allowed.claimedById) throw new Error('This university ID is not eligible or has already been used.');
-  const now = new Date().toISOString();
-  const user: LocalAccount = {
-    uid: `local-${crypto.randomUUID()}`,
-    email: normalizedEmail,
-    displayName: name.trim() || normalizedEmail.split('@')[0],
-    isAdmin: false,
-    provider: 'local',
-    role: 'student',
-    status: 'pending',
-    universityId: normalizedUniversityId,
-    phone: normalizedPhone,
-    createdAt: now,
-    tier: 'lite',
-    platformRoles: [],
-    passwordHash: await sha256(password),
-  };
-  await writeValue(`account:${normalizedEmail}`, user);
-  await writeValue('local-account-count', accountCount + 1);
-  const profile = {
-    uid: user.uid,
-    email: user.email,
-    displayName: user.displayName,
-    universityId: normalizedUniversityId,
-    phone: user.phone,
-    role: user.role,
-    status: user.status,
-    createdAt: now,
-    tier: user.tier,
-    platformRoles: user.platformRoles,
-  };
-  await saveLocalCollaboration({
-    ...shared,
-    members: [...shared.members, profile],
-    allowedUniversityIds: shared.allowedUniversityIds.map((item) => item.id === normalizedUniversityId ? { ...item, claimedById: user.uid, claimedByName: user.displayName, claimedAt: now } : item),
-  });
-  const { passwordHash: _, ...safeUser } = user;
-  await saveSession(safeUser);
-  return normalizeUser(safeUser);
-}
-
-export async function signInLocal(email: string, password: string): Promise<AppUser> {
-  const normalizedEmail = email.trim().toLowerCase();
-  const account = await readValue<LocalAccount>(`account:${normalizedEmail}`);
-  if (!account || account.passwordHash !== (await sha256(password))) {
-    throw new Error('Incorrect email or password.');
-  }
-  const { passwordHash: _, ...safeUser } = account;
-  const shared = await loadLocalCollaboration();
-  if (shared?.blockedAccess.emails.includes(normalizedEmail) || shared?.blockedAccess.universityIds.includes(normalizeUniversityId(account.universityId ?? '')) || shared?.blockedAccess.phones.includes(normalizePhone(account.phone ?? ''))) {
-    throw new Error('This account is blocked from signing in.');
-  }
-  const member = shared?.members.find((item) => item.uid === safeUser.uid);
-  const current = member ? { ...safeUser, role: member.role, status: member.status, universityId: member.universityId, phone: member.phone ?? safeUser.phone, tier: member.tier, platformRoles: member.platformRoles, suspended: member.suspended, mfaEnrolled: member.mfaEnrolled, isAdmin: member.role === 'super_admin' || member.platformRoles.length > 0 } : safeUser;
-  await saveSession(current);
-  return normalizeUser(current);
 }
 
 export async function loadLocalState(uid: string): Promise<AppState | undefined> {

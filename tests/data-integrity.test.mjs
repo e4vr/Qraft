@@ -41,14 +41,16 @@ test('source pages remain in order and extraction artifacts are removed', () => 
   assert.doesNotMatch(combined, /\b(?:aOacks?|admijed|soO|unevenRul|Curejage|intermiOent|ajending|shaO)\b/);
 });
 
-test('PWA shell and Firebase access rules are present', async () => {
+test('PWA shell and Cloudflare persistence configuration are present', async () => {
   const manifest = JSON.parse(await readFile(new URL('../public/manifest.webmanifest', import.meta.url), 'utf8'));
   const serviceWorker = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
-  const firestoreRules = await readFile(new URL('../firestore.rules', import.meta.url), 'utf8');
-  const storageRules = await readFile(new URL('../storage.rules', import.meta.url), 'utf8');
+  const wrangler = await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
+  const schema = await readFile(new URL('../db/schema.ts', import.meta.url), 'utf8');
   assert.equal(manifest.display, 'standalone');
   assert.equal(manifest.icons.length, 2);
   assert.match(serviceWorker, /CACHE_NAME/);
-  assert.match(firestoreRules, /request\.auth\.uid == userId/);
-  assert.match(storageRules, /request\.auth\.uid == userId/);
+  assert.match(wrangler, /"binding": "DB"/);
+  assert.match(wrangler, /"binding": "MEDIA"/);
+  assert.match(schema, /sqliteTable\('profiles'/);
+  assert.match(schema, /sqliteTable\('media'/);
 });

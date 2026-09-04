@@ -5,7 +5,7 @@
 import { Check, Clock3, FileCheck2, History, Menu, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import questionData from '@/data/questions.json';
-import { reserveQuestionIds } from '@/lib/firebase-client';
+import { reserveQuestionIds } from '@/lib/cloudflare-client';
 import { canReviewBank, optionLabel, type AppUser, type CollaborationState, type Question, type QuestionProposal } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
 
@@ -43,8 +43,8 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
   const [error, setError] = useState('');
   const reviewableBanks = useMemo(() => collaboration.qbanks.filter((bank) => canReviewBank(user, bank, collaboration.memberships)), [collaboration.memberships, collaboration.qbanks, user]);
   const bankIds = useMemo(() => new Set(reviewableBanks.map((bank) => bank.id)), [reviewableBanks]);
-  const pending = collaboration.proposals.filter((proposal) => proposal.status === 'pending' && bankIds.has(proposal.qbankId));
-  const reviewed = collaboration.proposals.filter((proposal) => proposal.status !== 'pending' && bankIds.has(proposal.qbankId)).sort((a, b) => (b.reviewedAt ?? '').localeCompare(a.reviewedAt ?? ''));
+  const pending = collaboration.proposals.filter((proposal) => proposal.status === 'pending' && proposal.proposedById !== user.uid && bankIds.has(proposal.qbankId));
+  const reviewed = collaboration.proposals.filter((proposal) => proposal.status !== 'pending' && proposal.reviewedById === user.uid && bankIds.has(proposal.qbankId)).sort((a, b) => (b.reviewedAt ?? '').localeCompare(a.reviewedAt ?? ''));
   const visible = section === 'pending' ? pending : reviewed;
 
   async function reviewProposal(proposal: QuestionProposal, status: 'approved' | 'rejected') {
@@ -65,6 +65,7 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
             )[0]
           : undefined;
       const assignedQuestionInternalId = status === 'approved' && proposal.type === 'new_question' ? proposal.questionId ?? `shared-${crypto.randomUUID()}` : proposal.questionId;
+      const reviewedAt = new Date().toISOString();
       update((current) => {
         const bank = current.qbanks.find((item) => item.id === proposal.qbankId);
         if (!bank || !canReviewBank(user, bank, current.memberships)) return current;
@@ -96,10 +97,14 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
             revision: (existing?.revision ?? 0) + 1,
             isCustom: true,
             images: proposal.payload.images ?? existing?.images ?? [],
+            writtenById: proposal.type === 'new_question' ? proposal.proposedById : (existing?.writtenById ?? 'system'),
+            writtenByName: proposal.type === 'new_question' ? proposal.proposedByName : (existing?.writtenByName ?? 'Qraft'),
+            reviewedById: user.uid,
+            reviewedByName: user.displayName,
+            reviewedAt,
           };
           approvedQuestions = [...approvedQuestions.filter((item) => item.id !== question.id), question];
         }
-        const reviewedAt = new Date().toISOString();
         return {
           ...current,
           approvedQuestions,

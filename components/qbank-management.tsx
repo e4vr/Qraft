@@ -4,8 +4,8 @@
 
 import { ArrowLeft, Check, Clipboard, Copy, FileJson, ImagePlus, Link2, Pencil, Plus, RefreshCw, Save, Search, Settings, Trash2, Unlink, Upload, Users, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { deleteQBankImages, firebaseEnabled, reserveQuestionIds, uploadQuestionImage } from '@/lib/firebase-client';
-import { optionLabel, type AppUser, type CollaborationState, type NoteImage, type QBank, type Question, type QBankVisibility } from '@/lib/medguard-types';
+import { deleteQBankImages, uploadQuestionImage } from '@/lib/cloudflare-client';
+import { canManageBank, optionLabel, type AppUser, type CollaborationState, type NoteImage, type QBank, type Question, type QuestionProposal, type QBankVisibility } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
 
 type Section = 'settings' | 'questions' | 'import';
@@ -34,15 +34,6 @@ const emptyDraft = (): QuestionDraft => ({
   sourceReference: '',
   images: [],
 });
-
-function imageFromFile(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => (typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Unable to read image.')));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
 
 function buildQraftPrompt(kind: QuestionKind, length: QuestionLength, countMode: CountMode, count: number, optionCount: number) {
   const kindText = kind === 'clinical' ? 'clinical case-based questions with a realistic vignette' : 'direct knowledge questions without a clinical vignette';
@@ -97,7 +88,6 @@ export function QBankManagement({
   initialSection,
   collaboration,
   questions,
-  allQuestions,
   update,
   onBack,
   onDeleted,
@@ -107,7 +97,6 @@ export function QBankManagement({
   initialSection: Section;
   collaboration: CollaborationState;
   questions: Question[];
-  allQuestions: Question[];
   update: (updater: (current: CollaborationState) => CollaborationState) => void;
   onBack: () => void;
   onDeleted: () => void;
@@ -118,6 +107,7 @@ export function QBankManagement({
   const [shortName, setShortName] = useState(bank?.shortName ?? '');
   const [description, setDescription] = useState(bank?.description ?? '');
   const [visibility, setVisibility] = useState<QBankVisibility>(bank?.visibility ?? 'private');
+  const [essential, setEssential] = useState(bank?.essential ?? false);
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<Question | 'new'>();
   const [draft, setDraft] = useState<QuestionDraft>(emptyDraft);
@@ -135,12 +125,12 @@ export function QBankManagement({
   const members = collaboration.memberships.filter((item) => item.qbankId === bankId);
   const filteredQuestions = useMemo(() => questions.filter((question) => `${question.questionId} ${question.stem} ${question.topic}`.toLowerCase().includes(search.trim().toLowerCase())), [questions, search]);
 
-  if (!bank || bank.ownerId !== user.uid)
+  if (!bank || !canManageBank(user, bank))
     return (
       <main className="grid min-h-screen place-items-center p-6">
         <div className="text-center">
           <h1 className="text-xl font-bold">QBank management is unavailable</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Only the Bank Owner can manage this workspace.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Only the Bank Owner, or Superadmin for an Essential QBank, can manage this workspace.</p>
           <button onClick={onBack} className="mt-5 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground">
             Return to My QBanks
           </button>
@@ -165,6 +155,7 @@ export function QBankManagement({
       shortName: (shortName.trim() || name.trim()).slice(0, 18).toUpperCase(),
       description: description.trim(),
       visibility,
+      essential: user.role === 'super_admin' ? essential : current.essential,
     }));
     setMessage('QBank properties saved.');
   }
@@ -258,7 +249,7 @@ export function QBankManagement({
       imageFiles.slice(0, 5).map(async (file) => {
         if (!file.type.startsWith('image/')) throw new Error('Only image files are supported.');
         if (file.size > 10 * 1024 * 1024) throw new Error('Each image must be smaller than 10 MB.');
-        const url = firebaseEnabled ? await uploadQuestionImage(user.uid, file, bankId, questionId) : await imageFromFile(file);
+        const url = await uploadQuestionImage(user.uid, file, bankId, questionId);
         return { id: crypto.randomUUID(), url, name: file.name, caption: '' };
       }),
     );
@@ -271,63 +262,67 @@ export function QBankManagement({
     setError('');
     try {
       const existing = editing === 'new' ? undefined : editing;
-      const questionId =
-        existing?.questionId ??
-        (
-          await reserveQuestionIds(
-            1,
-            bankId,
-            user,
-            allQuestions.map((item) => item.questionId),
-          )
-        )[0];
-      const uploaded = await uploadImages(questionId);
-      const updatedAt = new Date().toISOString();
-      update((current) => {
-        const bankQuestions = allQuestions.filter((item) => (item.qbankId ?? 'smle-gs') === bankId);
-        const question: Question = {
-          id: existing?.id ?? `shared-${crypto.randomUUID()}`,
-          questionId,
-          qbankId: bankId,
-          number: existing?.number ?? Math.max(0, ...bankQuestions.map((item) => item.number)) + 1,
-          stem: draft.stem.trim(),
-          options: draft.options.map((item) => item.trim()),
-          answer: draft.answer,
-          answerLetter: optionLabel(draft.answer),
-          specialty: draft.specialty.trim() || 'General',
-          topic: draft.topic.trim() || 'General',
-          explanation: draft.explanation.trim(),
-          sourceReference: draft.sourceReference.trim(),
-          sourceFile: draft.sourceReference.trim(),
-          sourcePage: existing?.sourcePage ?? 0,
-          revision: (existing?.revision ?? 0) + 1,
-          isCustom: true,
-          images: [...draft.images, ...uploaded],
-        };
-        return {
-          ...current,
-          approvedQuestions: [...current.approvedQuestions.filter((item) => item.id !== question.id), question],
-          auditLog: [
-            {
-              id: crypto.randomUUID(),
-              action: existing ? 'owner_question_edited' : 'owner_question_added',
-              entityType: 'question',
-              entityId: question.id,
-              actorId: user.uid,
-              actorName: user.displayName,
-              createdAt: updatedAt,
-              detail: `${existing ? 'Edited' : 'Added'} Question ID ${question.questionId} in ${bankName}.`,
-            },
-            ...current.auditLog,
-          ],
-        };
-      });
+      const proposalId = crypto.randomUUID();
+      const uploaded = await uploadImages(existing?.questionId ?? `proposal-${proposalId}`);
+      const proposedAt = new Date().toISOString();
+      const payload = {
+        stem: draft.stem.trim(),
+        options: draft.options.map((item) => item.trim()),
+        answer: draft.answer,
+        specialty: draft.specialty.trim() || 'General',
+        topic: draft.topic.trim() || 'General',
+        explanation: draft.explanation.trim(),
+        sourceReference: draft.sourceReference.trim(),
+        images: [...draft.images, ...uploaded],
+      };
+      update((current) => ({
+        ...current,
+        proposals: [
+          {
+            id: proposalId,
+            qbankId: bankId,
+            type: existing ? 'question_edit' : 'new_question',
+            editKinds: ['question_text', 'options', 'correct_answer', 'explanation', 'source'],
+            questionId: existing?.id,
+            currentSnapshot: existing ? {
+              stem: existing.stem,
+              options: existing.options,
+              answer: existing.answer,
+              specialty: existing.specialty,
+              topic: existing.topic,
+              explanation: existing.explanation ?? '',
+              sourceReference: existing.sourceReference ?? existing.sourceFile,
+              images: existing.images ?? [],
+            } : undefined,
+            payload,
+            rationale: existing ? 'Question update submitted from bank management.' : 'New question submitted from bank management.',
+            status: 'pending',
+            proposedById: user.uid,
+            proposedByName: user.displayName,
+            proposedAt,
+          },
+          ...current.proposals,
+        ],
+        auditLog: [
+          {
+            id: crypto.randomUUID(),
+            action: existing ? 'question_edit_proposed' : 'new_question_proposed',
+            entityType: 'question',
+            entityId: existing?.id ?? proposalId,
+            actorId: user.uid,
+            actorName: user.displayName,
+            createdAt: proposedAt,
+            detail: `${existing ? 'Submitted an edit for' : 'Submitted'} a question in ${bankName} for review.`,
+          },
+          ...current.auditLog,
+        ],
+      }));
       setEditing(undefined);
       setDraft(emptyDraft());
       setImageFiles([]);
-      setMessage(existing ? 'Question updated.' : `Question ${questionId} added.`);
+      setMessage(existing ? 'Question update submitted for review.' : 'Question submitted for review.');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to save the question.');
+      setError(caught instanceof Error ? caught.message : 'Unable to submit the question for review.');
     } finally {
       setBusy(false);
     }
@@ -344,44 +339,37 @@ export function QBankManagement({
       if (!rows?.length) throw new Error('The JSON file does not contain a questions array.');
       if (rows.length > 200) throw new Error('A single import can contain at most 200 questions.');
       const drafts = rows.map(normalizeImportedQuestion);
-      const ids = await reserveQuestionIds(
-        drafts.length,
-        bankId,
-        user,
-        allQuestions.map((item) => item.questionId),
-      );
-      const startNumber = Math.max(0, ...questions.map((item) => item.number));
-      const imported = drafts.map<Question>((item, index) => ({
-        id: `shared-${crypto.randomUUID()}`,
-        questionId: ids[index],
+      const proposedAt = new Date().toISOString();
+      const proposals: QuestionProposal[] = drafts.map((payload) => ({
+        id: crypto.randomUUID(),
         qbankId: bankId,
-        number: startNumber + index + 1,
-        ...item,
-        answerLetter: optionLabel(item.answer),
-        sourcePage: 0,
-        sourceFile: item.sourceReference,
-        revision: 1,
-        isCustom: true,
+        type: 'new_question' as const,
+        editKinds: ['question_text', 'options', 'correct_answer', 'explanation', 'source'],
+        payload,
+        rationale: 'Imported from Qraft JSON.',
+        status: 'pending' as const,
+        proposedById: user.uid,
+        proposedByName: user.displayName,
+        proposedAt,
       }));
-      const createdAt = new Date().toISOString();
       update((current) => ({
         ...current,
-        approvedQuestions: [...current.approvedQuestions, ...imported],
+        proposals: [...proposals, ...current.proposals],
         auditLog: [
           {
             id: crypto.randomUUID(),
-            action: 'questions_json_imported',
+            action: 'questions_json_submitted',
             entityType: 'question',
             entityId: bankId,
             actorId: user.uid,
             actorName: user.displayName,
-            createdAt,
-            detail: `Imported ${imported.length} questions into ${bankName}. IDs ${ids[0]}–${ids.at(-1)}.`,
+            createdAt: proposedAt,
+            detail: `Submitted ${proposals.length} imported questions from ${bankName} for review.`,
           },
           ...current.auditLog,
         ],
       }));
-      setMessage(`${imported.length} questions imported successfully.`);
+      setMessage(`${proposals.length} questions submitted for review.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to import this JSON file.');
     } finally {
@@ -402,7 +390,7 @@ export function QBankManagement({
             <p className="text-xs font-bold uppercase tracking-wider text-primary">QBank management</p>
             <h1 className="truncate text-lg font-bold">{bank.name}</h1>
           </div>
-          <span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">OWNER</span>
+          <span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">{bank.essential ? 'ESSENTIAL · SUPERADMIN' : 'OWNER'}</span>
         </div>
       </header>
       <div className="mx-auto max-w-[1180px] p-4 sm:p-7">
@@ -411,7 +399,7 @@ export function QBankManagement({
             [
               ['settings', Settings, 'Properties & access'],
               ['questions', Clipboard, 'Questions'],
-              ['import', FileJson, 'JSON import'],
+              ['import', FileJson, 'Use Ai to import'],
             ] as const
           ).map(([id, Icon, label]) => (
             <button key={id} onClick={() => setSection(id)} className={cn('inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border px-4 text-sm font-bold', section === id && 'border-primary bg-primary text-primary-foreground')}>
@@ -456,6 +444,15 @@ export function QBankManagement({
                     <option value="public">Public</option>
                   </select>
                 </label>
+                {user.role === 'super_admin' && (
+                  <label aria-label="Essential QBank" className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-500/25 dark:bg-amber-500/10">
+                    <input type="checkbox" checked={essential} onChange={(event) => setEssential(event.target.checked)} className="mt-1 size-4 accent-amber-600" />
+                    <span>
+                      <span className="block text-sm font-bold">Essential QBank</span>
+                      <span className="mt-1 block text-xs leading-5 text-muted-foreground">Only Superadmin can edit or delete this bank. Everyone else submits proposals for reviewer approval.</span>
+                    </span>
+                  </label>
+                )}
                 <button type="submit" className="inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-bold text-primary-foreground">
                   <Save className="size-4" />
                   Save properties
@@ -565,6 +562,11 @@ export function QBankManagement({
                           <span className="text-xs text-muted-foreground">
                             Revision {question.revision} · {question.images?.length ?? 0} images
                           </span>
+                          {(question.writtenByName || question.reviewedByName) && (
+                            <span className="block text-xs text-muted-foreground">
+                              Written by {question.writtenByName ?? 'Qraft'} · Reviewed by {question.reviewedByName ?? 'Pending'}
+                            </span>
+                          )}
                         </div>
                         <span className="truncate text-sm text-muted-foreground">{question.topic}</span>
                         <button onClick={() => openQuestion(question)} className="grid size-9 place-items-center rounded-lg border" aria-label={`Edit Question ID ${question.questionId}`}>
@@ -655,7 +657,7 @@ export function QBankManagement({
               <textarea readOnly value={prompt} className="mt-4 min-h-[390px] w-full rounded-xl border bg-muted/25 p-4 font-mono text-xs leading-6" />
               <label className={cn('mt-4 flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-5 text-center', busy && 'pointer-events-none opacity-50')}>
                 <Upload className="size-6 text-primary" />
-                <strong className="mt-2 text-sm">Upload Qraft JSON</strong>
+                <strong className="mt-2 text-sm">Upload file here ( Json/Text )</strong>
                 <span className="mt-1 text-xs text-muted-foreground">Maximum 200 questions per file</span>
                 <input type="file" accept="application/json,.json" className="sr-only" onChange={(event) => void importJson(event.target.files?.[0])} />
               </label>
@@ -802,7 +804,7 @@ export function QBankManagement({
               </button>
               <button type="submit" disabled={busy} className="inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-bold text-primary-foreground disabled:opacity-50">
                 {busy ? <RefreshCw className="size-4 animate-spin" /> : <Save className="size-4" />}
-                Save question
+                Submit for review
               </button>
             </div>
           </form>

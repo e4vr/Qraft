@@ -4,25 +4,38 @@ import test from 'node:test';
 
 const root = new URL('../', import.meta.url);
 
-test('collaborative governance is enforced in Firestore rules', async () => {
-  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
-  assert.match(rules, /profile\(\)\.status == 'approved'/);
-  assert.match(rules, /request\.auth\.uid == rootUid\(\)/);
-  assert.match(rules, /profile\(\)\.platformRoles\.hasAny\(\['access_manager'\]\)/);
-  assert.match(rules, /profile\(\)\.platformRoles\.hasAny\(\['reviewer'\]\)/);
-  assert.match(rules, /match \/questionProposals\/\{proposalId\}/);
-  assert.match(rules, /allow update: if canReviewBank\(resource\.data\.qbankId\)/);
-  assert.match(rules, /request\.resource\.data\.version == resource\.data\.version \+ 1/);
-  assert.match(rules, /request\.resource\.data\.history\.size\(\) == resource\.data\.history\.size\(\) \+ 1/);
+test('collaborative governance is enforced by the Cloudflare API', async () => {
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
+  assert.match(server, /user\.status !== 'approved'/);
+  assert.match(server, /user\.role === 'super_admin'/);
+  assert.match(server, /platformRoles\.includes\('access_manager'\)/);
+  assert.match(server, /canReviewBank\(user, existing, state\.memberships\)/);
+  assert.match(server, /proposalChangeAllowed/);
+  assert.match(server, /value\.version === current\.version \+ 1/);
+  assert.match(server, /value\.history\.length === current\.history\.length \+ 1/);
 });
 
-test('student IDs are single-claim and registration starts pending', async () => {
-  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
-  const client = await readFile(new URL('lib/firebase-client.ts', root), 'utf8');
-  assert.match(rules, /resource\.data\.claimedById == null/);
-  assert.match(rules, /request\.resource\.data\.claimedById == request\.auth\.uid/);
-  assert.match(client, /if \(!allowed\.exists\(\) \|\| allowed\.data\(\)\.claimedById\)/);
-  assert.match(client, /status: 'pending'/);
+test('any university ID can request registration while IDs remain single-claim', async () => {
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
+  const schema = await readFile(new URL('db/schema.ts', root), 'utf8');
+  const migration = await readFile(new URL('drizzle/0003_open_registration.sql', root), 'utf8');
+  assert.match(schema, /universityClaims/);
+  assert.match(migration, /DROP TRIGGER IF EXISTS `trg_validate_university_claim`/);
+  assert.match(server, /INSERT INTO university_claims/);
+  assert.match(server, /universityIdRegistered = Boolean\(allowed\)/);
+  assert.doesNotMatch(server, /not eligible or has already been used/);
+  assert.match(server, /status: isRoot \? 'approved' : 'pending'/);
+});
+
+test('the registration dashboard highlights IDs that need manual verification', async () => {
+  const dashboard = await readFile(new URL('components/collaboration-dashboard.tsx', root), 'utf8');
+  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  assert.match(types, /universityIdRegistered\?: boolean/);
+  assert.match(types, /universityIdVerifiedManually\?: boolean/);
+  assert.match(dashboard, /IDs needing manual check/);
+  assert.match(dashboard, /NOT REGISTERED · VERIFY MANUALLY/);
+  assert.match(dashboard, /Verify & approve/);
+  assert.match(dashboard, /MANUALLY VERIFIED/);
 });
 
 test('separate QBanks and attributed shared notes are present', async () => {
@@ -36,23 +49,22 @@ test('separate QBanks and attributed shared notes are present', async () => {
 });
 
 test('private banks, per-bank roles, and owner boundaries are enforced', async () => {
-  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
   const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
   assert.match(types, /type AccountTier = 'lite' \| 'pro'/);
   assert.match(types, /type BankRole = 'owner' \| 'reviewer' \| 'viewer'/);
-  assert.match(rules, /resource\.data\.visibility == 'public'/);
-  assert.match(rules, /resource\.data\.ownerId == request\.auth\.uid/);
-  assert.match(rules, /bank\(qbankId\)\.visibility == 'public' && \(superAdmin\(\) \|\| globalReviewer\(\)\)/);
-  assert.match(rules, /match \/qbankShareLinks\/\{token\}/);
+  assert.match(server, /canAccessBank\(user, existing/);
+  assert.match(server, /value\.ownerId === user\.uid/);
+  assert.match(server, /operation\.collection === 'qbankShareLinks'/);
 });
 
 test('edit proposals require classified changes, explanation, source, and review', async () => {
-  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
   const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
   const review = await readFile(new URL('components/review-workspace.tsx', root), 'utf8');
-  assert.match(rules, /editKinds\.size\(\) > 0/);
-  assert.match(rules, /payload\.explanation\.size\(\) > 0/);
-  assert.match(rules, /payload\.sourceReference\.size\(\) > 0/);
+  assert.match(server, /proposal\.editKinds\.length > 0/);
+  assert.match(server, /payload\.explanation\.trim/);
+  assert.match(server, /payload\.sourceReference\.trim/);
   assert.match(app, /Suggest Edit → Review → Approve\s*\/\s*Reject/);
   assert.match(review, /Proposed · \{label\}/);
 });
@@ -83,19 +95,18 @@ test('the sidebar keeps navigation scrollable and the account footer visible', a
 });
 
 test('the singleton Superadmin is gated by authenticator-app MFA', async () => {
-  const auth = await readFile(new URL('lib/firebase-client.ts', root), 'utf8');
-  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
-  assert.match(auth, /TotpMultiFactorGenerator\.generateSecret/);
-  assert.match(auth, /auth\/multi-factor-auth-required/);
-  assert.match(auth, /MFA_REQUIRED/);
-  assert.match(rules, /request\.auth\.uid == rootUid\(\)/);
-  assert.match(rules, /request\.resource\.data\.role != 'super_admin'/);
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
+  assert.match(server, /ROOT_ADMIN_EMAIL/);
+  assert.match(server, /ROOT_ADMIN_SETUP_TOKEN/);
+  assert.match(server, /MFA_REQUIRED/);
+  assert.match(server, /enrolledTotpSecret/);
+  assert.match(server, /value\.role !== 'super_admin'/);
 });
 
 test('QBank owners can manage access, links, questions, and deletion', async () => {
   const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
   const workspace = await readFile(new URL('components/qbank-workspace.tsx', root), 'utf8');
-  const cloud = await readFile(new URL('lib/firebase-client.ts', root), 'utf8');
+  const cloud = await readFile(new URL('lib/cloudflare-client.ts', root), 'utf8');
   assert.match(workspace, /My QBanks/);
   assert.match(workspace, /onManageBank/);
   assert.match(manager, /Change link/);
@@ -106,17 +117,17 @@ test('QBank owners can manage access, links, questions, and deletion', async () 
 });
 
 test('Question IDs are globally reserved and never reused', async () => {
-  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
-  const cloud = await readFile(new URL('lib/firebase-client.ts', root), 'utf8');
-  assert.match(rules, /match \/system\/questionCounter/);
-  assert.match(rules, /match \/questionIds\/\{questionId\}/);
-  assert.match(rules, /questionId\.matches\('\^\[0-9\]\{5\}\$'\)/);
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
+  const cloud = await readFile(new URL('lib/cloudflare-client.ts', root), 'utf8');
+  assert.match(server, /INSERT INTO counters/);
+  assert.match(server, /INSERT INTO question_ids/);
+  assert.match(server, /RETURNING value/);
   assert.match(cloud, /reserveQuestionIds/);
-  assert.match(cloud, /end > 99999/);
+  assert.match(server, /100000/);
 });
 
 test('review workspace, test deletion, question images, and Qraft JSON import are available', async () => {
-  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
   const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
   const review = await readFile(new URL('components/review-workspace.tsx', root), 'utf8');
   const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
@@ -129,24 +140,22 @@ test('review workspace, test deletion, question images, and Qraft JSON import ar
   assert.match(review, /Reviewed ·\s*\{reviewed\.length\}/);
   assert.match(manager, /qraft-question-bank-v1/);
   assert.match(manager, /One question per slide/);
-  assert.match(manager, /Upload Qraft JSON/);
+  assert.match(manager, /Upload file here \( Json\/Text \)/);
   assert.match(review, /questionId: status === 'approved'/);
-  assert.match(rules, /resource\.data\.status in \['pending', 'rejected'\]/);
+  assert.match(server, /current\.status !== 'approved'/);
 });
 
 test('access blocklist covers phone, university ID, and email registrations', async () => {
-  const rules = await readFile(new URL('firestore.rules', root), 'utf8');
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
   const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
   const dashboard = await readFile(new URL('components/collaboration-dashboard.tsx', root), 'utf8');
-  const localDb = await readFile(new URL('lib/local-db.ts', root), 'utf8');
   assert.match(types, /interface AccessBlocklist/);
   assert.match(dashboard, /Blocked access list/);
   assert.match(dashboard, /Mobile numbers/);
   assert.match(dashboard, /University IDs/);
   assert.match(dashboard, /Email addresses/);
-  assert.match(localDb, /This email, university ID, or mobile number is blocked/);
-  assert.match(rules, /match \/system\/accessControl/);
-  assert.match(rules, /accessBlocked\(request\.resource\.data\)/);
+  assert.match(server, /This email, university ID, or mobile number is blocked/);
+  assert.match(server, /type = 'system' AND id = 'accessControl'/);
 });
 
 test('test sessions can restart, pause, resume, and be completed later', async () => {
@@ -184,4 +193,63 @@ test('questions and JSON prompts support a configurable number of options', asyn
   assert.match(manager, /Add option/);
   assert.match(app, /proposedOptions\.length >= 10/);
   assert.match(app, /options\.length >= 10/);
+});
+
+test('Essential QBanks are managed only by Superadmin while other users submit proposals', async () => {
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
+  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  const workspace = await readFile(new URL('components/qbank-workspace.tsx', root), 'utf8');
+  const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
+  const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
+  assert.match(types, /essential: boolean/);
+  assert.match(types, /essential: true/);
+  assert.match(types, /function canManageBank/);
+  assert.match(workspace, /Check to make it an Essential QBank/);
+  assert.match(manager, /ESSENTIAL · SUPERADMIN/);
+  assert.match(app, /canManageBank\(user, qbank\)/);
+  assert.match(server, /value\.essential !== true \|\| isRoot/);
+  assert.match(server, /value\.essential === existing\.essential/);
+});
+
+test('QBank library uses a categorized list with favorites and pins', async () => {
+  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  const workspace = await readFile(new URL('components/qbank-workspace.tsx', root), 'utf8');
+  assert.match(types, /favoriteQBankIds: string\[\]/);
+  assert.match(types, /pinnedQBankIds: string\[\]/);
+  assert.match(types, /qbankCategoryById: Record<string, string>/);
+  assert.match(workspace, /New subcategory/);
+  assert.match(workspace, /toggleList\('favoriteIds'/);
+  assert.match(workspace, /toggleList\('pinnedIds'/);
+  assert.match(workspace, /\{questions\} questions/);
+  assert.match(workspace, /by \{bank\.ownerName\}/);
+});
+
+test('shared QBank links require an explicit accept or decline decision', async () => {
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
+  const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
+  assert.match(server, /previewBankInvite/);
+  assert.match(app, /QBank invitation/);
+  assert.match(app, />Decline</);
+  assert.match(app, /'Joining…' : 'Accept'/);
+  assert.match(app, /await joinCloudflareQBankByLink/);
+  assert.match(app, /url\.searchParams\.delete\('join_qbank'\)/);
+});
+
+test('every question change requires independent review with durable attribution', async () => {
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
+  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
+  const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
+  const review = await readFile(new URL('components/review-workspace.tsx', root), 'utf8');
+  assert.match(types, /writtenByName\?: string/);
+  assert.match(types, /reviewedByName\?: string/);
+  assert.match(types, /user\.role === 'reviewer'/);
+  assert.match(server, /current\.proposedById !== user\.uid/);
+  assert.match(server, /reviewedQuestionWriteAllowed/);
+  assert.match(manager, /questions submitted for review/);
+  assert.doesNotMatch(manager, /questions_json_imported/);
+  assert.match(review, /proposal\.reviewedById === user\.uid/);
+  assert.match(review, /writtenByName: proposal\.type === 'new_question'/);
+  assert.match(app, /Written by/);
+  assert.match(app, /Reviewed by/);
 });
