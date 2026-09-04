@@ -2348,7 +2348,7 @@ function SettingsView({
           <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
               <h2 className="font-bold">Cloud sync</h2>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">Cloudflare D1 and R2 are connected. Changes sync automatically and can be forced at any time.</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">Cloudflare D1 and ImageKit are connected. Changes sync automatically and can be forced at any time.</p>
             </div>
             <PrimaryButton onClick={onSync} disabled={syncStatus === 'syncing'}>
               <RefreshCw className={cx('size-4', syncStatus === 'syncing' && 'animate-spin')} />

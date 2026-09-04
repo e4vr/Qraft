@@ -50,7 +50,7 @@ test('PWA shell and Cloudflare persistence configuration are present', async () 
   assert.equal(manifest.icons.length, 2);
   assert.match(serviceWorker, /CACHE_NAME/);
   assert.match(wrangler, /"binding": "DB"/);
-  assert.match(wrangler, /"binding": "MEDIA"/);
+  assert.doesNotMatch(wrangler, /"binding": "MEDIA"/);
   assert.match(schema, /sqliteTable\('profiles'/);
   assert.match(schema, /sqliteTable\('media'/);
 });

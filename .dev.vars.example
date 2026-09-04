@@ -1,2 +1,3 @@
 ROOT_ADMIN_EMAIL=admin@example.com
 ROOT_ADMIN_SETUP_TOKEN=replace-with-at-least-24-random-characters
+IMAGEKIT_PRIVATE_KEY=private_your_imagekit_private_key

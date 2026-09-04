@@ -143,6 +143,8 @@ test('review workspace, test deletion, question images, and Qraft JSON import ar
   assert.match(manager, /Upload file here \( Json\/Text \)/);
   assert.match(review, /questionId: status === 'approved'/);
   assert.match(server, /current\.status !== 'approved'/);
+  assert.match(server, /IMAGEKIT_STORAGE_LIMIT_BYTES = 3 \* 1024 \* 1024 \* 1024/);
+  assert.match(server, /upload\.imagekit\.io\/api\/v1\/files\/upload/);
 });
 
 test('access blocklist covers phone, university ID, and email registrations', async () => {

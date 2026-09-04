@@ -11,8 +11,5 @@
       "database_name": "qraft-qbank",
       "migrations_dir": "./drizzle"
     }
-  ],
-  "r2_buckets": [
-    { "binding": "MEDIA", "bucket_name": "qraft-qbank-media" }
   ]
 }

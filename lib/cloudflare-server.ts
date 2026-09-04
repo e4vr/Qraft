@@ -17,6 +17,7 @@ import {
 
 const SESSION_COOKIE = '__Host-qraft_session';
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
+const IMAGEKIT_STORAGE_LIMIT_BYTES = 3 * 1024 * 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -29,6 +30,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function sameJson(left: unknown, right: unknown) {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function imageKitAuthorization() {
+  const privateKey = env.IMAGEKIT_PRIVATE_KEY?.trim();
+  return privateKey ? `Basic ${btoa(`${privateKey}:`)}` : undefined;
+}
+
+async function deleteImageKitFile(fileId: string) {
+  const authorization = imageKitAuthorization();
+  if (!authorization) return false;
+  const response = await fetch(`https://api.imagekit.io/v1/files/${encodeURIComponent(fileId)}`, {
+    method: 'DELETE',
+    headers: { authorization, accept: 'application/json' },
+  });
+  return response.ok || response.status === 404;
 }
 
 async function readLimitedText(request: Request, maximumBytes: number) {
@@ -650,6 +666,8 @@ export async function previewBankInvite(request: Request) {
 
 export async function uploadMedia(request: Request, kind: 'notes' | 'questions') {
   assertSameOrigin(request);
+  const authorization = imageKitAuthorization();
+  if (!authorization) return json({ error: 'ImageKit storage is not configured on this deployment.' }, 503);
   const user = await currentUser(request);
   if (!user || user.status !== 'approved') return json({ error: 'Approved account required.' }, 403);
   const declaredLength = Number(request.headers.get('content-length') ?? 0);
@@ -666,12 +684,36 @@ export async function uploadMedia(request: Request, kind: 'notes' | 'questions')
   const bank = state.qbanks.find((item) => item.id === qbankId);
   const permitted = bank && (kind === 'questions' ? canReviewBank(user, bank, state.memberships) : canAccessBank(user, bank, state.memberships));
   if (!permitted) return json({ error: kind === 'questions' ? 'Reviewer access required.' : 'QBank access required.' }, 403);
+  const usage = await env.DB.prepare('SELECT COALESCE(SUM(size), 0) AS total FROM media').first<{ total: number }>();
+  const currentBytes = Number(usage?.total ?? 0);
+  if (!Number.isFinite(currentBytes) || currentBytes < 0) return json({ error: 'Image storage usage could not be verified.' }, 503);
+  if (currentBytes + file.size > IMAGEKIT_STORAGE_LIMIT_BYTES) {
+    return json({ error: 'The 3 GB image storage safety limit has been reached. Delete unused images before uploading more.' }, 413);
+  }
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-  const key = `qbanks/${qbankId}/${kind}/${questionId}/${user.uid}/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
-  await env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type } });
+  const upload = new FormData();
+  upload.append('file', file, safeName);
+  upload.append('fileName', `${Date.now()}-${crypto.randomUUID()}-${safeName}`);
+  upload.append('folder', `/qraft/qbanks/${qbankId}/${kind}/${questionId}`);
+  upload.append('useUniqueFileName', 'true');
+  upload.append('tags', `qraft,${kind},${qbankId}`);
+  const response = await fetch('https://upload.imagekit.io/api/v1/files/upload', {
+    method: 'POST',
+    headers: { authorization, accept: 'application/json' },
+    body: upload,
+  });
+  const result = await response.json().catch(() => null) as { fileId?: string; url?: string; message?: string } | null;
+  if (!response.ok || !result?.fileId || !result.url) {
+    return json({ error: result?.message || 'ImageKit rejected the image upload.' }, 502);
+  }
   const now = new Date().toISOString();
-  await env.DB.prepare('INSERT INTO media (key, qbank_id, owner_id, content_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(key, qbankId, user.uid, file.type, file.size, now).run();
-  return json({ url: `/api/cloudflare/media/${encodeURIComponent(key)}` }, 201);
+  try {
+    await env.DB.prepare('INSERT INTO media (key, qbank_id, owner_id, content_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(result.fileId, qbankId, user.uid, file.type, file.size, now).run();
+  } catch (error) {
+    await deleteImageKitFile(result.fileId);
+    throw error;
+  }
+  return json({ url: result.url }, 201);
 }
 
 export async function serveMedia(request: Request, key: string) {
@@ -682,9 +724,7 @@ export async function serveMedia(request: Request, key: string) {
   const state = (await storedState()).state;
   const bank = state.qbanks.find((item) => item.id === metadata.qbank_id);
   if (!bank || !canAccessBank(user, bank, state.memberships)) return new Response('Forbidden.', { status: 403 });
-  const object = await env.MEDIA.get(key);
-  if (!object) return new Response('Not found.', { status: 404 });
-  return new Response(object.body, { headers: { 'content-type': object.httpMetadata?.contentType ?? 'application/octet-stream', 'cache-control': 'private, max-age=3600', etag: object.httpEtag } });
+  return new Response('This legacy media URL is no longer available. Re-upload the image to ImageKit.', { status: 410 });
 }
 
 export async function deleteBankMedia(request: Request, qbankId: string) {
@@ -693,12 +733,10 @@ export async function deleteBankMedia(request: Request, qbankId: string) {
   const state = (await storedState()).state;
   const bank = state.qbanks.find((item) => item.id === qbankId);
   if (!user || !bank || !canManageBank(user, bank)) return json({ error: 'QBank management access required.' }, 403);
-  let cursor: string | undefined;
-  do {
-    const listed = await env.MEDIA.list({ prefix: `qbanks/${qbankId}/`, cursor });
-    await Promise.all(listed.objects.map((object) => env.MEDIA.delete(object.key)));
-    cursor = listed.truncated ? listed.cursor : undefined;
-  } while (cursor);
+  if (!imageKitAuthorization()) return json({ error: 'ImageKit storage is not configured on this deployment.' }, 503);
+  const rows = await env.DB.prepare('SELECT key FROM media WHERE qbank_id = ?').bind(qbankId).all<{ key: string }>();
+  const deletions = await Promise.all(rows.results.map((row) => deleteImageKitFile(row.key)));
+  if (deletions.some((deleted) => !deleted)) return json({ error: 'Some images could not be deleted from ImageKit. Try again.' }, 502);
   await env.DB.prepare('DELETE FROM media WHERE qbank_id = ?').bind(qbankId).run();
   return json({ ok: true });
 }
