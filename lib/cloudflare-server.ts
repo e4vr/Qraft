@@ -17,6 +17,7 @@ import {
 
 const SESSION_COOKIE = '__Host-qraft_session';
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
+const PBKDF2_ITERATIONS = 100_000;
 const IMAGEKIT_STORAGE_LIMIT_BYTES = 3 * 1024 * 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -107,7 +108,7 @@ async function sha256(value: string) {
 
 async function hashPassword(password: string, salt = bytesToBase64Url(crypto.getRandomValues(new Uint8Array(18)))) {
   const material = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const derived = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: 210_000 }, material, 256);
+  const derived = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: PBKDF2_ITERATIONS }, material, 256);
   return { salt, hash: bytesToHex(derived) };
 }
 

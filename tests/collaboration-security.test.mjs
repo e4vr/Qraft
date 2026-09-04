@@ -103,6 +103,12 @@ test('the singleton Superadmin is gated by authenticator-app MFA', async () => {
   assert.match(server, /value\.role !== 'super_admin'/);
 });
 
+test('password hashing stays within the Cloudflare Workers PBKDF2 limit', async () => {
+  const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
+  assert.match(server, /PBKDF2_ITERATIONS = 100_000/);
+  assert.doesNotMatch(server, /iterations:\s*210_000/);
+});
+
 test('QBank owners can manage access, links, questions, and deletion', async () => {
   const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
   const workspace = await readFile(new URL('components/qbank-workspace.tsx', root), 'utf8');
