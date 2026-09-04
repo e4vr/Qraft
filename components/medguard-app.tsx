@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  Clock3,
   ClipboardList,
   ClipboardPlus,
   Copy,
@@ -31,8 +32,11 @@ import {
   Menu,
   Moon,
   Pencil,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   ScanSearch,
   Settings,
@@ -70,6 +74,7 @@ import {
   normalizeCollaborationState,
   normalizeAppState,
   canAccessBank,
+  optionLabel,
   type AppState,
   type AppUser,
   type CollaborationState,
@@ -86,6 +91,8 @@ import { AdminDashboard, PendingApproval } from '@/components/collaboration-dash
 import { QBankWorkspace } from '@/components/qbank-workspace';
 import { QBankManagement } from '@/components/qbank-management';
 import { ReviewWorkspace } from '@/components/review-workspace';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { cn as cx } from '@/lib/utils';
 
 type View = 'dashboard' | 'library' | 'qbank-management' | 'review' | 'create' | 'history' | 'progress' | 'settings' | 'manager' | 'admin' | 'test';
@@ -130,6 +137,16 @@ function formatDuration(totalSeconds: number) {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
   return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':');
+}
+
+function testElapsedSeconds(test: TestSession, now = Date.now()) {
+  if (test.elapsedSeconds !== undefined) {
+    if (test.timerPaused || test.status !== 'active') return test.elapsedSeconds;
+    const runningSince = new Date(test.timerStartedAt ?? test.startedAt).getTime();
+    return test.elapsedSeconds + Math.max(0, Math.floor((now - runningSince) / 1000));
+  }
+  const end = test.completedAt ? new Date(test.completedAt).getTime() : now;
+  return Math.max(0, Math.floor((end - new Date(test.startedAt).getTime()) / 1000));
 }
 
 function getQuestionProgress(state: AppState, questionId: string): QuestionProgress {
@@ -1011,12 +1028,12 @@ function TestView({
   questions: Question[];
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
-  onExit: () => void;
+  onExit: (destination?: 'dashboard' | 'history') => void;
   user: AppUser;
   collaboration: CollaborationState;
   updateCollaboration: (updater: (current: CollaborationState) => CollaborationState) => void;
 }) {
-  const [seconds, setSeconds] = useState(() => Math.max(0, Math.floor((Date.now() - new Date(test.startedAt).getTime()) / 1000)));
+  const [seconds, setSeconds] = useState(() => testElapsedSeconds(test));
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -1032,6 +1049,7 @@ function TestView({
   const [noteDraft, setNoteDraft] = useState('');
   const [noteImagesDraft, setNoteImagesDraft] = useState<QuestionProgress['noteImages']>([]);
   const [uploading, setUploading] = useState(false);
+  const isMobile = useIsMobile();
   const stemRef = useRef<HTMLParagraphElement>(null);
   const activeQuestions = useMemo(() => test.questionIds.map((id) => questions.find((question) => question.id === id)).filter(Boolean) as Question[], [test.questionIds, questions]);
   const question = activeQuestions[test.currentIndex];
@@ -1040,16 +1058,19 @@ function TestView({
   const ownsBank = collaboration.qbanks.some((bank) => bank.id === qbankId && bank.ownerId === user.uid);
   const noteKey = question ? `${qbankId}:${question.id}` : '';
   const sharedNote = noteKey ? collaboration.sharedNotes[noteKey] : undefined;
+  const displayedExplanation = sharedNote?.content.trim() || question?.explanation?.trim() || 'No explanation has been added yet.';
   const selected = question ? test.answers[question.id] : undefined;
   const revealed = question ? test.revealed.includes(question.id) : false;
   const answerStat = noteKey ? collaboration.answerStats[noteKey] : undefined;
   const answerSelections = Object.values(answerStat?.selections ?? {});
 
   useEffect(() => {
-    if (test.mode !== 'timed' || test.status !== 'active') return;
-    const timer = window.setInterval(() => setSeconds(Math.floor((Date.now() - new Date(test.startedAt).getTime()) / 1000)), 1000);
+    if (test.timerPaused || test.status !== 'active') return;
+    const elapsedAtStart = test.elapsedSeconds ?? 0;
+    const runningSince = new Date(test.elapsedSeconds === undefined ? test.startedAt : test.timerStartedAt ?? test.startedAt).getTime();
+    const timer = window.setInterval(() => setSeconds(elapsedAtStart + Math.max(0, Math.floor((Date.now() - runningSince) / 1000))), 1000);
     return () => window.clearInterval(timer);
-  }, [test.mode, test.startedAt, test.status]);
+  }, [test.elapsedSeconds, test.startedAt, test.status, test.timerPaused, test.timerStartedAt]);
 
   useEffect(() => {
     const update = window.setTimeout(() => {
@@ -1134,6 +1155,57 @@ function TestView({
     setFinishConfirmOpen(true);
   }
 
+  function pauseTest() {
+    const elapsedSeconds = testElapsedSeconds(test);
+    setSeconds(elapsedSeconds);
+    updateTest((current) => ({
+      ...current,
+      elapsedSeconds,
+      timerPaused: true,
+      timerStartedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }));
+  }
+
+  function resumeTest() {
+    const resumedAt = new Date().toISOString();
+    updateTest((current) => ({
+      ...current,
+      elapsedSeconds: testElapsedSeconds(current),
+      timerPaused: false,
+      timerStartedAt: resumedAt,
+      updatedAt: resumedAt,
+    }));
+  }
+
+  function completeLater() {
+    const elapsedSeconds = testElapsedSeconds(test);
+    const pausedAt = new Date().toISOString();
+    updateTest((current) => ({
+      ...current,
+      elapsedSeconds,
+      timerPaused: true,
+      timerStartedAt: pausedAt,
+      updatedAt: pausedAt,
+    }));
+    onExit('dashboard');
+  }
+
+  function restartQuestion() {
+    updateTest((current) => {
+      const answers = { ...current.answers };
+      delete answers[question.id];
+      return {
+        ...current,
+        answers,
+        revealed: current.revealed.filter((id) => id !== question.id),
+        graded: current.graded.filter((id) => id !== question.id),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    setNotesOpen(false);
+  }
+
   function completeTest() {
     setFinishConfirmOpen(false);
     setState((current) => {
@@ -1165,6 +1237,9 @@ function TestView({
                 status: 'completed',
                 completedAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
+                elapsedSeconds: seconds,
+                timerPaused: true,
+                timerStartedAt: new Date().toISOString(),
                 graded: [...new Set([...item.graded, ...Object.keys(item.answers)])],
                 revealed: [...new Set([...item.revealed, ...item.questionIds])],
               }
@@ -1194,7 +1269,7 @@ function TestView({
       });
       return { ...current, answerStats };
     });
-    onExit();
+    onExit('history');
   }
 
   function move(index: number) {
@@ -1402,7 +1477,7 @@ function TestView({
   }
 
   function submitReport() {
-    if (!reportMessage.trim() || !proposedExplanation.trim() || !proposedSource.trim() || !editKinds.length || suggestedAnswer === undefined || proposedOptions.some((item) => !item.trim())) return;
+    if (!reportMessage.trim() || !proposedExplanation.trim() || !proposedSource.trim() || !editKinds.length || proposedOptions.length < 2 || proposedOptions.length > 10 || suggestedAnswer === undefined || suggestedAnswer >= proposedOptions.length || proposedOptions.some((item) => !item.trim())) return;
     const proposedAt = new Date().toISOString();
     const currentSnapshot = {
       stem: question.stem,
@@ -1430,7 +1505,7 @@ function TestView({
         const updated: Question = {
           ...question,
           ...payload,
-          answerLetter: 'ABCD'[payload.answer],
+          answerLetter: optionLabel(payload.answer),
           sourceFile: payload.sourceReference,
           revision: question.revision + 1,
           isCustom: true,
@@ -1507,7 +1582,8 @@ function TestView({
       }
       const target = event.target as HTMLElement | null;
       if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
-      if (!revealed && ['a', 'b', 'c', 'd'].includes(event.key.toLowerCase())) selectAnswer(event.key.toLowerCase().charCodeAt(0) - 97);
+      const optionIndex = event.key.toLowerCase().charCodeAt(0) - 97;
+      if (!revealed && optionIndex >= 0 && optionIndex < question.options.length) selectAnswer(optionIndex);
       else if (event.key === 'ArrowLeft') move(test.currentIndex - 1);
       else if (event.key === 'ArrowRight') move(test.currentIndex + 1);
       else if (event.key.toLowerCase() === 'f') toggleFlag();
@@ -1538,16 +1614,26 @@ function TestView({
             <X className="size-5" />
           </button>
           <div className="hidden h-7 w-px bg-border sm:block" />
-          <div>
+          <div className="hidden sm:block">
             <strong className="block text-sm">{test.title}</strong>
             <span className="text-[10px] font-semibold uppercase text-muted-foreground">{test.mode} mode</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <div className="rounded-xl bg-muted px-3 py-2 text-xs font-bold tabular-nums">{test.mode === 'timed' ? formatDuration(seconds) : `${test.currentIndex + 1} / ${test.questionIds.length}`}</div>
+          <div className="flex items-center gap-1.5 rounded-xl bg-muted px-2 py-2 text-xs font-bold tabular-nums sm:gap-2 sm:px-3" title="Elapsed test time">
+            <Clock3 className="size-3.5 text-primary" />
+            {formatDuration(seconds)}
+          </div>
+          <IconButton label="Pause timer" onClick={pauseTest}>
+            <Pause className="size-4" />
+          </IconButton>
           <IconButton label={progress.flagged ? 'Remove flag' : 'Flag question'} active={progress.flagged} onClick={toggleFlag}>
             <Flag className={cx('size-4', progress.flagged && 'fill-current')} />
           </IconButton>
+          <SecondaryButton onClick={completeLater} className="hidden sm:flex">
+            <Clock3 className="size-4" />
+            Complete later
+          </SecondaryButton>
           <SecondaryButton onClick={finishTest} className="hidden sm:flex">
             End block
           </SecondaryButton>
@@ -1582,7 +1668,7 @@ function TestView({
           </div>
         </aside>
         <section className="min-w-0 flex-1 p-3 sm:p-6 lg:p-8">
-          <div className="mx-auto max-w-[890px]">
+          <div className={cx('mx-auto', revealed && displayedExplanation ? 'max-w-[1180px]' : 'max-w-[890px]')}>
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">{question.specialty}</span>
@@ -1592,7 +1678,9 @@ function TestView({
                 Question {test.currentIndex + 1} of {test.questionIds.length}
               </button>
             </div>
-            <article className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-border dark:bg-card sm:p-8">
+            <ResizablePanelGroup key={`${question.id}:${revealed ? 'revealed' : 'answering'}`} orientation={isMobile ? 'vertical' : 'horizontal'} className="items-stretch overflow-visible">
+              <ResizablePanel id="question-panel" defaultSize={revealed && displayedExplanation ? '68%' : '100%'} minSize={revealed && displayedExplanation ? (isMobile ? '22rem' : '42%') : '100%'}>
+                <article className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-border dark:bg-card sm:p-8">
               <div className="mb-5 flex items-center justify-between border-b pb-4">
                 <div>
                   <span className="text-xs font-bold text-muted-foreground">QUESTION {test.currentIndex + 1}</span>
@@ -1602,6 +1690,9 @@ function TestView({
                 <div className="flex gap-2">
                   <IconButton label={markerActive ? 'Turn marker off' : 'Keep marker on'} active={markerActive} onClick={() => setMarkerActive((value) => !value)}>
                     <Highlighter className="size-4" />
+                  </IconButton>
+                  <IconButton label="Restart this question" disabled={selected === undefined && !revealed} onClick={restartQuestion}>
+                    <RotateCcw className="size-4" />
                   </IconButton>
                   {progress.highlights.length > 0 && (
                     <IconButton label="Clear highlights" onClick={clearHighlights}>
@@ -1652,7 +1743,7 @@ function TestView({
                       )}
                     >
                       <span className={cx('grid size-7 shrink-0 place-items-center rounded-full border text-xs font-bold', isCorrect ? 'border-emerald-500 bg-emerald-500 text-white' : isWrong ? 'border-red-500 bg-red-500 text-white' : isSelected ? 'border-primary bg-primary text-white' : 'bg-muted/40')}>
-                        {isCorrect ? <Check className="size-4" /> : isWrong ? <X className="size-4" /> : 'ABCD'[index]}
+                        {isCorrect ? <Check className="size-4" /> : isWrong ? <X className="size-4" /> : optionLabel(index)}
                       </span>
                       <span className="min-w-0 flex-1 pt-0.5">{option}</span>
                       {revealed && <span className="mt-0.5 rounded-full bg-card/80 px-2.5 py-0.5 text-[11px] font-bold tabular-nums ring-1 ring-current/10">{percent}%</span>}
@@ -1676,20 +1767,34 @@ function TestView({
                       {answerSelections.length === 1 ? '' : 's'} in response data · Revision {question.revision}
                     </span>
                   </div>
-                  {question.explanation && (
-                    <section className="mt-4 rounded-xl border bg-muted/25 p-4">
-                      <h3 className="text-xs font-bold uppercase tracking-wide text-primary">Explanation</h3>
-                      <p className="mt-2 whitespace-pre-wrap text-sm leading-7">{question.explanation}</p>
-                      {question.sourceReference && (
-                        <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">
-                          <strong>Source:</strong> {question.sourceReference}
-                        </p>
-                      )}
-                    </section>
-                  )}
                 </>
               )}
-            </article>
+                </article>
+              </ResizablePanel>
+              {revealed && displayedExplanation && (
+                <>
+                  <ResizableHandle withHandle className={cx('bg-transparent', isMobile ? 'my-4' : 'mx-4')} />
+                  <ResizablePanel id="explanation-panel" defaultSize="32%" minSize={isMobile ? '12rem' : '22%'} maxSize={isMobile ? '34rem' : '58%'}>
+                    <aside className="h-full rounded-2xl border border-primary/15 bg-white p-5 shadow-sm dark:bg-card sm:p-6" aria-label="Question explanation">
+                      <div className="flex items-center justify-between gap-3 border-b pb-4">
+                        <div>
+                          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary">Explanation</p>
+                          <h3 className="mt-1 font-bold">Why this answer is correct</h3>
+                        </div>
+                        <span className="rounded-full bg-muted px-2.5 py-1 text-[10px] font-bold text-muted-foreground">READ ONLY</span>
+                      </div>
+                      <p className="mt-5 whitespace-pre-wrap text-sm leading-7 text-foreground">{displayedExplanation}</p>
+                      {(question.sourceReference || question.sourceFile) && (
+                        <p className="mt-5 border-t pt-4 text-xs leading-6 text-muted-foreground">
+                          <strong className="text-foreground">Source:</strong> {question.sourceReference || question.sourceFile}
+                        </p>
+                      )}
+                      <p className="mt-5 rounded-xl bg-primary/5 p-3 text-xs leading-5 text-muted-foreground">Drag the divider to control the explanation space. Use Shared notes below to edit the collaborative explanation.</p>
+                    </aside>
+                  </ResizablePanel>
+                </>
+              )}
+            </ResizablePanelGroup>
             <div className="mt-4 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
               <SecondaryButton onClick={() => move(test.currentIndex - 1)} disabled={test.currentIndex === 0}>
                 <ChevronLeft className="size-4" />
@@ -1808,9 +1913,25 @@ function TestView({
           </div>
         </section>
       </div>
-      <button onClick={finishTest} className="fixed bottom-4 right-4 z-20 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-xl sm:hidden">
-        End block
-      </button>
+      <div className="fixed bottom-4 right-4 z-20 flex gap-2 sm:hidden">
+        <button onClick={completeLater} className="rounded-xl border bg-card px-4 py-2 text-xs font-bold text-foreground shadow-xl">
+          Complete later
+        </button>
+        <button onClick={finishTest} className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-xl">
+          End block
+        </button>
+      </div>
+      {test.timerPaused && test.status === 'active' && (
+        <dialog open className="fixed inset-0 z-[90] m-0 grid size-full max-h-none max-w-none place-items-center border-0 bg-background/45 p-6 text-foreground backdrop-blur-xl" aria-labelledby="paused-test-title">
+          <section className="w-full max-w-sm rounded-3xl bg-card/95 p-7 text-center shadow-2xl ring-1 ring-border">
+            <button onClick={resumeTest} className="mx-auto grid size-20 place-items-center rounded-full bg-primary text-primary-foreground shadow-[0_14px_36px_rgba(8,107,196,.32)] transition hover:scale-105" aria-label="Continue test and resume timer">
+              <Play className="ml-1 size-9 fill-current" />
+            </button>
+            <h2 id="paused-test-title" className="mt-6 text-2xl font-bold">Continue</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">The timer is paused at {formatDuration(seconds)}. Your answers are saved.</p>
+          </section>
+        </dialog>
+      )}
       {finishConfirmOpen && (
         <div
           className="fixed inset-0 z-[70] grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm"
@@ -1937,8 +2058,26 @@ function TestView({
               <div className="space-y-2">
                 <span className="block text-sm font-semibold">Proposed options</span>
                 {proposedOptions.map((option, index) => (
-                  <input key={index} value={option} onChange={(event) => setProposedOptions((current) => current.map((item, i) => (i === index ? event.target.value : item)))} className="h-10 w-full rounded-xl border bg-card px-3 text-sm" aria-label={`Proposed option ${'ABCD'[index]}`} />
+                  <div key={index} className="flex items-center gap-2">
+                    <input value={option} onChange={(event) => setProposedOptions((current) => current.map((item, i) => (i === index ? event.target.value : item)))} className="h-10 min-w-0 flex-1 rounded-xl border bg-card px-3 text-sm" aria-label={`Proposed option ${optionLabel(index)}`} />
+                    <button
+                      type="button"
+                      aria-label={`Remove proposed option ${optionLabel(index)}`}
+                      disabled={proposedOptions.length <= 2}
+                      onClick={() => {
+                        setProposedOptions((current) => current.filter((_, itemIndex) => itemIndex !== index));
+                        setSuggestedAnswer((current) => current === undefined ? current : current === index ? 0 : current > index ? current - 1 : current);
+                      }}
+                      className="grid size-10 shrink-0 place-items-center rounded-xl border text-red-600 disabled:opacity-30 dark:text-red-300"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  </div>
                 ))}
+                <button type="button" disabled={proposedOptions.length >= 10} onClick={() => setProposedOptions((current) => [...current, ''])} className="inline-flex h-10 items-center gap-2 rounded-xl border border-dashed px-4 text-sm font-bold text-primary disabled:opacity-40">
+                  <Plus className="size-4" />
+                  Add option
+                </button>
               </div>
             </div>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -1947,7 +2086,7 @@ function TestView({
                 <select value={suggestedAnswer ?? ''} onChange={(event) => setSuggestedAnswer(Number(event.target.value))} className="h-11 w-full rounded-xl border bg-card px-3 text-sm">
                   {proposedOptions.map((option, index) => (
                     <option key={index} value={index}>
-                      {'ABCD'[index]}. {option}
+                      {optionLabel(index)}. {option}
                     </option>
                   ))}
                 </select>
@@ -2180,7 +2319,7 @@ function exportAsPdf(questions: Question[], collaboration: CollaborationState) {
   }
   const content = questions
     .map((question) => {
-      const options = question.options.map((option, index) => `<li class="${index === question.answer ? 'answer' : ''}"><b>${'ABCD'[index]}.</b> ${escapeHtml(option)}${index === question.answer ? ' <span>Correct answer</span>' : ''}</li>`).join('');
+      const options = question.options.map((option, index) => `<li class="${index === question.answer ? 'answer' : ''}"><b>${optionLabel(index)}.</b> ${escapeHtml(option)}${index === question.answer ? ' <span>Correct answer</span>' : ''}</li>`).join('');
       const questionImages = (question.images ?? []).map((image) => `<figure><img src="${escapeHtml(image.url)}" alt=""/><figcaption>${escapeHtml(image.caption || image.name)}</figcaption></figure>`).join('');
       const note = collaboration.sharedNotes[`${question.qbankId ?? 'smle-gs'}:${question.id}`];
       const images = (note?.images ?? []).map((image) => `<figure><img src="${escapeHtml(image.url)}" alt=""/><figcaption>${escapeHtml(image.caption || image.name)}</figcaption></figure>`).join('');
@@ -2400,7 +2539,7 @@ function QuestionManager({
   function startEditing(proposal: QuestionProposal) {
     setEditingProposal(proposal);
     setStem(proposal.payload.stem);
-    setOptions([...proposal.payload.options, '', '', '', ''].slice(0, 4));
+    setOptions([...proposal.payload.options]);
     setAnswer(proposal.payload.answer);
     setSpecialty(proposal.payload.specialty);
     setTopic(proposal.payload.topic);
@@ -2412,7 +2551,7 @@ function QuestionManager({
 
   async function addQuestion(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!stem.trim() || options.some((option) => !option.trim()) || !explanation.trim() || !sourceReference.trim()) return;
+    if (!stem.trim() || options.length < 2 || options.length > 10 || answer >= options.length || options.some((option) => !option.trim()) || !explanation.trim() || !sourceReference.trim()) return;
     const proposedAt = new Date().toISOString();
     const payload = {
       stem: stem.trim(),
@@ -2468,7 +2607,7 @@ function QuestionManager({
           qbankId: activeQBankId,
           number: Math.max(0, ...bankQuestions.map((item) => item.number)) + 1,
           ...payload,
-          answerLetter: 'ABCD'[answer],
+          answerLetter: optionLabel(answer),
           sourcePage: 0,
           sourceFile: sourceReference.trim(),
           revision: 1,
@@ -2556,12 +2695,28 @@ function QuestionManager({
           </label>
           <div className="mt-4 space-y-2">
             {options.map((option, index) => (
-              <label key={index} className="flex items-center gap-3">
-                <input aria-label={`Mark option ${'ABCD'[index]} as correct`} type="radio" name="answer" checked={answer === index} onChange={() => setAnswer(index)} className="size-4 accent-primary" />
-                <span className="grid size-7 place-items-center rounded-full bg-muted text-xs font-bold">{'ABCD'[index]}</span>
+              <div key={index} className="flex items-center gap-3">
+                <input aria-label={`Mark option ${optionLabel(index)} as correct`} type="radio" name="answer" checked={answer === index} onChange={() => setAnswer(index)} className="size-4 accent-primary" />
+                <span className="grid size-7 place-items-center rounded-full bg-muted text-xs font-bold">{optionLabel(index)}</span>
                 <input required value={option} onChange={(event) => setOptions((current) => current.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)))} className="h-11 flex-1 rounded-xl border bg-card px-3 text-sm" />
-              </label>
+                <button
+                  type="button"
+                  aria-label={`Remove option ${optionLabel(index)}`}
+                  disabled={options.length <= 2}
+                  onClick={() => {
+                    setOptions((current) => current.filter((_, itemIndex) => itemIndex !== index));
+                    setAnswer((current) => (current === index ? 0 : current > index ? current - 1 : current));
+                  }}
+                  className="grid size-10 shrink-0 place-items-center rounded-xl border text-red-600 disabled:cursor-not-allowed disabled:opacity-30 dark:text-red-300"
+                >
+                  <Trash2 className="size-4" />
+                </button>
+              </div>
             ))}
+            <button type="button" disabled={options.length >= 10} onClick={() => setOptions((current) => [...current, ''])} className="inline-flex h-10 items-center gap-2 rounded-xl border border-dashed px-4 text-sm font-bold text-primary disabled:cursor-not-allowed disabled:opacity-40">
+              <Plus className="size-4" />
+              Add option
+            </button>
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <label>
@@ -2970,6 +3125,9 @@ export default function MedGuardApp() {
         graded: [],
         startedAt: now,
         updatedAt: now,
+        elapsedSeconds: 0,
+        timerStartedAt: now,
+        timerPaused: false,
         status: 'active',
         qbankId: activeQBankId,
       };
@@ -3078,9 +3236,9 @@ export default function MedGuardApp() {
         setState={setState}
         collaboration={collaboration}
         updateCollaboration={(updater) => setCollaboration(updater)}
-        onExit={() => {
+        onExit={(destination) => {
           setActiveTestId(undefined);
-          setView(activeTest.status === 'completed' ? 'history' : 'dashboard');
+          setView(destination ?? (activeTest.status === 'completed' ? 'history' : 'dashboard'));
         }}
       />
     );

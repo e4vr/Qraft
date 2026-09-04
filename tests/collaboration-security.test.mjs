@@ -148,3 +148,40 @@ test('access blocklist covers phone, university ID, and email registrations', as
   assert.match(rules, /match \/system\/accessControl/);
   assert.match(rules, /accessBlocked\(request\.resource\.data\)/);
 });
+
+test('test sessions can restart, pause, resume, and be completed later', async () => {
+  const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
+  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  assert.match(app, /Restart this question/);
+  assert.match(app, /revealed: current\.revealed\.filter/);
+  assert.match(app, /graded: current\.graded\.filter/);
+  assert.match(app, /Complete later/);
+  assert.match(app, /Pause timer/);
+  assert.match(app, /Continue test and resume timer/);
+  assert.match(app, /backdrop-blur-xl/);
+  assert.match(types, /timerPaused\?: boolean/);
+  assert.match(types, /elapsedSeconds\?: number/);
+});
+
+test('the revealed explanation is read-only and resizable', async () => {
+  const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
+  assert.match(app, /ResizablePanelGroup/);
+  assert.match(app, /ResizableHandle withHandle/);
+  assert.match(app, /READ ONLY/);
+  assert.match(app, /Drag the divider to control the explanation space/);
+  assert.match(app, /sharedNote\?\.content\.trim\(\) \|\| question\?\.explanation/);
+  assert.match(app, /Save shared note/);
+});
+
+test('questions and JSON prompts support a configurable number of options', async () => {
+  const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
+  const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
+  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  assert.match(types, /function optionLabel/);
+  assert.match(manager, /Options per question/);
+  assert.match(manager, /exactly \$\{optionCount\} distinct/);
+  assert.match(manager, /between 2 and 10 options/);
+  assert.match(manager, /Add option/);
+  assert.match(app, /proposedOptions\.length >= 10/);
+  assert.match(app, /options\.length >= 10/);
+});

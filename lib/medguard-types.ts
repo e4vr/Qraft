@@ -64,9 +64,23 @@ export interface TestSession {
   graded: string[];
   startedAt: string;
   updatedAt: string;
+  elapsedSeconds?: number;
+  timerStartedAt?: string;
+  timerPaused?: boolean;
   completedAt?: string;
   status: 'active' | 'completed';
   qbankId?: string;
+}
+
+export function optionLabel(index: number): string {
+  let value = index + 1;
+  let label = '';
+  while (value > 0) {
+    value -= 1;
+    label = String.fromCharCode(65 + (value % 26)) + label;
+    value = Math.floor(value / 26);
+  }
+  return label;
 }
 
 export interface ErrorReport {

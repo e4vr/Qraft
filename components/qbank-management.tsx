@@ -5,7 +5,7 @@
 import { ArrowLeft, Check, Clipboard, Copy, FileJson, ImagePlus, Link2, Pencil, Plus, RefreshCw, Save, Search, Settings, Trash2, Unlink, Upload, Users, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { deleteQBankImages, firebaseEnabled, reserveQuestionIds, uploadQuestionImage } from '@/lib/firebase-client';
-import type { AppUser, CollaborationState, NoteImage, QBank, Question, QBankVisibility } from '@/lib/medguard-types';
+import { optionLabel, type AppUser, type CollaborationState, type NoteImage, type QBank, type Question, type QBankVisibility } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
 
 type Section = 'settings' | 'questions' | 'import';
@@ -44,11 +44,13 @@ function imageFromFile(file: File): Promise<string> {
   });
 }
 
-function buildQraftPrompt(kind: QuestionKind, length: QuestionLength, countMode: CountMode, count: number) {
+function buildQraftPrompt(kind: QuestionKind, length: QuestionLength, countMode: CountMode, count: number, optionCount: number) {
   const kindText = kind === 'clinical' ? 'clinical case-based questions with a realistic vignette' : 'direct knowledge questions without a clinical vignette';
   const lengthText = length === 'long' ? 'long and detailed' : length === 'short' ? 'short and concise' : 'medium length';
   const countText = countMode === 'per_slide' ? 'Create exactly one question for every slide in the supplied lecture.' : `Create exactly ${count} questions for the supplied lecture.`;
-  return `You are creating medical multiple-choice questions for Qraft.\n\n${countText}\nEach question must be ${lengthText} and use ${kindText}. Use only information found in the supplied lecture. Do not invent facts or sources.\n\nReturn one valid JSON object only. Do not use Markdown or add commentary. Use this exact schema:\n{\n  "format": "qraft-question-bank-v1",\n  "questions": [\n    {\n      "stem": "Question text",\n      "options": ["Option A", "Option B", "Option C", "Option D"],\n      "correctAnswer": "A",\n      "specialty": "Specialty name",\n      "topic": "Topic name",\n      "explanation": "Why the correct answer is correct",\n      "sourceReference": "Lecture title and slide number",\n      "images": []\n    }\n  ]\n}\n\nRules:\n- Every question must have exactly four distinct, non-empty options.\n- correctAnswer must be A, B, C, or D.\n- Include a useful explanation and an exact slide reference.\n- Keep images as an empty array unless a stable image URL and caption are available.\n- Escape JSON characters correctly and make sure the file parses without errors.`;
+  const optionLabels = Array.from({ length: optionCount }, (_, index) => optionLabel(index));
+  const optionExample = optionLabels.map((label) => `"Option ${label}"`).join(', ');
+  return `You are creating medical multiple-choice questions for Qraft.\n\n${countText}\nEach question must be ${lengthText} and use ${kindText}. Use only information found in the supplied lecture. Do not invent facts or sources.\n\nReturn one valid JSON object only. Do not use Markdown or add commentary. Use this exact schema:\n{\n  "format": "qraft-question-bank-v1",\n  "questions": [\n    {\n      "stem": "Question text",\n      "options": [${optionExample}],\n      "correctAnswer": "A",\n      "specialty": "Specialty name",\n      "topic": "Topic name",\n      "explanation": "Why the correct answer is correct",\n      "sourceReference": "Lecture title and slide number",\n      "images": []\n    }\n  ]\n}\n\nRules:\n- Every question must have exactly ${optionCount} distinct, non-empty options.\n- correctAnswer must be one of: ${optionLabels.join(', ')}.\n- Include a useful explanation and an exact slide reference.\n- Keep images as an empty array unless a stable image URL and caption are available.\n- Escape JSON characters correctly and make sure the file parses without errors.`;
 }
 
 function normalizeImportedQuestion(value: unknown, index: number): QuestionDraft {
@@ -56,10 +58,10 @@ function normalizeImportedQuestion(value: unknown, index: number): QuestionDraft
   const item = value as Record<string, unknown>;
   const options = Array.isArray(item.options) ? item.options.map(String) : [];
   const rawAnswer = item.correctAnswer ?? item.answer;
-  const answer = typeof rawAnswer === 'number' ? rawAnswer : 'ABCD'.indexOf(String(rawAnswer).trim().toUpperCase());
+  const answer = typeof rawAnswer === 'number' ? rawAnswer : Array.from({ length: options.length }, (_, optionIndex) => optionLabel(optionIndex)).indexOf(String(rawAnswer).trim().toUpperCase());
   if (typeof item.stem !== 'string' || !item.stem.trim()) throw new Error(`Question ${index + 1} has no stem.`);
-  if (options.length !== 4 || options.some((option) => !option.trim())) throw new Error(`Question ${index + 1} must have exactly four options.`);
-  if (!Number.isInteger(answer) || answer < 0 || answer > 3) throw new Error(`Question ${index + 1} has an invalid correctAnswer.`);
+  if (options.length < 2 || options.length > 10 || options.some((option) => !option.trim())) throw new Error(`Question ${index + 1} must have between 2 and 10 options.`);
+  if (!Number.isInteger(answer) || answer < 0 || answer >= options.length) throw new Error(`Question ${index + 1} has an invalid correctAnswer.`);
   if (typeof item.explanation !== 'string' || !item.explanation.trim()) throw new Error(`Question ${index + 1} requires an explanation.`);
   if (typeof item.sourceReference !== 'string' || !item.sourceReference.trim()) throw new Error(`Question ${index + 1} requires a sourceReference.`);
   const images = Array.isArray(item.images)
@@ -128,7 +130,8 @@ export function QBankManagement({
   const [length, setLength] = useState<QuestionLength>('medium');
   const [countMode, setCountMode] = useState<CountMode>('fixed');
   const [questionCount, setQuestionCount] = useState(20);
-  const prompt = buildQraftPrompt(kind, length, countMode, questionCount);
+  const [optionCount, setOptionCount] = useState(4);
+  const prompt = buildQraftPrompt(kind, length, countMode, questionCount, optionCount);
   const members = collaboration.memberships.filter((item) => item.qbankId === bankId);
   const filteredQuestions = useMemo(() => questions.filter((question) => `${question.questionId} ${question.stem} ${question.topic}`.toLowerCase().includes(search.trim().toLowerCase())), [questions, search]);
 
@@ -263,7 +266,7 @@ export function QBankManagement({
 
   async function saveQuestion(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!editing || !draft.stem.trim() || draft.options.some((item) => !item.trim()) || !draft.explanation.trim() || !draft.sourceReference.trim()) return;
+    if (!editing || !draft.stem.trim() || draft.options.length < 2 || draft.options.length > 10 || draft.answer >= draft.options.length || draft.options.some((item) => !item.trim()) || !draft.explanation.trim() || !draft.sourceReference.trim()) return;
     setBusy(true);
     setError('');
     try {
@@ -290,7 +293,7 @@ export function QBankManagement({
           stem: draft.stem.trim(),
           options: draft.options.map((item) => item.trim()),
           answer: draft.answer,
-          answerLetter: 'ABCD'[draft.answer],
+          answerLetter: optionLabel(draft.answer),
           specialty: draft.specialty.trim() || 'General',
           topic: draft.topic.trim() || 'General',
           explanation: draft.explanation.trim(),
@@ -354,7 +357,7 @@ export function QBankManagement({
         qbankId: bankId,
         number: startNumber + index + 1,
         ...item,
-        answerLetter: 'ABCD'[item.answer],
+        answerLetter: optionLabel(item.answer),
         sourcePage: 0,
         sourceFile: item.sourceReference,
         revision: 1,
@@ -623,6 +626,19 @@ export function QBankManagement({
                     </button>
                   </div>
                 </fieldset>
+                <fieldset>
+                  <legend className="text-sm font-bold">Options per question</legend>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">Choose how many answer choices the generated JSON must include.</p>
+                  <input
+                    aria-label="Options per question"
+                    type="number"
+                    min="2"
+                    max="10"
+                    value={optionCount}
+                    onChange={(event) => setOptionCount(Math.max(2, Math.min(10, Number(event.target.value) || 2)))}
+                    className="mt-2 h-11 w-full rounded-xl border bg-card px-3"
+                  />
+                </fieldset>
               </div>
             </section>
             <section className="rounded-2xl bg-card p-6 ring-1 ring-border">
@@ -666,9 +682,9 @@ export function QBankManagement({
             </label>
             <div className="mt-4 space-y-2">
               {draft.options.map((option, index) => (
-                <label key={index} className="flex items-center gap-3">
-                  <input type="radio" name="correct-answer" checked={draft.answer === index} onChange={() => setDraft({ ...draft, answer: index })} className="size-4 accent-primary" />
-                  <span className="grid size-8 place-items-center rounded-full bg-muted text-sm font-bold">{'ABCD'[index]}</span>
+                <div key={index} className="flex items-center gap-3">
+                  <input aria-label={`Mark option ${optionLabel(index)} as correct`} type="radio" name="correct-answer" checked={draft.answer === index} onChange={() => setDraft({ ...draft, answer: index })} className="size-4 accent-primary" />
+                  <span className="grid size-8 place-items-center rounded-full bg-muted text-sm font-bold">{optionLabel(index)}</span>
                   <input
                     required
                     value={option}
@@ -680,8 +696,32 @@ export function QBankManagement({
                     }
                     className="h-11 flex-1 rounded-xl border bg-card px-3"
                   />
-                </label>
+                  <button
+                    type="button"
+                    aria-label={`Remove option ${optionLabel(index)}`}
+                    disabled={draft.options.length <= 2}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        options: draft.options.filter((_, itemIndex) => itemIndex !== index),
+                        answer: draft.answer === index ? 0 : draft.answer > index ? draft.answer - 1 : draft.answer,
+                      })
+                    }
+                    className="grid size-10 shrink-0 place-items-center rounded-xl border text-red-600 disabled:cursor-not-allowed disabled:opacity-30 dark:text-red-300"
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
               ))}
+              <button
+                type="button"
+                disabled={draft.options.length >= 10}
+                onClick={() => setDraft({ ...draft, options: [...draft.options, ''] })}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-dashed px-4 text-sm font-bold text-primary disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Plus className="size-4" />
+                Add option
+              </button>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <label>

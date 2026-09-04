@@ -6,7 +6,7 @@ import { Check, Clock3, FileCheck2, History, Menu, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import questionData from '@/data/questions.json';
 import { reserveQuestionIds } from '@/lib/firebase-client';
-import { canReviewBank, type AppUser, type CollaborationState, type Question, type QuestionProposal } from '@/lib/medguard-types';
+import { canReviewBank, optionLabel, type AppUser, type CollaborationState, type Question, type QuestionProposal } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
 
 function formatDate(value?: string) {
@@ -88,7 +88,7 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
             stem: proposal.payload.stem,
             options: proposal.payload.options,
             answer: proposal.payload.answer,
-            answerLetter: 'ABCD'[proposal.payload.answer],
+            answerLetter: optionLabel(proposal.payload.answer),
             explanation: proposal.payload.explanation,
             sourceReference: proposal.payload.sourceReference,
             sourcePage: existing?.sourcePage ?? 0,
@@ -188,8 +188,8 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
                   </div>
                   <div className="mt-5 space-y-3">
                     <DiffField label="Question" current={current.stem} proposed={proposal.payload.stem} />
-                    <DiffField label="Options" current={current.options.map((item, index) => `${'ABCD'[index]}. ${item}`).join('\n')} proposed={proposal.payload.options.map((item, index) => `${'ABCD'[index]}. ${item}`).join('\n')} />
-                    <DiffField label="Correct answer" current={'ABCD'[current.answer]} proposed={'ABCD'[proposal.payload.answer]} />
+                    <DiffField label="Options" current={current.options.map((item, index) => `${optionLabel(index)}. ${item}`).join('\n')} proposed={proposal.payload.options.map((item, index) => `${optionLabel(index)}. ${item}`).join('\n')} />
+                    <DiffField label="Correct answer" current={optionLabel(current.answer)} proposed={optionLabel(proposal.payload.answer)} />
                     <DiffField label="Explanation" current={current.explanation} proposed={proposal.payload.explanation} />
                     <DiffField label="Source" current={current.sourceReference} proposed={proposal.payload.sourceReference} />
                   </div>
