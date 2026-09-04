@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "qraft-qbank",
+  "name": "qraft",
   "main": "vinext/server/fetch-handler",
   "compatibility_date": "2026-09-04",
   "compatibility_flags": ["nodejs_compat"],
