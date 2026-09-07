@@ -572,6 +572,117 @@ print(json.dumps(out))`,
     },
   );
   await t.test(
+    'Flashcards remain private and malformed decks or review data are rejected',
+    async () => {
+      const now = new Date().toISOString();
+      const deck = {
+        id: 'deck-one',
+        name: 'Surgery',
+        qbankId: 'smle-gs',
+        color: '#5b5bd6',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const card = {
+        id: 'card-one',
+        deckId: deck.id,
+        qbankId: 'smle-gs',
+        type: 'basic',
+        front: 'Question',
+        back: 'Answer',
+        tags: ['High Yield'],
+        importedGuid: 'anki-guid:0',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const state = {
+        version: 1,
+        tests: [],
+        progress: {},
+        reports: [],
+        revisions: [],
+        customQuestions: [],
+        questionOverrides: {},
+        settings: {},
+        flashcardDecks: [deck],
+        flashcards: [card],
+        flashcardSchedules: {},
+        flashcardReviewLog: [],
+        flashcardSettings: {
+          desiredRetention: 0.9,
+          dailyNewLimit: 20,
+          dailyReviewLimit: 200,
+        },
+      };
+      assert.equal(
+        (await call('reviewer', '/state', { state }, 'PUT')).status,
+        200,
+      );
+      assert.equal(
+        (await call('reviewer', '/state')).data.state.flashcards.length,
+        1,
+      );
+      assert.equal(
+        (await call('lite', '/state')).data.state?.flashcards?.length ?? 0,
+        0,
+      );
+      assert.equal(
+        (
+          await call(
+            'reviewer',
+            '/state',
+            {
+              state: {
+                ...state,
+                flashcards: [{ ...card, deckId: 'missing' }],
+              },
+            },
+            'PUT',
+          )
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await call(
+            'reviewer',
+            '/state',
+            {
+              state: {
+                ...state,
+                flashcards: [card, { ...card, id: 'card-two' }],
+              },
+            },
+            'PUT',
+          )
+        ).status,
+        409,
+      );
+      assert.equal(
+        (
+          await call(
+            'reviewer',
+            '/state',
+            {
+              state: {
+                ...state,
+                flashcardSchedules: {
+                  [card.id]: {
+                    cardId: card.id,
+                    due: 'not-a-date',
+                    state: 'review',
+                  },
+                },
+              },
+            },
+            'PUT',
+          )
+        ).status,
+        400,
+      );
+    },
+  );
+  await t.test(
     'Live channels authenticate subscriptions and deliver saved changes to both sessions',
     async () => {
       const connect = (uid, channel, origin = 'https://qraft.test') =>

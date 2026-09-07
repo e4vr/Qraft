@@ -166,6 +166,34 @@ void test('QBank switching, review counters, random tests, private notes, labs, 
   assert.match(types, /highlightSections/);
 });
 
+void test('private flashcards support decks, Anki import, question conversion, and FSRS review', async () => {
+  const app = await readFile(
+    new URL('components/medguard-app.tsx', root),
+    'utf8',
+  );
+  const flashcards = await readFile(
+    new URL('components/flashcards-workspace.tsx', root),
+    'utf8',
+  );
+  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  const server = await readFile(
+    new URL('lib/cloudflare-server.ts', root),
+    'utf8',
+  );
+  assert.match(app, /label: 'Flashcards'/);
+  assert.match(app, /dueFlashcardCount/);
+  assert.match(app, /QuestionFlashcardDialog/);
+  assert.match(flashcards, /Import Anki/);
+  assert.match(flashcards, /collection\.anki21/);
+  assert.match(flashcards, /Support older Anki versions/);
+  assert.match(flashcards, /ignoredAudio/);
+  assert.match(flashcards, /request_retention/);
+  assert.match(flashcards, /Rating\.Again/);
+  assert.match(types, /interface FlashcardDeck/);
+  assert.match(types, /flashcardSchedules/);
+  assert.match(server, /Invalid flashcard data/);
+});
+
 void test('ending a test uses the branded save confirmation instead of a browser alert', async () => {
   const app = await readFile(
     new URL('components/medguard-app.tsx', root),

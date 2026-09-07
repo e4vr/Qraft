@@ -96,6 +96,70 @@ export interface TestSession {
   qbankId?: string;
 }
 
+export type FlashcardType = 'basic' | 'cloze' | 'image';
+export type FlashcardRating = 'again' | 'hard' | 'good' | 'easy';
+export type FlashcardLearningState =
+  | 'new'
+  | 'learning'
+  | 'review'
+  | 'relearning';
+
+export interface FlashcardDeck {
+  id: string;
+  name: string;
+  qbankId: string;
+  parentId?: string;
+  color: string;
+  createdAt: string;
+  updatedAt: string;
+  importedFrom?: string;
+}
+
+export interface Flashcard {
+  id: string;
+  deckId: string;
+  qbankId: string;
+  type: FlashcardType;
+  front: string;
+  back: string;
+  tags: string[];
+  image?: NoteImage;
+  sourceQuestionId?: string;
+  importedGuid?: string;
+  reverseOfId?: string;
+  suspended?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FlashcardSchedule {
+  cardId: string;
+  due: string;
+  stability: number;
+  difficulty: number;
+  elapsedDays: number;
+  scheduledDays: number;
+  learningSteps: number;
+  reps: number;
+  lapses: number;
+  state: FlashcardLearningState;
+  lastReview?: string;
+}
+
+export interface FlashcardReviewLog {
+  id: string;
+  cardId: string;
+  rating: FlashcardRating;
+  reviewedAt: string;
+  scheduledDays: number;
+}
+
+export interface FlashcardSettings {
+  desiredRetention: number;
+  dailyNewLimit: number;
+  dailyReviewLimit: number;
+}
+
 export function optionLabel(index: number): string {
   let value = index + 1;
   let label = '';
@@ -144,6 +208,11 @@ export interface AppState {
   revisions: RevisionEntry[];
   questionOverrides: Record<string, Partial<Question>>;
   customQuestions: Question[];
+  flashcardDecks: FlashcardDeck[];
+  flashcards: Flashcard[];
+  flashcardSchedules: Record<string, FlashcardSchedule>;
+  flashcardReviewLog: FlashcardReviewLog[];
+  flashcardSettings: FlashcardSettings;
   settings: AppSettings;
   lastSyncAt?: string;
 }
@@ -410,6 +479,15 @@ export function initialAppState(): AppState {
     revisions: [],
     questionOverrides: {},
     customQuestions: [],
+    flashcardDecks: [],
+    flashcards: [],
+    flashcardSchedules: {},
+    flashcardReviewLog: [],
+    flashcardSettings: {
+      desiredRetention: 0.9,
+      dailyNewLimit: 20,
+      dailyReviewLimit: 200,
+    },
     settings: {
       dailyGoal: 20,
       theme: 'light',
@@ -631,5 +709,16 @@ export function normalizeAppState(input?: Partial<AppState>): AppState {
     revisions: input.revisions ?? [],
     questionOverrides: input.questionOverrides ?? {},
     customQuestions: input.customQuestions ?? [],
+    flashcardDecks: input.flashcardDecks ?? [],
+    flashcards: (input.flashcards ?? []).map((card) => ({
+      ...card,
+      tags: card.tags ?? [],
+    })),
+    flashcardSchedules: input.flashcardSchedules ?? {},
+    flashcardReviewLog: input.flashcardReviewLog ?? [],
+    flashcardSettings: {
+      ...base.flashcardSettings,
+      ...input.flashcardSettings,
+    },
   };
 }

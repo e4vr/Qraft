@@ -698,6 +698,111 @@ export async function saveState(request: Request) {
     )
   )
     return json({ error: 'Invalid tests.' }, 400);
+  const flashcardDecks = input.state.flashcardDecks ?? [];
+  const flashcards = input.state.flashcards ?? [];
+  const flashcardSchedules = input.state.flashcardSchedules ?? {};
+  const flashcardReviewLog = input.state.flashcardReviewLog ?? [];
+  const flashcardSettings = input.state.flashcardSettings;
+  if (
+    !Array.isArray(flashcardDecks) ||
+    flashcardDecks.length > 500 ||
+    flashcardDecks.some(
+      (deck) =>
+        !deck ||
+        typeof deck.id !== 'string' ||
+        !deck.id ||
+        typeof deck.name !== 'string' ||
+        !deck.name.trim() ||
+        deck.name.length > 120 ||
+        typeof deck.qbankId !== 'string',
+    ) ||
+    !Array.isArray(flashcards) ||
+    flashcards.length > 5_000 ||
+    flashcards.some(
+      (card) =>
+        !card ||
+        typeof card.id !== 'string' ||
+        !card.id ||
+        typeof card.deckId !== 'string' ||
+        typeof card.qbankId !== 'string' ||
+        !['basic', 'cloze', 'image'].includes(card.type) ||
+        typeof card.front !== 'string' ||
+        !card.front.trim() ||
+        card.front.length > 20_000 ||
+        typeof card.back !== 'string' ||
+        !card.back.trim() ||
+        card.back.length > 40_000 ||
+        !Array.isArray(card.tags) ||
+        card.tags.length > 20 ||
+        card.tags.some((tag) => typeof tag !== 'string' || tag.length > 80) ||
+        (card.image !== undefined &&
+          (!card.image ||
+            typeof card.image.url !== 'string' ||
+            !/^https:\/\//i.test(card.image.url))),
+    ) ||
+    !flashcardSchedules ||
+    typeof flashcardSchedules !== 'object' ||
+    Array.isArray(flashcardSchedules) ||
+    Object.keys(flashcardSchedules).length > 5_000 ||
+    !Array.isArray(flashcardReviewLog) ||
+    flashcardReviewLog.length > 5_000 ||
+    (flashcardSettings !== undefined &&
+      (!Number.isFinite(flashcardSettings.desiredRetention) ||
+        flashcardSettings.desiredRetention < 0.75 ||
+        flashcardSettings.desiredRetention > 0.99 ||
+        !Number.isInteger(flashcardSettings.dailyNewLimit) ||
+        flashcardSettings.dailyNewLimit < 1 ||
+        flashcardSettings.dailyNewLimit > 500 ||
+        !Number.isInteger(flashcardSettings.dailyReviewLimit) ||
+        flashcardSettings.dailyReviewLimit < 1 ||
+        flashcardSettings.dailyReviewLimit > 1_000))
+  )
+    return json({ error: 'Invalid flashcard data.' }, 400);
+  const decksById = new Map(flashcardDecks.map((deck) => [deck.id, deck]));
+  const cardsById = new Map(flashcards.map((card) => [card.id, card]));
+  if (
+    flashcardDecks.some(
+      (deck) =>
+        deck.parentId === deck.id ||
+        (deck.parentId !== undefined &&
+          decksById.get(deck.parentId)?.qbankId !== deck.qbankId),
+    ) ||
+    flashcards.some(
+      (card) => decksById.get(card.deckId)?.qbankId !== card.qbankId,
+    )
+  )
+    return json({ error: 'Every flashcard must belong to a valid deck.' }, 400);
+  if (
+    Object.entries(flashcardSchedules).some(
+      ([id, schedule]) =>
+        !cardsById.has(id) ||
+        !schedule ||
+        schedule.cardId !== id ||
+        !Number.isFinite(Date.parse(schedule.due)) ||
+        !['new', 'learning', 'review', 'relearning'].includes(schedule.state) ||
+        !Number.isFinite(schedule.stability) ||
+        !Number.isFinite(schedule.difficulty) ||
+        !Number.isFinite(schedule.scheduledDays) ||
+        !Number.isInteger(schedule.reps) ||
+        !Number.isInteger(schedule.lapses),
+    ) ||
+    flashcardReviewLog.some(
+      (log) =>
+        !log ||
+        !cardsById.has(log.cardId) ||
+        !['again', 'hard', 'good', 'easy'].includes(log.rating) ||
+        !Number.isFinite(Date.parse(log.reviewedAt)),
+    )
+  )
+    return json({ error: 'Invalid flashcard review history.' }, 400);
+  const importedGuids = flashcards
+    .map((card) => card.importedGuid)
+    .filter((guid): guid is string => Boolean(guid));
+  if (new Set(importedGuids).size !== importedGuids.length)
+    return json(
+      { error: 'Duplicate imported flashcards are not allowed.' },
+      409,
+    );
   const normalizedTestTitles = input.state.tests.map((test) =>
     typeof test.title === 'string'
       ? test.title.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US')

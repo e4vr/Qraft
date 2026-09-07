@@ -12,6 +12,10 @@ import { AccountProfile } from '@/components/account-profile';
 import { SystemStatePage } from '@/components/system-state-page';
 import { QuestionImportReview } from '@/components/question-import-review';
 import { QuestionId, QuestionOption } from '@/components/question-tools';
+import {
+  FlashcardsWorkspace,
+  QuestionFlashcardDialog,
+} from '@/components/flashcards-workspace';
 import { openLiveChannels } from '@/lib/realtime-client';
 import { mergeLiveState } from '@/lib/merge-live-state';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
@@ -43,6 +47,7 @@ import {
   Italic,
   LayoutDashboard,
   Library,
+  Layers3,
   List,
   LogOut,
   Menu,
@@ -157,6 +162,7 @@ type View =
   | 'review'
   | 'create'
   | 'history'
+  | 'flashcards'
   | 'progress'
   | 'settings'
   | 'manager'
@@ -185,6 +191,7 @@ const NAV_ITEMS = [
   { id: 'library' as const, label: 'My QBanks', icon: Library },
   { id: 'create' as const, label: 'Create test', icon: ClipboardPlus },
   { id: 'history' as const, label: 'Previous tests', icon: BookOpenCheck },
+  { id: 'flashcards' as const, label: 'Flashcards', icon: Layers3 },
   { id: 'progress' as const, label: 'Progress', icon: BarChart3 },
   { id: 'settings' as const, label: 'Settings', icon: Settings },
 ];
@@ -978,6 +985,7 @@ function AppSidebar({
   onSelectQBank,
   showReview,
   pendingReviewCount,
+  dueFlashcardCount,
 }: {
   view: View;
   setView: (view: View) => void;
@@ -991,6 +999,7 @@ function AppSidebar({
   onSelectQBank: (id: string) => void;
   showReview: boolean;
   pendingReviewCount: number;
+  dueFlashcardCount: number;
 }) {
   const desktop = useSyncExternalStore(
     subscribeDesktopNavigation,
@@ -1139,6 +1148,14 @@ function AppSidebar({
               <span className="min-w-0 truncate whitespace-nowrap">
                 {item.label}
               </span>
+              {item.id === 'flashcards' && dueFlashcardCount > 0 && (
+                <span
+                  aria-label={`${dueFlashcardCount} flashcards due`}
+                  className="ml-auto min-w-6 rounded-full bg-primary px-2 py-0.5 text-center text-[11px] font-black tabular-nums text-primary-foreground"
+                >
+                  {dueFlashcardCount > 99 ? '99+' : dueFlashcardCount}
+                </span>
+              )}
             </button>
           ))}
           {showReview && (
@@ -1881,6 +1898,7 @@ function TestView({
   const [notesOpen, setNotesOpen] = useState(false);
   const [privateNotesOpen, setPrivateNotesOpen] = useState(false);
   const [labsOpen, setLabsOpen] = useState(false);
+  const [flashcardOpen, setFlashcardOpen] = useState(false);
   const [explanationOpen, setExplanationOpen] = useState(false);
   const [zoomImage, setZoomImage] = useState('');
   const [reportOpen, setReportOpen] = useState(false);
@@ -2565,6 +2583,14 @@ function TestView({
 
   return (
     <main className="q-test-screen flex min-h-screen flex-col bg-[#f5f7fa] dark:bg-background">
+      <QuestionFlashcardDialog
+        question={question}
+        qbankId={qbankId}
+        state={state}
+        setState={setState}
+        open={flashcardOpen}
+        onOpenChange={setFlashcardOpen}
+      />
       <Dialog open={explanationOpen} onOpenChange={setExplanationOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogTitle>Explanation</DialogTitle>
@@ -2841,6 +2867,12 @@ function TestView({
                         <StickyNote className="size-4" />
                       </IconButton>
                       <IconButton
+                        label="Create flashcard from this question"
+                        onClick={() => setFlashcardOpen(true)}
+                      >
+                        <Layers3 className="size-4" />
+                      </IconButton>
+                      <IconButton
                         label={
                           markerActive ? 'Turn marker off' : 'Keep marker on'
                         }
@@ -3102,6 +3134,10 @@ function TestView({
                 <SecondaryButton onClick={() => setPrivateNotesOpen(true)}>
                   <StickyNote className="size-4" />
                   Private Note {progress.note.trim() ? '•' : ''}
+                </SecondaryButton>
+                <SecondaryButton onClick={() => setFlashcardOpen(true)}>
+                  <Layers3 className="size-4" />
+                  Create Flashcard
                 </SecondaryButton>
                 <SecondaryButton onClick={openReport}>
                   <CircleAlert className="size-4" />
@@ -5011,6 +5047,7 @@ export default function MedGuardApp() {
   );
   const [offlineDismissed, setOfflineDismissed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [flashcardClock, setFlashcardClock] = useState(() => Date.now());
   const [linkInvitation, setLinkInvitation] = useState<
     (QBankLinkInvitation & { token: string }) | null
   >(null);
@@ -5144,9 +5181,22 @@ export default function MedGuardApp() {
             proposal.proposedById !== user.uid,
         ).length
       : 0;
+  const dueFlashcardCount = state.flashcards.filter((card) => {
+    if (card.qbankId !== activeQBankId || card.suspended) return false;
+    const schedule = state.flashcardSchedules[card.id];
+    return !schedule || new Date(schedule.due).getTime() <= flashcardClock;
+  }).length;
   const activeTest =
     state.tests.find((test) => test.id === activeTestId) ??
     state.tests.find((test) => test.status === 'active');
+
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setFlashcardClock(Date.now()),
+      60_000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if ('serviceWorker' in navigator)
@@ -5885,6 +5935,7 @@ export default function MedGuardApp() {
           }}
           showReview={showReview}
           pendingReviewCount={pendingReviewCount}
+          dueFlashcardCount={dueFlashcardCount}
         />
         <section
           id="main-content"
@@ -5998,6 +6049,16 @@ export default function MedGuardApp() {
           )}
           {view === 'progress' && (
             <ProgressView state={state} questions={questions} />
+          )}
+          {view === 'flashcards' && (
+            <FlashcardsWorkspace
+              key={activeQBankId}
+              state={state}
+              setState={setState}
+              qbankId={activeQBankId}
+              qbankName={activeQBank?.name ?? 'QBank'}
+              questions={questions}
+            />
           )}
           {view === 'settings' && (
             <SettingsView
