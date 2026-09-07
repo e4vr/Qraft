@@ -2,7 +2,7 @@ import type { AppState, AppUser, CollaborationState } from './medguard-types';
 
 const API = '/api/cloudflare';
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData)) headers.set('content-type', 'application/json');
   const response = await fetch(`${API}${path}`, { credentials: 'same-origin', ...init, headers });

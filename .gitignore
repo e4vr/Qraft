@@ -40,3 +40,8 @@ next-env.d.ts
 /outputs/
 /work/
 *.tsbuildinfo
+*-backup.sql
+/check-db.sql
+
+# Isolated review artifacts
+/.ui-review/

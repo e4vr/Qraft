@@ -3,9 +3,10 @@
 /* oxlint-disable next/no-img-element */
 
 import { Check, Clock3, FileCheck2, History, Menu, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import questionData from '@/data/questions.json';
-import { reserveQuestionIds } from '@/lib/cloudflare-client';
+import { useEffect, useMemo, useState } from 'react';
+import { QuestionPreview } from '@/components/question-tools';
+import { api, reserveQuestionIds } from '@/lib/cloudflare-client';
+import { subscribeLive } from '@/lib/realtime-client';
 import { canReviewBank, optionLabel, type AppUser, type CollaborationState, type Question, type QuestionProposal } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
 
@@ -41,10 +42,36 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
   const [section, setSection] = useState<'pending' | 'reviewed'>('pending');
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
+  const [historyPreference, setHistoryPreference] = useState<{ userId: string; clearedAt: string }>();
+  const [clearing, setClearing] = useState(false);
+  const [notice, setNotice] = useState('');
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const result = await api<{ clearedAt: string }>('/platform/review-history');
+        if (active) setHistoryPreference(previous => ({ userId: user.uid, clearedAt: previous?.userId === user.uid && previous.clearedAt > result.clearedAt ? previous.clearedAt : result.clearedAt }));
+      } catch { if (active) setError('Unable to load your review history preferences. Please try again.'); }
+    };
+    void load();
+    const unsubscribe = subscribeLive(() => void load());
+    return () => { active = false; unsubscribe(); };
+  }, [user.uid]);
+  async function clearHistory() {
+    if (clearing || !window.confirm('Clear your review history? This only clears history for your account. Questions, review decisions and other accounts are unaffected.')) return;
+    setClearing(true); setError(''); setNotice('');
+    try {
+      const result = await api<{ clearedAt: string }>('/platform/review-history', { method: 'POST', body: '{}' });
+      setHistoryPreference({ userId: user.uid, clearedAt: result.clearedAt });
+      setNotice('تم مسح سجل المراجعة لحسابك فقط.');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Unable to clear history.'); }
+    finally { setClearing(false); }
+  }
   const reviewableBanks = useMemo(() => collaboration.qbanks.filter((bank) => canReviewBank(user, bank, collaboration.memberships)), [collaboration.memberships, collaboration.qbanks, user]);
   const bankIds = useMemo(() => new Set(reviewableBanks.map((bank) => bank.id)), [reviewableBanks]);
   const pending = collaboration.proposals.filter((proposal) => proposal.status === 'pending' && proposal.proposedById !== user.uid && bankIds.has(proposal.qbankId));
-  const reviewed = collaboration.proposals.filter((proposal) => proposal.status !== 'pending' && proposal.reviewedById === user.uid && bankIds.has(proposal.qbankId)).sort((a, b) => (b.reviewedAt ?? '').localeCompare(a.reviewedAt ?? ''));
+  const historyReady = historyPreference?.userId === user.uid;
+  const reviewed = collaboration.proposals.filter((proposal) => historyReady && proposal.status !== 'pending' && proposal.reviewedById === user.uid && bankIds.has(proposal.qbankId) && (!historyPreference.clearedAt || (proposal.reviewedAt ?? '') > historyPreference.clearedAt)).sort((a, b) => (b.reviewedAt ?? '').localeCompare(a.reviewedAt ?? ''));
   const visible = section === 'pending' ? pending : reviewed;
 
   async function reviewProposal(proposal: QuestionProposal, status: 'approved' | 'rejected') {
@@ -52,7 +79,7 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
     setBusyId(proposal.id);
     setError('');
     try {
-      const baseQuestions = questionData as Question[];
+      const baseQuestions: Question[] = [];
       const reservedId =
         status === 'approved' && proposal.type === 'new_question'
           ? (
@@ -152,22 +179,24 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
             </button>
             <div>
               <h1 className="font-bold">Review</h1>
-              <p className="text-sm text-muted-foreground">Review new questions and proposed changes for your assigned QBanks.</p>
+              <p className="text-sm text-muted-foreground">Compare each change, check its source, then approve or return it.</p>
             </div>
           </div>
         </header>
       )}
       <div className={cn('mx-auto max-w-[1180px]', embedded ? '' : 'p-4 sm:p-7')}>
-        <div className="mb-5 flex gap-2">
-          <button onClick={() => setSection('pending')} className={cn('inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-bold', section === 'pending' && 'border-primary bg-primary text-primary-foreground')}>
+        <QuestionPreview /><div className="mb-5 flex flex-wrap gap-2">
+          <button aria-pressed={section === 'pending'} onClick={() => setSection('pending')} className={cn('inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-bold', section === 'pending' && 'border-primary bg-primary text-primary-foreground')}>
             <Clock3 className="size-4" />
-            New · {pending.length}
+            Awaiting review · {pending.length}
           </button>
-          <button onClick={() => setSection('reviewed')} className={cn('inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-bold', section === 'reviewed' && 'border-primary bg-primary text-primary-foreground')}>
+          <button aria-pressed={section === 'reviewed'} onClick={() => setSection('reviewed')} className={cn('inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-bold', section === 'reviewed' && 'border-primary bg-primary text-primary-foreground')}>
             <History className="size-4" />
-            Reviewed · {reviewed.length}
+            Reviewed · {historyReady ? reviewed.length : '…'}
           </button>
+          {section === 'reviewed' && <button type="button" disabled={clearing || !historyReady || !reviewed.length} onClick={() => void clearHistory()} className="q-button q-button-secondary">{clearing ? 'Clearing…' : 'Clear history'}</button>}
         </div>
+        {notice && <output className="mb-4 block text-sm text-emerald-600" dir="auto">{notice}</output>}
         {error && (
           <p role="alert" className="mb-4 rounded-xl bg-red-50 p-4 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-300">
             {error}
@@ -213,11 +242,11 @@ export function ReviewWorkspace({ user, collaboration, update, embedded = false 
                   </p>
                   {proposal.status === 'pending' ? (
                     <div className="mt-5 flex justify-end gap-2">
-                      <button disabled={Boolean(busyId)} onClick={() => void reviewProposal(proposal, 'rejected')} className="h-10 rounded-xl border px-4 text-sm font-bold text-red-600 disabled:opacity-50 dark:text-red-300">
+                      <button disabled={Boolean(busyId)} onClick={() => void reviewProposal(proposal, 'rejected')} className="q-button q-button-danger">
                         <X className="mr-1 inline size-4" />
                         Reject
                       </button>
-                      <button disabled={Boolean(busyId)} onClick={() => void reviewProposal(proposal, 'approved')} className="h-10 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:opacity-50">
+                      <button disabled={Boolean(busyId)} onClick={() => void reviewProposal(proposal, 'approved')} className="q-button q-button-study">
                         <Check className="mr-1 inline size-4" />
                         Approve changes
                       </button>

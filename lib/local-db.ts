@@ -40,13 +40,13 @@ export async function loadLocalState(uid: string): Promise<AppState | undefined>
   return readValue<AppState>(`state:${uid}`);
 }
 
-export async function loadLocalCollaboration(): Promise<CollaborationState | undefined> {
-  const state = await readValue<CollaborationState>('collaboration:shared');
+export async function loadLocalCollaboration(uid: string): Promise<CollaborationState | undefined> {
+  const state = await readValue<CollaborationState>(`collaboration:${uid}`);
   return state ? normalizeCollaborationState(state) : undefined;
 }
 
-export async function saveLocalCollaboration(state: CollaborationState): Promise<void> {
-  await writeValue('collaboration:shared', state);
+export async function saveLocalCollaboration(state: CollaborationState, uid: string): Promise<void> {
+  await writeValue(`collaboration:${uid}`, state);
 }
 
 export async function saveLocalState(uid: string, state: AppState): Promise<void> {

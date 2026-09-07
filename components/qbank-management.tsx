@@ -2,16 +2,19 @@
 
 /* oxlint-disable next/no-img-element */
 
-import { ArrowLeft, Check, Clipboard, Copy, FileJson, ImagePlus, Link2, Pencil, Plus, RefreshCw, Save, Search, Settings, Trash2, Unlink, Upload, Users, X } from 'lucide-react';
+import { ArrowLeft, Check, Clipboard, Copy, FileJson, ImagePlus, Link2, Pencil, Plus, RefreshCw, Save, Search, Settings, Trash2, Unlink, Users, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { deleteQBankImages, uploadQuestionImage } from '@/lib/cloudflare-client';
-import { canManageBank, optionLabel, type AppUser, type CollaborationState, type NoteImage, type QBank, type Question, type QuestionProposal, type QBankVisibility } from '@/lib/medguard-types';
+import { QuestionImportReview } from '@/components/question-import-review';
+import { QuestionId } from '@/components/question-tools';
+import { ReviewerSearch } from '@/components/reviewer-search';
+import { api, deleteQBankImages, uploadQuestionImage } from '@/lib/cloudflare-client';
+import { canManageBank, optionLabel, type AppUser, type CollaborationState, type NoteImage, type QBank, type Question, type QBankVisibility } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
 
 type Section = 'settings' | 'questions' | 'import';
-type QuestionKind = 'direct' | 'clinical';
-type QuestionLength = 'short' | 'medium' | 'long';
-type CountMode = 'fixed' | 'per_slide';
+
+
+
 
 interface QuestionDraft {
   stem: string;
@@ -35,53 +38,6 @@ const emptyDraft = (): QuestionDraft => ({
   images: [],
 });
 
-function buildQraftPrompt(kind: QuestionKind, length: QuestionLength, countMode: CountMode, count: number, optionCount: number) {
-  const kindText = kind === 'clinical' ? 'clinical case-based questions with a realistic vignette' : 'direct knowledge questions without a clinical vignette';
-  const lengthText = length === 'long' ? 'long and detailed' : length === 'short' ? 'short and concise' : 'medium length';
-  const countText = countMode === 'per_slide' ? 'Create exactly one question for every slide in the supplied lecture.' : `Create exactly ${count} questions for the supplied lecture.`;
-  const optionLabels = Array.from({ length: optionCount }, (_, index) => optionLabel(index));
-  const optionExample = optionLabels.map((label) => `"Option ${label}"`).join(', ');
-  return `You are creating medical multiple-choice questions for Qraft.\n\n${countText}\nEach question must be ${lengthText} and use ${kindText}. Use only information found in the supplied lecture. Do not invent facts or sources.\n\nReturn one valid JSON object only. Do not use Markdown or add commentary. Use this exact schema:\n{\n  "format": "qraft-question-bank-v1",\n  "questions": [\n    {\n      "stem": "Question text",\n      "options": [${optionExample}],\n      "correctAnswer": "A",\n      "specialty": "Specialty name",\n      "topic": "Topic name",\n      "explanation": "Why the correct answer is correct",\n      "sourceReference": "Lecture title and slide number",\n      "images": []\n    }\n  ]\n}\n\nRules:\n- Every question must have exactly ${optionCount} distinct, non-empty options.\n- correctAnswer must be one of: ${optionLabels.join(', ')}.\n- Include a useful explanation and an exact slide reference.\n- Keep images as an empty array unless a stable image URL and caption are available.\n- Escape JSON characters correctly and make sure the file parses without errors.`;
-}
-
-function normalizeImportedQuestion(value: unknown, index: number): QuestionDraft {
-  if (!value || typeof value !== 'object') throw new Error(`Question ${index + 1} is not an object.`);
-  const item = value as Record<string, unknown>;
-  const options = Array.isArray(item.options) ? item.options.map(String) : [];
-  const rawAnswer = item.correctAnswer ?? item.answer;
-  const answer = typeof rawAnswer === 'number' ? rawAnswer : Array.from({ length: options.length }, (_, optionIndex) => optionLabel(optionIndex)).indexOf(String(rawAnswer).trim().toUpperCase());
-  if (typeof item.stem !== 'string' || !item.stem.trim()) throw new Error(`Question ${index + 1} has no stem.`);
-  if (options.length < 2 || options.length > 10 || options.some((option) => !option.trim())) throw new Error(`Question ${index + 1} must have between 2 and 10 options.`);
-  if (!Number.isInteger(answer) || answer < 0 || answer >= options.length) throw new Error(`Question ${index + 1} has an invalid correctAnswer.`);
-  if (typeof item.explanation !== 'string' || !item.explanation.trim()) throw new Error(`Question ${index + 1} requires an explanation.`);
-  if (typeof item.sourceReference !== 'string' || !item.sourceReference.trim()) throw new Error(`Question ${index + 1} requires a sourceReference.`);
-  const images = Array.isArray(item.images)
-    ? item.images.flatMap((image, imageIndex) => {
-        if (!image || typeof image !== 'object') return [];
-        const source = image as Record<string, unknown>;
-        if (typeof source.url !== 'string') return [];
-        return [
-          {
-            id: crypto.randomUUID(),
-            url: source.url,
-            name: typeof source.name === 'string' ? source.name : `Imported image ${imageIndex + 1}`,
-            caption: typeof source.caption === 'string' ? source.caption : '',
-          },
-        ];
-      })
-    : [];
-  return {
-    stem: item.stem.trim(),
-    options: options.map((option) => option.trim()),
-    answer,
-    specialty: typeof item.specialty === 'string' && item.specialty.trim() ? item.specialty.trim() : 'General',
-    topic: typeof item.topic === 'string' && item.topic.trim() ? item.topic.trim() : 'General',
-    explanation: item.explanation.trim(),
-    sourceReference: item.sourceReference.trim(),
-    images,
-  };
-}
-
 export function QBankManagement({
   user,
   bankId,
@@ -89,6 +45,7 @@ export function QBankManagement({
   collaboration,
   questions,
   update,
+  confirmUpdate,
   onBack,
   onDeleted,
 }: {
@@ -98,6 +55,7 @@ export function QBankManagement({
   collaboration: CollaborationState;
   questions: Question[];
   update: (updater: (current: CollaborationState) => CollaborationState) => void;
+  confirmUpdate: (updater: (current: CollaborationState) => CollaborationState) => void;
   onBack: () => void;
   onDeleted: () => void;
 }) {
@@ -116,14 +74,8 @@ export function QBankManagement({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [kind, setKind] = useState<QuestionKind>('clinical');
-  const [length, setLength] = useState<QuestionLength>('medium');
-  const [countMode, setCountMode] = useState<CountMode>('fixed');
-  const [questionCount, setQuestionCount] = useState(20);
-  const [optionCount, setOptionCount] = useState(4);
-  const prompt = buildQraftPrompt(kind, length, countMode, questionCount, optionCount);
   const members = collaboration.memberships.filter((item) => item.qbankId === bankId);
-  const filteredQuestions = useMemo(() => questions.filter((question) => `${question.questionId} ${question.stem} ${question.topic}`.toLowerCase().includes(search.trim().toLowerCase())), [questions, search]);
+  const filteredQuestions = useMemo(() => questions.filter((question) => `${question.questionId} ${question.stem} ${question.topic}`.toLowerCase().includes(search.trim().replace(/^#/, '').toLowerCase())), [questions, search]);
 
   if (!bank || !canManageBank(user, bank))
     return (
@@ -328,54 +280,6 @@ export function QBankManagement({
     }
   }
 
-  async function importJson(file?: File) {
-    if (!file) return;
-    setBusy(true);
-    setError('');
-    setMessage('');
-    try {
-      const parsed = JSON.parse(await file.text()) as unknown;
-      const rows = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).questions) ? (parsed as { questions: unknown[] }).questions : undefined;
-      if (!rows?.length) throw new Error('The JSON file does not contain a questions array.');
-      if (rows.length > 200) throw new Error('A single import can contain at most 200 questions.');
-      const drafts = rows.map(normalizeImportedQuestion);
-      const proposedAt = new Date().toISOString();
-      const proposals: QuestionProposal[] = drafts.map((payload) => ({
-        id: crypto.randomUUID(),
-        qbankId: bankId,
-        type: 'new_question' as const,
-        editKinds: ['question_text', 'options', 'correct_answer', 'explanation', 'source'],
-        payload,
-        rationale: 'Imported from Qraft JSON.',
-        status: 'pending' as const,
-        proposedById: user.uid,
-        proposedByName: user.displayName,
-        proposedAt,
-      }));
-      update((current) => ({
-        ...current,
-        proposals: [...proposals, ...current.proposals],
-        auditLog: [
-          {
-            id: crypto.randomUUID(),
-            action: 'questions_json_submitted',
-            entityType: 'question',
-            entityId: bankId,
-            actorId: user.uid,
-            actorName: user.displayName,
-            createdAt: proposedAt,
-            detail: `Submitted ${proposals.length} imported questions from ${bankName} for review.`,
-          },
-          ...current.auditLog,
-        ],
-      }));
-      setMessage(`${proposals.length} questions submitted for review.`);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to import this JSON file.');
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const shareUrl = bank.shareEnabled && bank.shareToken && typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}?join_qbank=${encodeURIComponent(bank.id)}&token=${encodeURIComponent(bank.shareToken)}` : '';
 
@@ -399,10 +303,10 @@ export function QBankManagement({
             [
               ['settings', Settings, 'Properties & access'],
               ['questions', Clipboard, 'Questions'],
-              ['import', FileJson, 'Use Ai to import'],
+              ['import', FileJson, 'Import questions'],
             ] as const
           ).map(([id, Icon, label]) => (
-            <button key={id} onClick={() => setSection(id)} className={cn('inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border px-4 text-sm font-bold', section === id && 'border-primary bg-primary text-primary-foreground')}>
+            <button key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={cn('inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border px-4 text-sm font-bold', section === id && 'border-primary bg-primary text-primary-foreground')}>
               <Icon className="size-4" />
               {label}
             </button>
@@ -420,6 +324,7 @@ export function QBankManagement({
           </p>
         )}
 
+        {section === 'settings' && <div className="mb-4 rounded-xl border bg-card p-4"><h2 className="mb-3 font-bold">Add Reviewer</h2><ReviewerSearch bankId={bankId} onAdded={membership=>confirmUpdate(current=>({...current,memberships:[membership,...current.memberships.filter(m=>!(m.qbankId===bankId&&m.userId===membership.userId))]}))} /></div>}
         {section === 'settings' && (
           <div className="grid gap-5 lg:grid-cols-[1fr_0.85fr]">
             <form onSubmit={saveProperties} className="rounded-2xl bg-card p-6 ring-1 ring-border">
@@ -449,7 +354,7 @@ export function QBankManagement({
                     <input type="checkbox" checked={essential} onChange={(event) => setEssential(event.target.checked)} className="mt-1 size-4 accent-amber-600" />
                     <span>
                       <span className="block text-sm font-bold">Essential QBank</span>
-                      <span className="mt-1 block text-xs leading-5 text-muted-foreground">Only Superadmin can edit or delete this bank. Everyone else submits proposals for reviewer approval.</span>
+                      <span className="mt-1 block text-sm leading-6 text-muted-foreground">Only Superadmin can edit or delete this bank. Everyone else submits proposals for reviewer approval.</span>
                     </span>
                   </label>
                 )}
@@ -539,7 +444,7 @@ export function QBankManagement({
                 <Search className="absolute left-3 top-3.5 size-4 text-muted-foreground" />
                 <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by Question ID, topic, or text" className="h-11 w-full rounded-xl border bg-card pl-10 pr-3 text-sm" />
               </label>
-              <button onClick={() => openQuestion()} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-5 text-sm font-bold text-primary-foreground">
+              <button onClick={() => openQuestion()} className="q-button q-button-contribute">
                 <Plus className="size-4" />
                 Add question manually
               </button>
@@ -556,7 +461,7 @@ export function QBankManagement({
                   <div className="divide-y">
                     {filteredQuestions.map((question) => (
                       <div key={question.id} className="grid grid-cols-[90px_1fr_140px_48px] items-center gap-3 px-4 py-4">
-                        <strong className="font-mono text-sm text-primary">{question.questionId}</strong>
+                        <QuestionId value={question.questionId} />
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold">{question.stem}</p>
                           <span className="text-xs text-muted-foreground">
@@ -569,6 +474,7 @@ export function QBankManagement({
                           )}
                         </div>
                         <span className="truncate text-sm text-muted-foreground">{question.topic}</span>
+                        <button aria-label={`Delete Question ID ${question.questionId}`} className="q-button text-destructive" disabled={busy} onClick={async () => { if (!window.confirm('Permanently delete this question? Tickets and history will be retained as #deleted.')) return; setBusy(true); setError(''); try { await api('/platform/question', { method: 'DELETE', body: JSON.stringify({id:question.questionId}) }); confirmUpdate(current=>({...current,approvedQuestions:current.approvedQuestions.filter(q=>q.id!==question.id),proposals:current.proposals.map(p=>p.questionId===question.id?{...p,questionId:'#deleted'}:p)})); setMessage('Question permanently deleted.'); } catch (e) { setError(e instanceof Error?e.message:'Unable to delete.'); } finally {setBusy(false);} }}>Delete</button>
                         <button onClick={() => openQuestion(question)} className="grid size-9 place-items-center rounded-lg border" aria-label={`Edit Question ID ${question.questionId}`}>
                           <Pencil className="size-4" />
                         </button>
@@ -584,85 +490,10 @@ export function QBankManagement({
         )}
 
         {section === 'import' && (
-          <div className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
-            <section className="rounded-2xl bg-card p-6 ring-1 ring-border">
-              <h2 className="text-lg font-bold">Build your Qraft prompt</h2>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">Choose the format before copying the prompt into your preferred AI tool.</p>
-              <div className="mt-5 space-y-5">
-                <fieldset>
-                  <legend className="text-sm font-bold">Question type</legend>
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    {(
-                      [
-                        ['clinical', 'Clinical'],
-                        ['direct', 'Direct'],
-                      ] as const
-                    ).map(([id, label]) => (
-                      <button type="button" key={id} onClick={() => setKind(id)} className={cn('h-10 rounded-xl border text-sm font-bold', kind === id && 'border-primary bg-primary text-primary-foreground')}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-                <fieldset>
-                  <legend className="text-sm font-bold">Question length</legend>
-                  <div className="mt-2 grid grid-cols-3 gap-2">
-                    {(['short', 'medium', 'long'] as const).map((id) => (
-                      <button type="button" key={id} onClick={() => setLength(id)} className={cn('h-10 rounded-xl border text-sm font-bold capitalize', length === id && 'border-primary bg-primary text-primary-foreground')}>
-                        {id}
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-                <fieldset>
-                  <legend className="text-sm font-bold">Questions per lecture</legend>
-                  <div className="mt-2 space-y-2">
-                    <button type="button" onClick={() => setCountMode('fixed')} className={cn('flex h-11 w-full items-center justify-between rounded-xl border px-3 text-sm font-bold', countMode === 'fixed' && 'border-primary bg-primary/5 text-primary')}>
-                      <span>Specific number</span>
-                      {countMode === 'fixed' && <Check className="size-4" />}
-                    </button>
-                    {countMode === 'fixed' && <input type="number" min="1" max="200" value={questionCount} onChange={(event) => setQuestionCount(Math.max(1, Math.min(200, Number(event.target.value))))} className="h-11 w-full rounded-xl border bg-card px-3" />}
-                    <button type="button" onClick={() => setCountMode('per_slide')} className={cn('flex h-11 w-full items-center justify-between rounded-xl border px-3 text-sm font-bold', countMode === 'per_slide' && 'border-primary bg-primary/5 text-primary')}>
-                      <span>One question per slide</span>
-                      {countMode === 'per_slide' && <Check className="size-4" />}
-                    </button>
-                  </div>
-                </fieldset>
-                <fieldset>
-                  <legend className="text-sm font-bold">Options per question</legend>
-                  <p className="mt-1 text-xs leading-5 text-muted-foreground">Choose how many answer choices the generated JSON must include.</p>
-                  <input
-                    aria-label="Options per question"
-                    type="number"
-                    min="2"
-                    max="10"
-                    value={optionCount}
-                    onChange={(event) => setOptionCount(Math.max(2, Math.min(10, Number(event.target.value) || 2)))}
-                    className="mt-2 h-11 w-full rounded-xl border bg-card px-3"
-                  />
-                </fieldset>
-              </div>
-            </section>
-            <section className="rounded-2xl bg-card p-6 ring-1 ring-border">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-bold">Generated prompt</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">The output schema is validated before import.</p>
-                </div>
-                <button onClick={() => void navigator.clipboard.writeText(prompt).then(() => setMessage('Prompt copied.'))} className="inline-flex h-10 items-center gap-2 rounded-xl border px-4 text-sm font-bold">
-                  <Copy className="size-4" />
-                  Copy prompt
-                </button>
-              </div>
-              <textarea readOnly value={prompt} className="mt-4 min-h-[390px] w-full rounded-xl border bg-muted/25 p-4 font-mono text-xs leading-6" />
-              <label className={cn('mt-4 flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-5 text-center', busy && 'pointer-events-none opacity-50')}>
-                <Upload className="size-6 text-primary" />
-                <strong className="mt-2 text-sm">Upload file here ( Json/Text )</strong>
-                <span className="mt-1 text-xs text-muted-foreground">Maximum 200 questions per file</span>
-                <input type="file" accept="application/json,.json" className="sr-only" onChange={(event) => void importJson(event.target.files?.[0])} />
-              </label>
-            </section>
-          </div>
+          <section className="min-w-0 rounded-2xl bg-card p-3 ring-1 ring-border sm:p-6">
+            <h2 className="mb-4 text-lg font-bold">Import JSON / Use AI</h2>
+            <QuestionImportReview bankId={bankId} onImported={proposals=>confirmUpdate(current=>({...current,proposals:[...proposals,...current.proposals.filter(p=>!proposals.some(n=>n.id===p.id))]}))} />
+          </section>
         )}
       </div>
 
@@ -680,14 +511,18 @@ export function QBankManagement({
             </div>
             <label className="mt-5 block">
               <span className="mb-1.5 block text-sm font-bold">Question text</span>
-              <textarea required value={draft.stem} onChange={(event) => setDraft({ ...draft, stem: event.target.value })} className="min-h-32 w-full rounded-xl border bg-card p-3" />
+              <textarea dir="auto" required value={draft.stem} onChange={(event) => setDraft({ ...draft, stem: event.target.value })} className="min-h-32 w-full rounded-xl border bg-card p-3" />
             </label>
             <div className="mt-4 space-y-2">
               {draft.options.map((option, index) => (
-                <div key={index} className="flex items-center gap-3">
+                <div key={index} className="flex min-w-0 items-start gap-2">
+                  <label className="flex min-h-11 shrink-0 cursor-pointer items-center gap-1 rounded-xl border px-2">
                   <input aria-label={`Mark option ${optionLabel(index)} as correct`} type="radio" name="correct-answer" checked={draft.answer === index} onChange={() => setDraft({ ...draft, answer: index })} className="size-4 accent-primary" />
-                  <span className="grid size-8 place-items-center rounded-full bg-muted text-sm font-bold">{optionLabel(index)}</span>
-                  <input
+                  <span className="text-sm font-bold">{optionLabel(index)}</span>
+                  </label>
+                  <textarea
+                    dir="auto"
+                    aria-label={`Option ${optionLabel(index)}`}
                     required
                     value={option}
                     onChange={(event) =>
@@ -696,7 +531,7 @@ export function QBankManagement({
                         options: draft.options.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)),
                       })
                     }
-                    className="h-11 flex-1 rounded-xl border bg-card px-3"
+                    className="min-h-11 min-w-0 flex-1 rounded-xl border bg-card p-3"
                   />
                   <button
                     type="button"
@@ -709,7 +544,7 @@ export function QBankManagement({
                         answer: draft.answer === index ? 0 : draft.answer > index ? draft.answer - 1 : draft.answer,
                       })
                     }
-                    className="grid size-10 shrink-0 place-items-center rounded-xl border text-red-600 disabled:cursor-not-allowed disabled:opacity-30 dark:text-red-300"
+                    className="grid size-11 shrink-0 place-items-center rounded-xl border text-red-600 disabled:cursor-not-allowed disabled:opacity-30 dark:text-red-300"
                   >
                     <Trash2 className="size-4" />
                   </button>
@@ -746,7 +581,7 @@ export function QBankManagement({
               </label>
             </div>
             <section className="mt-5 rounded-xl border p-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="font-bold">Question images</h3>
                   <p className="text-xs text-muted-foreground">Up to 5 new images, 10 MB each.</p>
@@ -798,11 +633,11 @@ export function QBankManagement({
                 </p>
               )}
             </section>
-            <div className="mt-6 flex justify-end gap-2">
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
               <button type="button" onClick={() => setEditing(undefined)} className="h-11 rounded-xl border px-5 text-sm font-bold">
                 Cancel
               </button>
-              <button type="submit" disabled={busy} className="inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-bold text-primary-foreground disabled:opacity-50">
+              <button type="submit" disabled={busy} className="q-button q-button-contribute">
                 {busy ? <RefreshCw className="size-4 animate-spin" /> : <Save className="size-4" />}
                 Submit for review
               </button>
@@ -816,7 +651,7 @@ export function QBankManagement({
             <h2 id="delete-bank-title" className="text-xl font-bold">
               Delete {bank.name}?
             </h2>
-            <p className="mt-3 text-sm leading-6 text-muted-foreground">This action cannot be undone. Existing Question IDs will remain reserved and will never be assigned again.</p>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">This action cannot be undone. Questions are permanently deleted. Their display IDs may be reused; historical tickets remain detached as #deleted.</p>
             <div className="mt-6 grid grid-cols-2 gap-2">
               <button onClick={() => setDeleteOpen(false)} className="h-11 rounded-xl border text-sm font-bold">
                 Cancel

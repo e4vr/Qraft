@@ -1,10 +1,11 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "qraft",
-  "main": "vinext/server/fetch-handler",
-  "compatibility_date": "2026-09-04",
+  "main": "./worker.ts",
+  "compatibility_date": "2026-09-07",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  "durable_objects": { "bindings": [{ "name": "REALTIME", "class_name": "RealtimeChannel", "script_name": "qraft-realtime" }] },
   "d1_databases": [
     {
       "binding": "DB",

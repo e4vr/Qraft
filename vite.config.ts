@@ -23,6 +23,7 @@ export default defineConfig(async () => {
     plugins: [
       vinext(),
       cloudflare({
+        auxiliaryWorkers: [{ configPath: 'wrangler.realtime.jsonc' }],
         viteEnvironment: { name: 'rsc', childEnvironments: ['ssr'] },
       }),
     ],

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 const questions = JSON.parse(await readFile(new URL('../data/questions.json', import.meta.url), 'utf8'));
 
-test('phase one contains every keyed question from the 51-page source', () => {
+void test('phase one contains every keyed question from the 51-page source', () => {
   assert.equal(questions.length, 217);
   assert.equal(questions[0].id, 'gs-001');
   assert.equal(questions.at(-1).id, 'gs-217');
@@ -14,7 +14,7 @@ test('phase one contains every keyed question from the 51-page source', () => {
   assert.equal(questions.at(-1).sourcePage, 51);
 });
 
-test('question structure and answer keys are internally consistent', () => {
+void test('question structure and answer keys are internally consistent', () => {
   const questionIds = new Set();
   questions.forEach((question, index) => {
     assert.equal(question.number, index + 1);
@@ -33,7 +33,7 @@ test('question structure and answer keys are internally consistent', () => {
   });
 });
 
-test('source pages remain in order and extraction artifacts are removed', () => {
+void test('source pages remain in order and extraction artifacts are removed', () => {
   const pages = questions.map((question) => question.sourcePage);
   assert.deepEqual([...pages].sort((a, b) => a - b), pages);
   const combined = questions.map((question) => `${question.stem} ${question.options.join(' ')}`).join('\n');
@@ -41,7 +41,7 @@ test('source pages remain in order and extraction artifacts are removed', () => 
   assert.doesNotMatch(combined, /\b(?:aOacks?|admijed|soO|unevenRul|Curejage|intermiOent|ajending|shaO)\b/);
 });
 
-test('PWA shell and Cloudflare persistence configuration are present', async () => {
+void test('PWA shell and Cloudflare persistence configuration are present', async () => {
   const manifest = JSON.parse(await readFile(new URL('../public/manifest.webmanifest', import.meta.url), 'utf8'));
   const serviceWorker = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
   const wrangler = await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
@@ -51,6 +51,6 @@ test('PWA shell and Cloudflare persistence configuration are present', async () 
   assert.match(serviceWorker, /CACHE_NAME/);
   assert.match(wrangler, /"binding": "DB"/);
   assert.doesNotMatch(wrangler, /"binding": "MEDIA"/);
-  assert.match(schema, /sqliteTable\('profiles'/);
-  assert.match(schema, /sqliteTable\('media'/);
+  assert.match(schema, /sqliteTable\(\s*'profiles'/);
+  assert.match(schema, /sqliteTable\(\s*'media'/);
 });

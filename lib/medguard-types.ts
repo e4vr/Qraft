@@ -194,6 +194,7 @@ export interface QBankInvitation {
 }
 
 export interface MemberProfile {
+  subscriptionProtected?: boolean;
   uid: string;
   email: string;
   displayName: string;
@@ -273,6 +274,7 @@ export interface RoleApplication {
   userName: string;
   userEmail: string;
   requestedRole: 'pro' | PlatformRole;
+  superAdminUid: string;
   qbankId?: string;
   reason: string;
   status: ProposalStatus;
