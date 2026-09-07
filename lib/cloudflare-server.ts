@@ -560,7 +560,7 @@ function proposalPayloadIsComplete(proposal: Record<string, unknown>) {
 
 function proposalChangeAllowed(user: AppUser, operation: RecordOperation, value: Record<string, unknown>, state: CollaborationState, canReview: boolean) {
   const current = state.proposals.find((item) => item.id === operation.id);
-  if (operation.type === 'delete') return Boolean(canReview || (current?.proposedById === user.uid && current.status !== 'approved'));
+  if (operation.type === 'delete') return Boolean(canReview || current?.proposedById === user.uid);
   if (value.id !== operation.id || !proposalPayloadIsComplete(value)) return false;
   if (!current) return value.proposedById === user.uid && value.status === 'pending';
   if (canReview) {

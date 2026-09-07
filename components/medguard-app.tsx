@@ -2441,6 +2441,8 @@ function QuestionManager({
   const [editingProposal, setEditingProposal] = useState<QuestionProposal>();
   const [importOpen, setImportOpen] = useState(false);
   const [contributionSearch, setContributionSearch] = useState('');
+  const [selectedContributionIds, setSelectedContributionIds] = useState<Set<string>>(new Set());
+  const [contributionDeleteMode, setContributionDeleteMode] = useState<'selected' | 'all'>();
   const [stem, setStem] = useState('');
   const [options, setOptions] = useState(['', '', '', '']);
   const [answer, setAnswer] = useState(0);
@@ -2558,7 +2560,32 @@ function QuestionManager({
     setEditingProposal(undefined);
     setOpen(false);
   }
-  const mine = collaboration.proposals.filter((proposal) => proposal.proposedById === user.uid && proposal.qbankId === activeQBankId && `${proposal.payload.stem} ${allQuestions.find(q => q.id === proposal.questionId)?.questionId ?? (proposal.questionId === '#deleted' ? 'deleted' : '')}`.toLowerCase().includes(contributionSearch.replace(/^#/, '').toLowerCase()));
+  const allMine = collaboration.proposals.filter((proposal) => proposal.proposedById === user.uid && proposal.qbankId === activeQBankId);
+  const mine = allMine.filter((proposal) => `${proposal.payload.stem} ${allQuestions.find(q => q.id === proposal.questionId)?.questionId ?? (proposal.questionId === '#deleted' ? 'deleted' : '')}`.toLowerCase().includes(contributionSearch.replace(/^#/, '').toLowerCase()));
+  const selectedContributionCount = allMine.filter((proposal) => selectedContributionIds.has(proposal.id)).length;
+  const allVisibleSelected = mine.length > 0 && mine.every((proposal) => selectedContributionIds.has(proposal.id));
+  function toggleContribution(id: string) {
+    setSelectedContributionIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleVisibleContributions() {
+    setSelectedContributionIds((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) mine.forEach((proposal) => next.delete(proposal.id));
+      else mine.forEach((proposal) => next.add(proposal.id));
+      return next;
+    });
+  }
+  function deleteContributions() {
+    const ids = new Set(contributionDeleteMode === 'all' ? allMine.map((proposal) => proposal.id) : [...selectedContributionIds]);
+    updateCollaboration((current) => ({ ...current, proposals: current.proposals.filter((proposal) => !ids.has(proposal.id) || proposal.proposedById !== user.uid || proposal.qbankId !== activeQBankId) }));
+    setSelectedContributionIds(new Set());
+    setContributionDeleteMode(undefined);
+  }
   const qbank = collaboration.qbanks.find((item) => item.id === activeQBankId);
   const isOwner = Boolean(qbank && canManageBank(user, qbank));
   if (open)
@@ -2685,17 +2712,45 @@ function QuestionManager({
         </div>
         <section className="mt-6 overflow-hidden rounded-2xl bg-card ring-1 ring-border">
           <div className="border-b p-5">
-            <h2 className="font-bold">Your contribution history</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Proposals are attributed to your account and remain auditable.</p><input aria-label="Search contributions by Question ID" placeholder="Search Question ID or text" className="mt-3 w-full rounded-xl border bg-background p-3" value={contributionSearch} onChange={e => setContributionSearch(e.target.value)} />
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-bold">Your contribution history</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Remove history entries without deleting approved questions from the QBank.</p>
+              </div>
+              <button
+                type="button"
+                disabled={allMine.length === 0}
+                onClick={() => setContributionDeleteMode('all')}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-bold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15"
+              >
+                <Trash2 className="size-4" />
+                Clear history
+              </button>
+            </div>
+            <input aria-label="Search contributions by Question ID" placeholder="Search Question ID or text" className="mt-3 w-full rounded-xl border bg-background p-3" value={contributionSearch} onChange={e => setContributionSearch(e.target.value)} />
           </div>
           {mine.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">You have not proposed a question or correction in this QBank yet.</div>
           ) : (
-            <div className="divide-y">
+            <div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/25 px-4 py-3">
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
+                  <input type="checkbox" checked={allVisibleSelected} onChange={toggleVisibleContributions} className="size-4 rounded accent-primary" />
+                  Select all shown ({mine.length})
+                </label>
+                {selectedContributionCount > 0 && (
+                  <button type="button" onClick={() => setContributionDeleteMode('selected')} className="inline-flex h-9 items-center gap-2 rounded-xl bg-red-600 px-3 text-xs font-bold text-white transition hover:bg-red-700">
+                    <Trash2 className="size-3.5" />
+                    Delete selected ({selectedContributionCount})
+                  </button>
+                )}
+              </div>
+              <div className="divide-y">
               {mine.map((proposal) => {
                 const contributedQuestion = proposal.questionId ? allQuestions.find((item) => item.id === proposal.questionId) : undefined;
                 return (
-                  <div key={proposal.id} className="grid gap-3 p-4 text-sm sm:grid-cols-[120px_minmax(0,1fr)_140px_auto] sm:items-center">
+                  <div key={proposal.id} className={cx('grid gap-3 p-4 text-sm transition sm:grid-cols-[auto_120px_minmax(0,1fr)_140px_auto] sm:items-center', selectedContributionIds.has(proposal.id) && 'bg-primary/5')}>
+                    <input aria-label={`Select contribution: ${proposal.payload.stem}`} type="checkbox" checked={selectedContributionIds.has(proposal.id)} onChange={() => toggleContribution(proposal.id)} className="size-4 rounded accent-primary" />
                     <span
                       className={cx(
                         'w-fit rounded-full px-2 py-1 text-xs font-bold uppercase',
@@ -2721,10 +2776,28 @@ function QuestionManager({
                   </div>
                 );
               })}
+              </div>
             </div>
           )}
         </section>
       </div>
+      <AlertDialog open={Boolean(contributionDeleteMode)} onOpenChange={(nextOpen) => { if (!nextOpen) setContributionDeleteMode(undefined); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-200"><Trash2 className="size-5" /></AlertDialogMedia>
+            <AlertDialogTitle>{contributionDeleteMode === 'all' ? 'Clear contribution history?' : `Delete ${selectedContributionCount} selected contribution${selectedContributionCount === 1 ? '' : 's'}?`}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {contributionDeleteMode === 'all'
+                ? `This removes all ${allMine.length} history entries in this QBank. Approved questions remain available in the QBank.`
+                : 'The selected history entries will be removed. Any approved questions remain available in the QBank.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={deleteContributions} className="bg-red-600 text-white hover:bg-red-700">Delete permanently</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
