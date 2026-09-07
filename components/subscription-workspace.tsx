@@ -6,55 +6,9 @@ import { Crown } from 'lucide-react';
 import { api, observeCloudflareUser } from '@/lib/cloudflare-client';
 import type { AppUser } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 
 export const openUpgrade = () =>
   window.dispatchEvent(new Event('qraft-upgrade'));
-export function AccountMenu({
-  user,
-  onSettings,
-}: {
-  user: AppUser;
-  onSettings: () => void;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <button
-            aria-label="Account"
-            className={`profile-ring profile-ring-${user.tier} grid size-10 shrink-0 place-items-center rounded-full bg-primary/10 text-sm font-black text-primary`}
-          />
-        }
-      >
-        {user.displayName.slice(0, 2).toUpperCase()}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent>
-        <DropdownMenuLabel>
-          {user.displayName} · {user.tier.toUpperCase()}
-        </DropdownMenuLabel>
-        {user.tier === 'lite' && (
-          <DropdownMenuItem
-            onClick={openUpgrade}
-            className="font-bold text-amber-700 dark:text-amber-300"
-          >
-            <Crown className="size-4" />
-            Upgrade to Pro
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuItem onClick={onSettings}>
-          Account settings
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 export function UpgradeButton() {
   return (
     <button

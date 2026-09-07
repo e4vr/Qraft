@@ -147,7 +147,7 @@ async function profileByEmail(email: string) {
 }
 
 export async function profileById(uid: string) {
-  return env.DB.prepare('SELECT * FROM profiles WHERE uid = ? LIMIT 1').bind(uid).first<{ uid: string; profile_json: string; totp_secret: string | null }>();
+  return env.DB.prepare('SELECT * FROM profiles WHERE uid = ? LIMIT 1').bind(uid).first<{ uid: string; email: string; password_hash: string; password_salt: string; profile_json: string; totp_secret: string | null }>();
 }
 
 export async function currentUser(request: Request, requireVerified = true): Promise<AppUser | undefined> {
@@ -406,6 +406,59 @@ const protectedSubscriptionsSql = "SELECT user_id FROM subscriptions WHERE metho
 async function protectedSubscriptionUsers() {
   const result = await env.DB.prepare(protectedSubscriptionsSql).all<{ user_id: string }>();
   return new Set(result.results.map(row => row.user_id));
+}
+
+export async function updateOwnProfile(request: Request) {
+  assertSameOrigin(request);
+  const user = await currentUser(request);
+  if (!user) return json({ error: 'Authentication required.' }, 401);
+  const input = await readJson<{ displayName?: string; phone?: string }>(request);
+  const displayName = input.displayName?.trim() ?? '';
+  const phone = normalizePhone(input.phone ?? '');
+  if (displayName.length < 2 || displayName.length > 120 || (user.role !== 'super_admin' && (phone.length < 7 || phone.length > 20)))
+    return json({ error: 'Enter a valid name and mobile number.' }, 400);
+  const row = await profileById(user.uid);
+  if (!row) return json({ error: 'Account not found.' }, 404);
+  const profile = JSON.parse(row.profile_json) as MemberProfile;
+  if (phone && phone !== profile.phone) {
+    const control = await env.DB.prepare("SELECT payload FROM records WHERE type='system' AND id='accessControl'").first<{ payload: string }>();
+    const blocked = control ? JSON.parse(control.payload) as CollaborationState['blockedAccess'] : { emails: [], phones: [], universityIds: [] };
+    if (blocked.phones.includes(phone)) return json({ error: 'This mobile number is blocked.' }, 403);
+  }
+  const next: MemberProfile = { ...profile, displayName, phone: user.role === 'super_admin' && !phone ? profile.phone : phone };
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare('UPDATE profiles SET profile_json=?,updated_at=? WHERE uid=?').bind(JSON.stringify(next), now, user.uid),
+    auditStatement(user, 'profile_self_updated', user.uid, { displayName: profile.displayName, phone: profile.phone }, { displayName: next.displayName, phone: next.phone }),
+  ]);
+  return json({ user: safeProfile(next, Boolean(enrolledTotpSecret(row.totp_secret)), user.mfaVerified) });
+}
+
+export async function changeOwnPassword(request: Request) {
+  assertSameOrigin(request);
+  const user = await currentUser(request);
+  if (!user) return json({ error: 'Authentication required.' }, 401);
+  const input = await readJson<{ currentPassword?: string; newPassword?: string }>(request);
+  const currentPassword = input.currentPassword ?? '';
+  const newPassword = input.newPassword ?? '';
+  if (newPassword.length < 10 || newPassword.length > 128)
+    return json({ error: 'Use a new password between 10 and 128 characters.' }, 400);
+  const row = await profileById(user.uid);
+  if (!row) return json({ error: 'Account not found.' }, 404);
+  const current = await hashPassword(currentPassword, row.password_salt);
+  if (!secureEqual(current.hash, row.password_hash)) return json({ error: 'Current password is incorrect.' }, 401);
+  const replacement = await hashPassword(newPassword);
+  if (secureEqual(replacement.hash, (await hashPassword(currentPassword, replacement.salt)).hash))
+    return json({ error: 'Choose a password different from your current password.' }, 400);
+  const token = cookieValue(request, SESSION_COOKIE);
+  const tokenHash = token ? await sha256(token) : '';
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare('UPDATE profiles SET password_hash=?,password_salt=?,updated_at=? WHERE uid=?').bind(replacement.hash, replacement.salt, now, user.uid),
+    env.DB.prepare('DELETE FROM sessions WHERE user_id=? AND token_hash<>?').bind(user.uid, tokenHash),
+    auditStatement(user, 'password_self_changed', user.uid, null, { otherSessionsSignedOut: true }),
+  ]);
+  return json({ ok: true });
 }
 
 function accessManagerProfile(member: MemberProfile, protectedAccount: boolean): MemberProfile {

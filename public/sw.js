@@ -1,5 +1,5 @@
-const CACHE_NAME = 'qraft-shell-v1.0.0';
-const APP_SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
+const CACHE_NAME = 'qraft-shell-v1.0.1';
+const APP_SHELL = ['/', '/offline', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
@@ -15,5 +15,5 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(fetch(event.request).then((response) => {
     if (response.ok) void caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response.clone()));
     return response;
-  }).catch(() => caches.match(event.request).then((cached) => cached || (event.request.mode === 'navigate' ? caches.match('/') : Response.error()))));
+  }).catch(() => caches.match(event.request).then((cached) => cached || (event.request.mode === 'navigate' ? caches.match('/offline') : Response.error()))));
 });

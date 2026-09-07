@@ -38,6 +38,14 @@ export async function signOutCloudflare(): Promise<void> {
   await api('/auth/logout', { method: 'POST', body: '{}' });
 }
 
+export async function updateCloudflareProfile(displayName: string, phone: string): Promise<AppUser> {
+  return (await api<{ user: AppUser }>('/auth/profile', { method: 'PUT', body: JSON.stringify({ displayName, phone }) })).user;
+}
+
+export async function changeCloudflarePassword(currentPassword: string, newPassword: string): Promise<void> {
+  await api('/auth/password', { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) });
+}
+
 export async function beginTotpEnrollment(): Promise<{ secretKey: string; qrUrl: string }> {
   return api('/auth/mfa-begin', { method: 'POST', body: '{}' });
 }

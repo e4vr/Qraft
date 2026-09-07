@@ -4,6 +4,7 @@ import { connectRealtime, notifyMutation } from '@/lib/realtime-server';
 import {
   beginMfa,
   completeMfa,
+  changeOwnPassword,
   currentUser,
   deleteBankMedia,
   joinBank,
@@ -18,6 +19,7 @@ import {
   saveState,
   serveMedia,
   uploadMedia,
+  updateOwnProfile,
   verifyMfa,
 } from '@/lib/cloudflare-server';
 
@@ -83,6 +85,8 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   return safely(request, async () => {
   const [scope, action] = pathParts(request);
+  if (scope === 'auth' && action === 'profile') return updateOwnProfile(request);
+  if (scope === 'auth' && action === 'password') return changeOwnPassword(request);
   if (scope === 'platform' && action) return platformApi(request, action);
   if (scope === 'contact') return contactApi(request);
   if (scope === 'state') return saveState(request);

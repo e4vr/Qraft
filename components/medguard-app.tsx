@@ -2,8 +2,10 @@
 
 /* oxlint-disable next/no-img-element, jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions, jsx-a11y/control-has-associated-label */
 
-import { Subscribe, UpgradeButton, UpgradeDialog, AccountMenu } from '@/components/subscription-workspace';
+import { Subscribe, UpgradeButton, UpgradeDialog } from '@/components/subscription-workspace';
 import { ContactWorkspace } from '@/components/contact-workspace';
+import { AccountProfile } from '@/components/account-profile';
+import { SystemStatePage } from '@/components/system-state-page';
 import { QuestionImportReview } from '@/components/question-import-review';
 import { QuestionId, QuestionOption } from '@/components/question-tools';
 import { openLiveChannels } from '@/lib/realtime-client';
@@ -119,7 +121,7 @@ import { StudyDashboard } from '@/components/study-dashboard';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn as cx } from '@/lib/utils';
 
-type View = 'subscribe' | 'contact' | 'dashboard' | 'library' | 'qbank-management' | 'review' | 'create' | 'history' | 'progress' | 'settings' | 'manager' | 'admin' | 'test';
+type View = 'subscribe' | 'contact' | 'account' | 'dashboard' | 'library' | 'qbank-management' | 'review' | 'create' | 'history' | 'progress' | 'settings' | 'manager' | 'admin' | 'test';
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'offline' | 'error';
 
 interface ModelContextLike {
@@ -565,6 +567,15 @@ function subscribeDesktopNavigation(callback: () => void) {
   return () => media.removeEventListener('change', callback);
 }
 
+function subscribeConnection(callback: () => void) {
+  window.addEventListener('online', callback);
+  window.addEventListener('offline', callback);
+  return () => {
+    window.removeEventListener('online', callback);
+    window.removeEventListener('offline', callback);
+  };
+}
+
 function AppSidebar({
   view,
   setView,
@@ -712,14 +723,14 @@ function AppSidebar({
         </nav>
         <footer className="shrink-0 border-t bg-sidebar/95 p-3 backdrop-blur-xl">
           <div className="rounded-2xl border bg-card/80 p-3 shadow-sm">
-            <div className="flex items-center gap-3">
-              <AccountMenu user={user} onSettings={() => navigate('settings')} />
-              <div className="min-w-0 flex-1">
-                <strong className="block truncate text-sm">{user.displayName}</strong>
-                <span className="mt-0.5 block truncate text-xs capitalize text-muted-foreground" title={user.email}>
-                  {roleLabel} · {user.tier.toUpperCase()}
+            <div className="flex items-center gap-2">
+              <button onClick={() => navigate('account')} aria-label="Open account profile" className="flex min-w-0 flex-1 items-center gap-3 rounded-xl p-1 text-left transition hover:bg-muted">
+                <span className={`profile-ring profile-ring-${user.tier} grid size-10 shrink-0 place-items-center rounded-full bg-primary/10 text-sm font-black text-primary`}>{user.displayName.slice(0, 2).toUpperCase()}</span>
+                <span className="min-w-0 flex-1">
+                  <strong className="block truncate text-sm">{user.displayName}</strong>
+                  <span className="mt-0.5 block truncate text-xs capitalize text-muted-foreground" title={user.email}>{roleLabel} · {user.tier.toUpperCase()}</span>
                 </span>
-              </div>
+              </button>
               <button title="Sign out" aria-label="Sign out" onClick={onSignOut} className="grid size-9 shrink-0 place-items-center rounded-xl text-muted-foreground transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10">
                 <LogOut className="size-4" />
               </button>
@@ -2733,6 +2744,8 @@ export default function MedGuardApp() {
     section: 'settings' | 'questions';
   }>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('syncing');
+  const online = useSyncExternalStore(subscribeConnection, () => navigator.onLine, () => true);
+  const [offlineDismissed, setOfflineDismissed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [linkInvitation, setLinkInvitation] = useState<(QBankLinkInvitation & { token: string }) | null>(null);
   const [linkInvitationBusy, setLinkInvitationBusy] = useState(false);
@@ -2810,14 +2823,14 @@ export default function MedGuardApp() {
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => undefined);
     const openMenu = () => setMobileOpen(true);
     window.addEventListener('medguard-open-menu', openMenu);
-    const online = () => setSyncStatus('syncing');
-    const offline = () => setSyncStatus('offline');
-    window.addEventListener('online', online);
-    window.addEventListener('offline', offline);
+    const handleOnline = () => { setOfflineDismissed(false); setSyncStatus('syncing'); };
+    const handleOffline = () => { setOfflineDismissed(false); setSyncStatus('offline'); };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
     return () => {
       window.removeEventListener('medguard-open-menu', openMenu);
-      window.removeEventListener('online', online);
-      window.removeEventListener('offline', offline);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
   }, []);
 
@@ -3177,6 +3190,8 @@ export default function MedGuardApp() {
     return () => lifecycle.abort();
   }, [user, hydrated, collaborationHydrated, state, questions, quickTest]);
 
+  if (!online && !offlineDismissed)
+    return <SystemStatePage kind="offline" onRetry={() => { if (navigator.onLine) window.location.reload(); }} onContinue={user && hydrated && collaborationHydrated ? () => setOfflineDismissed(true) : undefined} />;
   if (user === undefined)
     return (
       <main className="grid min-h-screen place-items-center bg-background">
@@ -3288,6 +3303,7 @@ export default function MedGuardApp() {
         <section id="main-content" tabIndex={-1} key={view} className="q-stage q-enter">
           {view === 'subscribe' && <Subscribe user={user} onUser={setUser} />}
           {view === 'contact' && <ContactWorkspace />}
+          {view === 'account' && <AccountProfile user={user} onUser={setUser} />}
           {testError && <div role="alert" className="m-4 rounded-xl border border-amber-400 bg-card p-4"><p className="mb-3">{testError}</p><UpgradeButton /></div>}
           {view === 'dashboard' && <StudyDashboard state={state} questions={questions} name={user.displayName} bankName={collaboration.qbanks.find((bank) => bank.id === activeQBankId)?.name} navigate={setView} startQuickTest={quickTest} />}
           {view === 'library' && (

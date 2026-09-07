@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, pbkdf2Sync, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
@@ -118,6 +118,25 @@ print(json.dumps(out))`,
     return { status: response.status, data: await response.json() };
   };
   let codeId;
+  await t.test('Members can update their profile and securely change their password', async () => {
+    const currentPassword = 'current-password-123';
+    const salt = 'profile-test-salt';
+    const passwordHash = pbkdf2Sync(currentPassword, salt, 100_000, 32, 'sha256').toString('hex');
+    await db.prepare('UPDATE profiles SET password_hash=?,password_salt=? WHERE uid=?').bind(passwordHash, salt, 'lite').run();
+    await db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,verified,created_at) VALUES(?,?,?,1,?)').bind(createHash('sha256').update('another-lite-session').digest('hex'), 'lite', Math.floor(Date.now() / 1000) + 3600, new Date().toISOString()).run();
+    const updated = await call('lite', '/auth/profile', { displayName: 'Updated Learner', phone: '+966 55 123 4567' }, 'PUT');
+    assert.equal(updated.status, 200, JSON.stringify(updated));
+    assert.equal(updated.data.user.displayName, 'Updated Learner');
+    assert.equal(updated.data.user.phone, '966551234567');
+    const stored = JSON.parse((await db.prepare('SELECT profile_json FROM profiles WHERE uid=?').bind('lite').first()).profile_json);
+    assert.equal(stored.displayName, 'Updated Learner');
+    assert.equal((await call('lite', '/auth/password', { currentPassword: 'wrong-password', newPassword: 'replacement-password-456' }, 'PUT')).status, 401);
+    const changed = await call('lite', '/auth/password', { currentPassword, newPassword: 'replacement-password-456' }, 'PUT');
+    assert.equal(changed.status, 200, JSON.stringify(changed));
+    const account = await db.prepare('SELECT password_hash,password_salt FROM profiles WHERE uid=?').bind('lite').first();
+    assert.equal(account.password_hash, pbkdf2Sync('replacement-password-456', account.password_salt, 100_000, 32, 'sha256').toString('hex'));
+    assert.equal((await db.prepare('SELECT count(*) AS count FROM sessions WHERE user_id=?').bind('lite').first()).count, 1);
+  });
   await t.test('Access managers receive limited profiles and cannot modify official subscribers or their blocks', async () => {
     const now = new Date().toISOString();
     for (const [uid, method, paid, code] of [['manual-member', 'manual', 0, null], ['paid-member', 'manual', 1500, null], ['discount-member', 'discount', 0, 'FREE']]) {

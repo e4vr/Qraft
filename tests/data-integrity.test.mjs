@@ -49,8 +49,24 @@ void test('PWA shell and Cloudflare persistence configuration are present', asyn
   assert.equal(manifest.display, 'standalone');
   assert.equal(manifest.icons.length, 2);
   assert.match(serviceWorker, /CACHE_NAME/);
+  assert.match(serviceWorker, /'\/offline'/);
   assert.match(wrangler, /"binding": "DB"/);
   assert.doesNotMatch(wrangler, /"binding": "MEDIA"/);
   assert.match(schema, /sqliteTable\(\s*'profiles'/);
   assert.match(schema, /sqliteTable\(\s*'media'/);
+});
+
+void test('friendly error, not-found, offline, and account profile experiences are present', async () => {
+  const errorPage = await readFile(new URL('../app/error.tsx', import.meta.url), 'utf8');
+  const notFoundPage = await readFile(new URL('../app/not-found.tsx', import.meta.url), 'utf8');
+  const offlinePage = await readFile(new URL('../app/offline/page.tsx', import.meta.url), 'utf8');
+  const profile = await readFile(new URL('../components/account-profile.tsx', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../components/medguard-app.tsx', import.meta.url), 'utf8');
+  assert.match(errorPage, /kind="error"/);
+  assert.match(notFoundPage, /kind="not-found"/);
+  assert.match(offlinePage, /kind="offline"/);
+  assert.match(profile, /Reset password/);
+  assert.match(profile, /updateCloudflareProfile/);
+  assert.match(app, /aria-label="Open account profile"/);
+  assert.match(app, /view === 'account'/);
 });
