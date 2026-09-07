@@ -194,6 +194,22 @@ void test('private flashcards support decks, Anki import, question conversion, a
   assert.match(server, /Invalid flashcard data/);
 });
 
+void test('collaboration reads are scoped to the user\'s accessible QBanks', async () => {
+  const server = await readFile(
+    new URL('lib/cloudflare-server.ts', root),
+    'utf8',
+  );
+  const migration = await readFile(
+    new URL('drizzle/0006_scope_collaboration_reads.sql', root),
+    'utf8',
+  );
+  assert.match(server, /recordsByTypes/);
+  assert.match(server, /qbank_id IN/);
+  assert.match(server, /allowedBankIds\.add\('smle-gs'\)/);
+  assert.match(migration, /idx_records_qbank_type/);
+  assert.match(migration, /json_extract\(payload, '\$\.qbankId'\)/);
+});
+
 void test('ending a test uses the branded save confirmation instead of a browser alert', async () => {
   const app = await readFile(
     new URL('components/medguard-app.tsx', root),

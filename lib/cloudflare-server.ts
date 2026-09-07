@@ -871,10 +871,38 @@ function recordData(value: Record<string, unknown>) {
   };
 }
 
-async function allRecords() {
+async function recordsByTypes(types: string[]) {
+  const placeholders = types.map(() => '?').join(',');
   const result = await env.DB.prepare(
-    'SELECT * FROM records',
-  ).all<StoredRecord>();
+    `SELECT * FROM records WHERE type IN (${placeholders})`,
+  )
+    .bind(...types)
+    .all<StoredRecord>();
+  return result.results.map((row) => ({
+    collection: row.type,
+    id: row.id,
+    value: JSON.parse(row.payload) as unknown,
+  }));
+}
+
+async function allRecords(qbankIds?: Iterable<string>) {
+  if (qbankIds === undefined) {
+    const result = await env.DB.prepare('SELECT * FROM records').all<StoredRecord>();
+    return result.results.map((row) => ({
+      collection: row.type,
+      id: row.id,
+      value: JSON.parse(row.payload) as unknown,
+    }));
+  }
+  const ids = [...new Set([...qbankIds].filter(Boolean))];
+  const where = ids.length
+    ? `qbank_id IS NULL OR qbank_id IN (${ids.map(() => '?').join(',')})`
+    : 'qbank_id IS NULL';
+  const result = await env.DB.prepare(
+    `SELECT * FROM records WHERE ${where}`,
+  )
+    .bind(...ids)
+    .all<StoredRecord>();
   return result.results.map((row) => ({
     collection: row.type,
     id: row.id,
@@ -1080,7 +1108,24 @@ export async function loadCollaboration(request: Request) {
   const user = await currentUser(request);
   if (!user || user.status !== 'approved')
     return json({ error: 'Approved account required.' }, 403);
-  const rows = await allRecords();
+  const catalogRows = await recordsByTypes([
+    'qbanks',
+    'qbankMemberships',
+    'qbankInvitations',
+  ]);
+  const catalog = recordsToState(catalogRows);
+  const allowedBankIds = new Set(
+    catalog.qbanks
+      .filter(
+        (bank) =>
+          canAccessBank(user, bank, catalog.memberships) ||
+          canReviewBank(user, bank, catalog.memberships) ||
+          canManageBank(user, bank),
+      )
+      .map((bank) => bank.id),
+  );
+  allowedBankIds.add('smle-gs');
+  const rows = await allRecords(allowedBankIds);
   const profileResult =
     user.role === 'super_admin' || user.platformRoles.includes('access_manager')
       ? await env.DB.prepare('SELECT profile_json FROM profiles').all<{
