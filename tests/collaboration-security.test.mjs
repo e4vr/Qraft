@@ -98,7 +98,10 @@ void test('ending a test uses the branded save confirmation instead of a browser
   const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
   assert.doesNotMatch(app, /window\.confirm\(/);
   assert.match(app, /role="alertdialog"/);
-  assert.match(app, /End &amp; save/);
+  assert.match(app, /allQuestionsAnswered/);
+  assert.match(app, /Continue Later and Save/);
+  assert.match(app, /End and Save/);
+  assert.match(app, /status: 'active',[\s\S]*completedAt: undefined/);
   assert.match(app, /Keep studying/);
 });
 
@@ -199,7 +202,7 @@ void test('test sessions can restart, pause, resume, and be completed later', as
   assert.match(app, /Restart this question/);
   assert.match(app, /revealed: current\.revealed\.filter/);
   assert.match(app, /graded: current\.graded\.filter/);
-  assert.match(app, /Complete later/);
+  assert.match(app, /Continue Later and Save/);
   assert.match(app, /Pause timer/);
   assert.match(app, /Continue test and resume timer/);
   assert.match(app, /backdrop-blur-xl/);

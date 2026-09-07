@@ -981,6 +981,8 @@ function TestView({
   const isMobile = useIsMobile();
   const stemRef = useRef<HTMLParagraphElement>(null);
   const activeQuestions = useMemo(() => test.questionIds.map((id) => questions.find((question) => question.id === id)).filter(Boolean) as Question[], [test.questionIds, questions]);
+  const answeredCount = test.questionIds.filter((questionId) => test.answers[questionId] !== undefined).length;
+  const allQuestionsAnswered = test.questionIds.length > 0 && answeredCount === test.questionIds.length;
   const question = activeQuestions[test.currentIndex];
   const progress = question ? getQuestionProgress(state, question.id) : emptyProgress();
   useEffect(() => { stemRef.current?.closest('.q-viewport')?.scrollTo({top:0,behavior:'instant'}); }, [question?.id]);
@@ -1112,12 +1114,19 @@ function TestView({
     const pausedAt = new Date().toISOString();
     updateTest((current) => ({
       ...current,
+      status: 'active',
+      completedAt: undefined,
       elapsedSeconds,
       timerPaused: true,
       timerStartedAt: pausedAt,
       updatedAt: pausedAt,
     }));
     onExit('dashboard');
+  }
+
+  function saveForLater() {
+    setFinishConfirmOpen(false);
+    completeLater();
   }
 
   function restartQuestion() {
@@ -1136,6 +1145,10 @@ function TestView({
   }
 
   function completeTest() {
+    if (!allQuestionsAnswered) {
+      saveForLater();
+      return;
+    }
     setFinishConfirmOpen(false);
     setState((current) => {
       const currentTest = current.tests.find((item) => item.id === test.id) ?? test;
@@ -1527,12 +1540,9 @@ function TestView({
           <IconButton label={progress.flagged ? 'Remove flag' : 'Flag question'} active={progress.flagged} onClick={toggleFlag}>
             <Flag className={cx('size-4', progress.flagged && 'fill-current')} />
           </IconButton>
-          <SecondaryButton onClick={completeLater} className="hidden sm:flex">
-            <Clock3 className="size-4" />
-            Complete later
-          </SecondaryButton>
           <SecondaryButton onClick={finishTest} className="hidden sm:flex">
-            End block
+            {allQuestionsAnswered ? <CheckCircle2 className="size-4" /> : <Clock3 className="size-4" />}
+            {allQuestionsAnswered ? 'End and Save' : 'Continue Later and Save'}
           </SecondaryButton>
         </div>
       </header>
@@ -1802,11 +1812,8 @@ function TestView({
         </section>
       </div>
       <div className="fixed bottom-4 right-4 z-20 flex gap-2 sm:hidden">
-        <button onClick={completeLater} className="rounded-xl border bg-card px-4 py-2 text-xs font-bold text-foreground shadow-xl">
-          Complete later
-        </button>
         <button onClick={finishTest} className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-xl">
-          End block
+          {allQuestionsAnswered ? 'End and Save' : 'Continue Later and Save'}
         </button>
       </div>
       {test.timerPaused && test.status === 'active' && (
@@ -1836,10 +1843,12 @@ function TestView({
                 <div>
                   <p className="text-xs font-bold uppercase tracking-[0.18em] text-primary">Test checkpoint</p>
                   <h2 id="end-test-title" className="mt-1 text-xl font-bold">
-                    End this test?
+                    {allQuestionsAnswered ? 'End and save this test?' : 'Continue this test later?'}
                   </h2>
                   <p id="end-test-description" className="mt-2 text-sm leading-6 text-muted-foreground">
-                    Your answered questions will be graded and all progress will be saved. You can review the completed block from Test history.
+                    {allQuestionsAnswered
+                      ? 'All questions are answered. Your answers will be graded and the completed test will be saved in Test history.'
+                      : 'Your current answers and position will be saved. The test will remain not completed so you can resume it later.'}
                   </p>
                 </div>
               </div>
@@ -1847,11 +1856,11 @@ function TestView({
             <div className="p-6">
               <div className="grid grid-cols-3 divide-x rounded-2xl bg-muted/60 py-4 text-center">
                 <div>
-                  <strong className="block text-lg text-foreground">{Object.keys(test.answers).length}</strong>
+                  <strong className="block text-lg text-foreground">{answeredCount}</strong>
                   <span className="text-xs font-semibold uppercase text-muted-foreground">Answered</span>
                 </div>
                 <div>
-                  <strong className="block text-lg text-foreground">{test.questionIds.length - Object.keys(test.answers).length}</strong>
+                  <strong className="block text-lg text-foreground">{test.questionIds.length - answeredCount}</strong>
                   <span className="text-xs font-semibold uppercase text-muted-foreground">Unanswered</span>
                 </div>
                 <div>
@@ -1859,19 +1868,19 @@ function TestView({
                   <span className="text-xs font-semibold uppercase text-muted-foreground">Elapsed</span>
                 </div>
               </div>
-              {test.questionIds.length > Object.keys(test.answers).length && (
+              {!allQuestionsAnswered && (
                 <div className="mt-4 flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
                   <CircleAlert className="mt-0.5 size-4 shrink-0" />
-                  <span>You still have unanswered questions. They will remain unanswered when the test ends.</span>
+                  <span>You still have unanswered questions. Saving now keeps this test active and available to resume.</span>
                 </div>
               )}
               <div className="mt-6 grid gap-2 sm:grid-cols-2">
                 <SecondaryButton onClick={() => setFinishConfirmOpen(false)} className="h-11 w-full">
                   Keep studying
                 </SecondaryButton>
-                <PrimaryButton tone="study" onClick={completeTest} className="w-full">
-                  <CheckCircle2 className="size-4" />
-                  End &amp; save
+                <PrimaryButton tone="study" onClick={allQuestionsAnswered ? completeTest : saveForLater} className="w-full">
+                  {allQuestionsAnswered ? <CheckCircle2 className="size-4" /> : <Clock3 className="size-4" />}
+                  {allQuestionsAnswered ? 'End and Save' : 'Continue Later and Save'}
                 </PrimaryButton>
               </div>
               <p className="mt-3 text-center text-xs text-muted-foreground">Press Esc or click outside to continue the test.</p>

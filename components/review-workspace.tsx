@@ -219,14 +219,14 @@ export function ReviewWorkspace({ user, collaboration, update, replaceFromServer
   return (
     <>
       {!embedded && (
-        <header className="sticky top-0 z-30 border-b bg-card/90 px-4 py-4 backdrop-blur-xl sm:px-7">
-          <div className="mx-auto flex max-w-[1180px] items-center gap-3">
+        <header className="workspace-header">
+          <div className="flex min-w-0 items-center gap-3">
             <button aria-label="Open navigation" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))} className="grid size-10 place-items-center rounded-xl border lg:hidden">
               <Menu className="size-5" />
             </button>
-            <div>
-              <h1 className="font-bold">Review</h1>
-              <p className="text-sm text-muted-foreground">Compare each change, check its source, then approve or return it.</p>
+            <div className="min-w-0">
+              <h1 className="truncate text-lg font-bold tracking-tight">Review</h1>
+              <p className="mt-1 text-sm leading-5 text-muted-foreground">Compare each change, check its source, then approve or return it.</p>
             </div>
           </div>
         </header>

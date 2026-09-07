@@ -284,21 +284,21 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
 
   return (
     <>
-      <header className="sticky top-0 z-30 border-b bg-card/90 px-4 py-4 backdrop-blur-xl sm:px-7">
-        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <button aria-label="Open navigation" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))} className="grid size-10 shrink-0 place-items-center rounded-xl border lg:hidden">
-              <Menu className="size-5" />
-            </button>
-            <div>
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="size-5 text-primary" />
-                <h1 className="font-bold">Administration</h1>
-              </div>
-              <p className="text-xs text-muted-foreground">Manage members, access and shared content</p>
+      <header className="workspace-header">
+        <div className="flex min-w-0 items-center gap-3">
+          <button aria-label="Open navigation" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))} className="grid size-10 shrink-0 place-items-center rounded-xl border lg:hidden">
+            <Menu className="size-5" />
+          </button>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="size-5 text-primary" />
+              <h1 className="truncate text-lg font-bold tracking-tight">Administration</h1>
             </div>
+            <p className="mt-1 text-sm leading-5 text-muted-foreground">Manage members, access and shared content</p>
           </div>
-          <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{isRoot ? 'SUPERADMIN · MFA' : (user.platformRoles.join(' · ') || user.role).replaceAll('_', ' ').toUpperCase()}</span>
+        </div>
+        <div className="workspace-header-actions">
+          <span className="inline-flex min-h-10 items-center rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{isRoot ? 'SUPERADMIN · MFA' : (user.platformRoles.join(' · ') || user.role).replaceAll('_', ' ').toUpperCase()}</span>
         </div>
       </header>
       <div className="mx-auto grid max-w-[1440px] items-start gap-5 p-4 sm:p-7 xl:grid-cols-[190px_minmax(0,1fr)]">
