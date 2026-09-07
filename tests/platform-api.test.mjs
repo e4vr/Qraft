@@ -22,21 +22,55 @@ void test('platform API authorization, import, subscription and ticket workflows
     outfile: '.ui-review/platform-worker.mjs',
   });
   const workerOptions = {
-      modules: true,
-      scriptPath: '.ui-review/platform-worker.mjs',
-      compatibilityDate: '2026-09-07',
-      compatibilityFlags: ['nodejs_compat'],
-      d1Databases: { DB: 'platform-test' },
-      durableObjects: { REALTIME: { className: 'RealtimeChannel', useSQLite: true } },
-      bindings: { ROOT_ADMIN_EMAIL: 'admin@example.test' },
+    modules: true,
+    scriptPath: '.ui-review/platform-worker.mjs',
+    compatibilityDate: '2026-09-07',
+    compatibilityFlags: ['nodejs_compat'],
+    d1Databases: { DB: 'platform-test' },
+    durableObjects: {
+      REALTIME: { className: 'RealtimeChannel', useSQLite: true },
+    },
+    bindings: { ROOT_ADMIN_EMAIL: 'admin@example.test' },
   };
   const built = process.env.PLATFORM_TEST_BUILT === '1';
-  const productionModules = built ? ['index.js', ...readdirSync('dist/server', { recursive: true }).map(String).filter(path => path !== 'index.js' && path.endsWith('.js'))].map(path => ({ type: 'ESModule', path: `dist/server/${path}` })) : [];
+  const productionModules = built
+    ? [
+        'index.js',
+        ...readdirSync('dist/server', { recursive: true })
+          .map(String)
+          .filter((path) => path !== 'index.js' && path.endsWith('.js')),
+      ].map((path) => ({ type: 'ESModule', path: `dist/server/${path}` }))
+    : [];
   const mf = new Miniflare(
-    convertV4MiniflareOptions(built ? { workers: [
-      { ...workerOptions, name: 'app', modules: productionModules, durableObjects: { REALTIME: { className: 'RealtimeChannel', scriptName: 'realtime', useSQLite: true } } },
-      { name: 'realtime', modules: true, scriptPath: 'dist/qraft_realtime/index.js', compatibilityDate: '2026-09-07', durableObjects: { REALTIME: { className: 'RealtimeChannel', useSQLite: true } } },
-    ] } : workerOptions),
+    convertV4MiniflareOptions(
+      built
+        ? {
+            workers: [
+              {
+                ...workerOptions,
+                name: 'app',
+                modules: productionModules,
+                durableObjects: {
+                  REALTIME: {
+                    className: 'RealtimeChannel',
+                    scriptName: 'realtime',
+                    useSQLite: true,
+                  },
+                },
+              },
+              {
+                name: 'realtime',
+                modules: true,
+                scriptPath: 'dist/qraft_realtime/index.js',
+                compatibilityDate: '2026-09-07',
+                durableObjects: {
+                  REALTIME: { className: 'RealtimeChannel', useSQLite: true },
+                },
+              },
+            ],
+          }
+        : workerOptions,
+    ),
   );
   t.after(() => mf.dispose());
   const db = await mf.getD1Database('DB', built ? 'app' : undefined);
@@ -59,7 +93,16 @@ print(json.dumps(out))`,
     ),
   );
   for (const sql of statements) await db.prepare(sql).run();
-  for (const uid of ['admin', 'lite', 'other', 'reviewer', 'access', 'manual-member', 'paid-member', 'discount-member']) {
+  for (const uid of [
+    'admin',
+    'lite',
+    'other',
+    'reviewer',
+    'access',
+    'manual-member',
+    'paid-member',
+    'discount-member',
+  ]) {
     const profile = {
       uid,
       email: `${uid}@example.test`,
@@ -72,7 +115,12 @@ print(json.dumps(out))`,
           : uid === 'reviewer'
             ? 'reviewer'
             : 'student',
-      platformRoles: uid === 'reviewer' ? ['reviewer'] : uid === 'access' ? ['access_manager'] : [],
+      platformRoles:
+        uid === 'reviewer'
+          ? ['reviewer']
+          : uid === 'access'
+            ? ['access_manager']
+            : [],
       phone: `private-${uid}`,
       universityId: uid,
       createdAt: new Date().toISOString(),
@@ -118,66 +166,273 @@ print(json.dumps(out))`,
     return { status: response.status, data: await response.json() };
   };
   let codeId;
-  await t.test('Members can update their profile and securely change their password', async () => {
-    const currentPassword = 'current-password-123';
-    const salt = 'profile-test-salt';
-    const passwordHash = pbkdf2Sync(currentPassword, salt, 100_000, 32, 'sha256').toString('hex');
-    await db.prepare('UPDATE profiles SET password_hash=?,password_salt=? WHERE uid=?').bind(passwordHash, salt, 'lite').run();
-    await db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,verified,created_at) VALUES(?,?,?,1,?)').bind(createHash('sha256').update('another-lite-session').digest('hex'), 'lite', Math.floor(Date.now() / 1000) + 3600, new Date().toISOString()).run();
-    const updated = await call('lite', '/auth/profile', { displayName: 'Updated Learner', phone: '+966 55 123 4567' }, 'PUT');
-    assert.equal(updated.status, 200, JSON.stringify(updated));
-    assert.equal(updated.data.user.displayName, 'Updated Learner');
-    assert.equal(updated.data.user.phone, '966551234567');
-    const stored = JSON.parse((await db.prepare('SELECT profile_json FROM profiles WHERE uid=?').bind('lite').first()).profile_json);
-    assert.equal(stored.displayName, 'Updated Learner');
-    assert.equal((await call('lite', '/auth/password', { currentPassword: 'wrong-password', newPassword: 'replacement-password-456' }, 'PUT')).status, 401);
-    const changed = await call('lite', '/auth/password', { currentPassword, newPassword: 'replacement-password-456' }, 'PUT');
-    assert.equal(changed.status, 200, JSON.stringify(changed));
-    const account = await db.prepare('SELECT password_hash,password_salt FROM profiles WHERE uid=?').bind('lite').first();
-    assert.equal(account.password_hash, pbkdf2Sync('replacement-password-456', account.password_salt, 100_000, 32, 'sha256').toString('hex'));
-    assert.equal((await db.prepare('SELECT count(*) AS count FROM sessions WHERE user_id=?').bind('lite').first()).count, 1);
-  });
-  await t.test('Access managers receive limited profiles and cannot modify official subscribers or their blocks', async () => {
-    const now = new Date().toISOString();
-    for (const [uid, method, paid, code] of [['manual-member', 'manual', 0, null], ['paid-member', 'manual', 1500, null], ['discount-member', 'discount', 0, 'FREE']]) {
-      await db.prepare('INSERT INTO subscriptions(user_id,status,method,paid,discount_code,updated_at) VALUES(?,?,?,?,?,?)').bind(uid, 'active', method, paid, code, now).run();
-    }
-    const loaded = await call('access', '/collaboration');
-    assert.equal(loaded.status, 200);
-    const members = loaded.data.collaboration.members;
-    for (const member of members) for (const key of ['phone', 'createdAt', 'mfaEnrolled', 'approvedAt', 'approvedByName']) assert.equal(key in member, false);
-    const save = operations => call('access', '/collaboration', { operations }, 'PUT');
-    const profileOp = (uid, changes) => ({ collection: 'profiles', type: 'set', id: uid, value: { ...members.find(m => m.uid === uid), ...changes } });
-    assert.equal((await save([profileOp('manual-member', { suspended: true })])).status, 200);
-    const stored = JSON.parse((await db.prepare('SELECT profile_json FROM profiles WHERE uid=?').bind('manual-member').first()).profile_json);
-    assert.equal(stored.phone, 'private-manual-member');
-    assert.ok(stored.createdAt);
-    assert.equal((await save([profileOp('manual-member', { suspended: false })])).status, 200);
-    for (const uid of ['paid-member', 'discount-member']) {
-      assert.equal((await save([profileOp(uid, { suspended: true })])).status, 403);
-      assert.equal((await save([profileOp(uid, { tier: 'lite', subscriptionProtected: false })])).status, 403);
-      for (const kind of ['emails', 'universityIds']) {
-        assert.equal((await save([{ collection: 'system', type: 'set', id: 'accessControl', value: { emails: [], phones: [], universityIds: [], [kind]: [kind === 'emails' ? `${uid}@example.test` : uid] } }])).status, 403);
+  await t.test(
+    'Members can update their profile and securely change their password',
+    async () => {
+      const currentPassword = 'current-password-123';
+      const salt = 'profile-test-salt';
+      const passwordHash = pbkdf2Sync(
+        currentPassword,
+        salt,
+        100_000,
+        32,
+        'sha256',
+      ).toString('hex');
+      await db
+        .prepare(
+          'UPDATE profiles SET password_hash=?,password_salt=? WHERE uid=?',
+        )
+        .bind(passwordHash, salt, 'lite')
+        .run();
+      await db
+        .prepare(
+          'INSERT INTO sessions(token_hash,user_id,expires_at,verified,created_at) VALUES(?,?,?,1,?)',
+        )
+        .bind(
+          createHash('sha256').update('another-lite-session').digest('hex'),
+          'lite',
+          Math.floor(Date.now() / 1000) + 3600,
+          new Date().toISOString(),
+        )
+        .run();
+      const updated = await call(
+        'lite',
+        '/auth/profile',
+        { displayName: 'Updated Learner', phone: '+966 55 123 4567' },
+        'PUT',
+      );
+      assert.equal(updated.status, 200, JSON.stringify(updated));
+      assert.equal(updated.data.user.displayName, 'Updated Learner');
+      assert.equal(updated.data.user.phone, '966551234567');
+      const stored = JSON.parse(
+        (
+          await db
+            .prepare('SELECT profile_json FROM profiles WHERE uid=?')
+            .bind('lite')
+            .first()
+        ).profile_json,
+      );
+      assert.equal(stored.displayName, 'Updated Learner');
+      assert.equal(
+        (
+          await call(
+            'lite',
+            '/auth/password',
+            {
+              currentPassword: 'wrong-password',
+              newPassword: 'replacement-password-456',
+            },
+            'PUT',
+          )
+        ).status,
+        401,
+      );
+      const changed = await call(
+        'lite',
+        '/auth/password',
+        { currentPassword, newPassword: 'replacement-password-456' },
+        'PUT',
+      );
+      assert.equal(changed.status, 200, JSON.stringify(changed));
+      const account = await db
+        .prepare('SELECT password_hash,password_salt FROM profiles WHERE uid=?')
+        .bind('lite')
+        .first();
+      assert.equal(
+        account.password_hash,
+        pbkdf2Sync(
+          'replacement-password-456',
+          account.password_salt,
+          100_000,
+          32,
+          'sha256',
+        ).toString('hex'),
+      );
+      assert.equal(
+        (
+          await db
+            .prepare('SELECT count(*) AS count FROM sessions WHERE user_id=?')
+            .bind('lite')
+            .first()
+        ).count,
+        1,
+      );
+    },
+  );
+  await t.test(
+    'Access managers receive limited profiles and cannot modify official subscribers or their blocks',
+    async () => {
+      const now = new Date().toISOString();
+      for (const [uid, method, paid, code] of [
+        ['manual-member', 'manual', 0, null],
+        ['paid-member', 'manual', 1500, null],
+        ['discount-member', 'discount', 0, 'FREE'],
+      ]) {
+        await db
+          .prepare(
+            'INSERT INTO subscriptions(user_id,status,method,paid,discount_code,updated_at) VALUES(?,?,?,?,?,?)',
+          )
+          .bind(uid, 'active', method, paid, code, now)
+          .run();
       }
-      assert.equal((await call('access', '/platform/subscriptions', { userId: uid })).status, 403);
-    }
-    assert.equal((await save([{ collection: 'system', type: 'set', id: 'accessControl', value: { emails: [], phones: ['private-paid-member'], universityIds: [] } }])).status, 403);
-    const rootMember = (await call('admin', '/collaboration')).data.collaboration.members.find(m => m.uid === 'paid-member');
-    assert.equal(rootMember.phone, 'private-paid-member');
-    assert.equal((await call('admin', '/collaboration', { operations: [{ collection: 'profiles', type: 'set', id: rootMember.uid, value: { ...rootMember, suspended: true } }] }, 'PUT')).status, 200);
-  });
-  await t.test('Clearing review history is persisted for the authenticated account only', async () => {
-    const before = await db.prepare("SELECT type,id,payload FROM records WHERE type IN ('questionProposals','sharedQuestions') ORDER BY type,id").all();
-    const cleared = await call('reviewer', '/platform/review-history', { userId: 'other', clearedAt: '2099-01-01' });
-    assert.equal(cleared.status, 200);
-    assert.ok(Date.parse(cleared.data.clearedAt) <= Date.now());
-    assert.deepEqual((await call('reviewer', '/platform/review-history')).data, cleared.data);
-    assert.deepEqual((await call('other', '/platform/review-history')).data, { clearedAt: '' });
-    assert.equal((await call('missing', '/platform/review-history', {})).status, 403);
-    assert.equal((await call('reviewer', '/platform/review-history', {}, 'DELETE')).status, 405);
-    const after = await db.prepare("SELECT type,id,payload FROM records WHERE type IN ('questionProposals','sharedQuestions') ORDER BY type,id").all();
-    assert.deepEqual(after.results, before.results);
-  });
+      const loaded = await call('access', '/collaboration');
+      assert.equal(loaded.status, 200);
+      const members = loaded.data.collaboration.members;
+      for (const member of members)
+        for (const key of [
+          'phone',
+          'createdAt',
+          'mfaEnrolled',
+          'approvedAt',
+          'approvedByName',
+        ])
+          assert.equal(key in member, false);
+      const save = (operations) =>
+        call('access', '/collaboration', { operations }, 'PUT');
+      const profileOp = (uid, changes) => ({
+        collection: 'profiles',
+        type: 'set',
+        id: uid,
+        value: { ...members.find((m) => m.uid === uid), ...changes },
+      });
+      assert.equal(
+        (await save([profileOp('manual-member', { suspended: true })])).status,
+        200,
+      );
+      const stored = JSON.parse(
+        (
+          await db
+            .prepare('SELECT profile_json FROM profiles WHERE uid=?')
+            .bind('manual-member')
+            .first()
+        ).profile_json,
+      );
+      assert.equal(stored.phone, 'private-manual-member');
+      assert.ok(stored.createdAt);
+      assert.equal(
+        (await save([profileOp('manual-member', { suspended: false })])).status,
+        200,
+      );
+      for (const uid of ['paid-member', 'discount-member']) {
+        assert.equal(
+          (await save([profileOp(uid, { suspended: true })])).status,
+          403,
+        );
+        assert.equal(
+          (
+            await save([
+              profileOp(uid, { tier: 'lite', subscriptionProtected: false }),
+            ])
+          ).status,
+          403,
+        );
+        for (const kind of ['emails', 'universityIds']) {
+          assert.equal(
+            (
+              await save([
+                {
+                  collection: 'system',
+                  type: 'set',
+                  id: 'accessControl',
+                  value: {
+                    emails: [],
+                    phones: [],
+                    universityIds: [],
+                    [kind]: [kind === 'emails' ? `${uid}@example.test` : uid],
+                  },
+                },
+              ])
+            ).status,
+            403,
+          );
+        }
+        assert.equal(
+          (await call('access', '/platform/subscriptions', { userId: uid }))
+            .status,
+          403,
+        );
+      }
+      assert.equal(
+        (
+          await save([
+            {
+              collection: 'system',
+              type: 'set',
+              id: 'accessControl',
+              value: {
+                emails: [],
+                phones: ['private-paid-member'],
+                universityIds: [],
+              },
+            },
+          ])
+        ).status,
+        403,
+      );
+      const rootMember = (
+        await call('admin', '/collaboration')
+      ).data.collaboration.members.find((m) => m.uid === 'paid-member');
+      assert.equal(rootMember.phone, 'private-paid-member');
+      assert.equal(
+        (
+          await call(
+            'admin',
+            '/collaboration',
+            {
+              operations: [
+                {
+                  collection: 'profiles',
+                  type: 'set',
+                  id: rootMember.uid,
+                  value: { ...rootMember, suspended: true },
+                },
+              ],
+            },
+            'PUT',
+          )
+        ).status,
+        200,
+      );
+    },
+  );
+  await t.test(
+    'Clearing review history is persisted for the authenticated account only',
+    async () => {
+      const before = await db
+        .prepare(
+          "SELECT type,id,payload FROM records WHERE type IN ('questionProposals','sharedQuestions') ORDER BY type,id",
+        )
+        .all();
+      const cleared = await call('reviewer', '/platform/review-history', {
+        userId: 'other',
+        clearedAt: '2099-01-01',
+      });
+      assert.equal(cleared.status, 200);
+      assert.ok(Date.parse(cleared.data.clearedAt) <= Date.now());
+      assert.deepEqual(
+        (await call('reviewer', '/platform/review-history')).data,
+        cleared.data,
+      );
+      assert.deepEqual((await call('other', '/platform/review-history')).data, {
+        clearedAt: '',
+      });
+      assert.equal(
+        (await call('missing', '/platform/review-history', {})).status,
+        403,
+      );
+      assert.equal(
+        (await call('reviewer', '/platform/review-history', {}, 'DELETE'))
+          .status,
+        405,
+      );
+      const after = await db
+        .prepare(
+          "SELECT type,id,payload FROM records WHERE type IN ('questionProposals','sharedQuestions') ORDER BY type,id",
+        )
+        .all();
+      assert.deepEqual(after.results, before.results);
+    },
+  );
   await t.test(
     'Lite cannot administer discounts or subscriptions',
     async () => {
@@ -282,6 +537,18 @@ print(json.dumps(out))`,
           200,
         );
       }
+      const duplicateTitles = {
+        ...state,
+        tests: [
+          { ...make('named-1', 1), title: 'Surgery   1' },
+          { ...make('named-2', 1), title: ' surgery 1 ' },
+        ],
+      };
+      assert.equal(
+        (await call('lite', '/state', { state: duplicateTitles }, 'PUT'))
+          .status,
+        409,
+      );
       const denied = await call(
         'other',
         '/state',
@@ -304,27 +571,71 @@ print(json.dumps(out))`,
       );
     },
   );
-  await t.test('Live channels authenticate subscriptions and deliver saved changes to both sessions', async () => {
-    const connect = (uid, channel, origin = 'https://qraft.test') => mf.dispatchFetch(`https://qraft.test/api/cloudflare/realtime?channel=${encodeURIComponent(channel)}`, { headers: { Upgrade: 'websocket', origin, cookie: `__Host-qraft_session=fixture-${uid}` } });
-    assert.equal((await connect('other', 'admin')).status, 403);
-    assert.equal((await connect('other', 'user:lite')).status, 403);
-    assert.equal((await connect('other', 'bank:missing')).status, 403);
-    assert.equal((await connect('other', 'user:other', 'https://evil.test')).status, 403);
-    const first = await connect('other', 'user:other');
-    const second = await connect('other', 'user:other');
-    assert.equal(first.status, 101); assert.equal(second.status, 101);
-    first.webSocket.accept(); second.webSocket.accept();
-    const receive = socket => new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('No live update received')), 3000);
-      socket.addEventListener('message', event => { clearTimeout(timeout); resolve(JSON.parse(event.data)); }, { once: true });
-    });
-    const received = Promise.all([receive(first.webSocket), receive(second.webSocket)]);
-    const saved = await call('other', '/contact', { title: 'Live fixture', body: 'Saved before notifying', requestId: randomUUID() });
-    assert.equal(saved.status, 200);
-    assert.deepEqual(await received, [{ type: 'changed', topic: 'contact' }, { type: 'changed', topic: 'contact' }]);
-    assert.equal((await call('other', `/contact?id=${saved.data.id}`)).data.messages[0].body, 'Saved before notifying');
-    first.webSocket.close(); second.webSocket.close();
-  });
+  await t.test(
+    'Live channels authenticate subscriptions and deliver saved changes to both sessions',
+    async () => {
+      const connect = (uid, channel, origin = 'https://qraft.test') =>
+        mf.dispatchFetch(
+          `https://qraft.test/api/cloudflare/realtime?channel=${encodeURIComponent(channel)}`,
+          {
+            headers: {
+              Upgrade: 'websocket',
+              origin,
+              cookie: `__Host-qraft_session=fixture-${uid}`,
+            },
+          },
+        );
+      assert.equal((await connect('other', 'admin')).status, 403);
+      assert.equal((await connect('other', 'user:lite')).status, 403);
+      assert.equal((await connect('other', 'bank:missing')).status, 403);
+      assert.equal(
+        (await connect('other', 'user:other', 'https://evil.test')).status,
+        403,
+      );
+      const first = await connect('other', 'user:other');
+      const second = await connect('other', 'user:other');
+      assert.equal(first.status, 101);
+      assert.equal(second.status, 101);
+      first.webSocket.accept();
+      second.webSocket.accept();
+      const receive = (socket) =>
+        new Promise((resolve, reject) => {
+          const timeout = setTimeout(
+            () => reject(new Error('No live update received')),
+            3000,
+          );
+          socket.addEventListener(
+            'message',
+            (event) => {
+              clearTimeout(timeout);
+              resolve(JSON.parse(event.data));
+            },
+            { once: true },
+          );
+        });
+      const received = Promise.all([
+        receive(first.webSocket),
+        receive(second.webSocket),
+      ]);
+      const saved = await call('other', '/contact', {
+        title: 'Live fixture',
+        body: 'Saved before notifying',
+        requestId: randomUUID(),
+      });
+      assert.equal(saved.status, 200);
+      assert.deepEqual(await received, [
+        { type: 'changed', topic: 'contact' },
+        { type: 'changed', topic: 'contact' },
+      ]);
+      assert.equal(
+        (await call('other', `/contact?id=${saved.data.id}`)).data.messages[0]
+          .body,
+        'Saved before notifying',
+      );
+      first.webSocket.close();
+      second.webSocket.close();
+    },
+  );
   await t.test(
     'Question import validates fields and retries do not duplicate proposals',
     async () => {
@@ -340,7 +651,9 @@ print(json.dumps(out))`,
         sourceReference: 'This long source is ignored',
         images: [],
       };
-      const invalidFileHash = createHash('sha256').update('invalid-import').digest('hex');
+      const invalidFileHash = createHash('sha256')
+        .update('invalid-import')
+        .digest('hex');
       assert.equal(
         (
           await call('lite', '/platform/import', {
@@ -363,7 +676,10 @@ print(json.dumps(out))`,
       const first = await call('lite', '/platform/import', request);
       assert.equal(first.status, 200, JSON.stringify(first));
       assert.equal(first.data.successful, 1);
-      assert.equal(first.data.proposals[0].payload.sourceReference, 'Fixture.pdf - p.12');
+      assert.equal(
+        first.data.proposals[0].payload.sourceReference,
+        'Fixture.pdf - p.12',
+      );
       assert.equal(
         (await call('lite', '/platform/import', request)).data.proposals[0].id,
         first.data.proposals[0].id,
@@ -373,87 +689,182 @@ print(json.dumps(out))`,
         requestId: randomUUID(),
         fileName: 'gemini-output.txt',
         fileHash: createHash('sha256').update('gemini-output').digest('hex'),
-        questions: '```json\n{sourceFile:"Scan.pdf",questions:[{stem:"Valid",options:["Yes","No",],correctAnswer:"A",sourcePage:4,},{stem:"Broken",options:["Only one"],correctAnswer:"A",sourcePage:5,}],}\n```',
+        questions:
+          '```json\n{sourceFile:"Scan.pdf",questions:[{stem:"Valid",options:["Yes","No",],correctAnswer:"A",sourcePage:4,},{stem:"Broken",options:["Only one"],correctAnswer:"A",sourcePage:5,}],}\n```',
       });
       assert.equal(partial.status, 200, JSON.stringify(partial));
       assert.equal(partial.data.successful, 1);
       assert.equal(partial.data.failed, 1);
       assert.equal(partial.data.repaired, true);
       assert.equal(partial.data.skipped[0].page, 5);
-      assert.equal(partial.data.proposals[0].payload.sourceReference, 'Scan.pdf - p.4');
+      assert.equal(
+        partial.data.proposals[0].payload.sourceReference,
+        'Scan.pdf - p.4',
+      );
       const duplicateName = await call('lite', '/platform/import', {
-        ...request, requestId: randomUUID(), fileHash: createHash('sha256').update('different').digest('hex'),
+        ...request,
+        requestId: randomUUID(),
+        fileHash: createHash('sha256').update('different').digest('hex'),
       });
       assert.equal(duplicateName.status, 409);
       const duplicateHash = await call('lite', '/platform/import', {
-        ...request, requestId: randomUUID(), fileName: 'renamed.json',
+        ...request,
+        requestId: randomUUID(),
+        fileName: 'renamed.json',
       });
       assert.equal(duplicateHash.status, 409);
     },
   );
-  await t.test('Bulk review approves or rejects up to 200 selected proposals atomically', async () => {
-    const payload = index => ({
-      stem: `Bulk fixture ${index}`,
-      options: ['Correct', 'Incorrect'],
-      answer: 0,
-      specialty: 'General',
-      topic: 'Bulk review',
-      explanation: `Explanation ${index}`,
-      sourceFile: 'Bulk.pdf',
-      sourcePage: index,
-      sourceReference: `Source ${index}`,
-      images: [],
-    });
-    const imported = await call('other', '/platform/import', {
-      qbankId: 'smle-gs',
-      requestId: randomUUID(),
-      fileName: 'bulk-200.json',
-      fileHash: createHash('sha256').update('bulk-200').digest('hex'),
-      questions: Array.from({ length: 200 }, (_, index) => payload(index + 1)),
-    });
-    assert.equal(imported.status, 200, JSON.stringify(imported));
-    assert.equal(imported.data.proposals.every(proposal => proposal.submissionMethod === 'json' && proposal.importBatchId), true);
-    assert.equal(imported.data.proposals.length, 200);
-    const approved = imported.data.proposals;
-    const approval = await call('reviewer', '/platform/bulk-review', {
-      proposalIds: approved.map(proposal => proposal.id),
-      status: 'approved',
-    });
-    assert.deepEqual(approval, { status: 200, data: { ok: true, reviewed: 200 } });
-    const rejectedImport = await call('other', '/platform/import', {
-      qbankId: 'smle-gs',
-      requestId: randomUUID(),
-      fileName: 'bulk-rejected.json',
-      fileHash: createHash('sha256').update('bulk-rejected').digest('hex'),
-      questions: [payload(201)],
-    });
-    const [rejected] = rejectedImport.data.proposals;
-    const rejection = await call('reviewer', '/platform/bulk-review', {
-      proposalIds: [rejected.id],
-      status: 'rejected',
-    });
-    assert.equal(rejection.status, 200);
-    const stored = await db.prepare("SELECT payload FROM records WHERE type='questionProposals' AND json_extract(payload,'$.payload.topic')='Bulk review'").all();
-    const reviewed = stored.results.map(row => JSON.parse(row.payload));
-    assert.equal(reviewed.filter(proposal => proposal.status === 'approved' && proposal.reviewedById === 'reviewer').length, 200);
-    assert.equal(reviewed.filter(proposal => proposal.status === 'rejected' && proposal.reviewedById === 'reviewer').length, 1);
-    const published = await db.prepare("SELECT count(*) AS count FROM records WHERE type='sharedQuestions' AND json_extract(payload,'$.topic')='Bulk review'").first();
-    assert.equal(published.count, 200);
-    assert.equal((await call('reviewer', '/platform/bulk-review', { proposalIds: [approved[0].id], status: 'approved' })).status, 409);
-    assert.equal((await call('other', '/platform/bulk-review', { proposalIds: [approved[0].id], status: 'rejected' })).status, 403);
-    assert.equal((await call('reviewer', '/platform/bulk-review', { proposalIds: Array(201).fill('x'), status: 'approved' })).status, 400);
-  });
-  await t.test('Answer statistics preserve other users and accept option indexes', async () => {
-    const row = await db.prepare("SELECT payload FROM records WHERE type='sharedQuestions' AND json_extract(payload,'$.questionId')='00002'").first();
-    const question = JSON.parse(row.payload);
-    const id = `stat-${question.id}`;
-    const save = (uid, selections) => call(uid, '/collaboration', { operations: [{ collection: 'answerStats', type: 'set', id, value: { id, qbankId: 'smle-gs', questionId: question.id, selections } }] }, 'PUT');
-    assert.equal((await save('lite', { lite: 0 })).status, 200);
-    assert.equal((await save('other', { lite: 0, other: 1 })).status, 200);
-    assert.equal((await save('lite', { lite: 2, other: 1 })).status, 200);
-    assert.equal((await save('lite', { lite: 1, other: 2 })).status, 403);
-    assert.equal((await save('lite', { lite: 99, other: 1 })).status, 403);
-  });
+  await t.test(
+    'Bulk review approves or rejects up to 200 selected proposals atomically',
+    async () => {
+      const payload = (index) => ({
+        stem: `Bulk fixture ${index}`,
+        options: ['Correct', 'Incorrect'],
+        answer: 0,
+        specialty: 'General',
+        topic: 'Bulk review',
+        explanation: `Explanation ${index}`,
+        sourceFile: 'Bulk.pdf',
+        sourcePage: index,
+        sourceReference: `Source ${index}`,
+        images: [],
+      });
+      const imported = await call('other', '/platform/import', {
+        qbankId: 'smle-gs',
+        requestId: randomUUID(),
+        fileName: 'bulk-200.json',
+        fileHash: createHash('sha256').update('bulk-200').digest('hex'),
+        questions: Array.from({ length: 200 }, (_, index) =>
+          payload(index + 1),
+        ),
+      });
+      assert.equal(imported.status, 200, JSON.stringify(imported));
+      assert.equal(
+        imported.data.proposals.every(
+          (proposal) =>
+            proposal.submissionMethod === 'json' && proposal.importBatchId,
+        ),
+        true,
+      );
+      assert.equal(imported.data.proposals.length, 200);
+      const approved = imported.data.proposals;
+      const approval = await call('reviewer', '/platform/bulk-review', {
+        proposalIds: approved.map((proposal) => proposal.id),
+        status: 'approved',
+      });
+      assert.deepEqual(approval, {
+        status: 200,
+        data: { ok: true, reviewed: 200 },
+      });
+      const rejectedImport = await call('other', '/platform/import', {
+        qbankId: 'smle-gs',
+        requestId: randomUUID(),
+        fileName: 'bulk-rejected.json',
+        fileHash: createHash('sha256').update('bulk-rejected').digest('hex'),
+        questions: [payload(201)],
+      });
+      const [rejected] = rejectedImport.data.proposals;
+      const rejection = await call('reviewer', '/platform/bulk-review', {
+        proposalIds: [rejected.id],
+        status: 'rejected',
+      });
+      assert.equal(rejection.status, 200);
+      const stored = await db
+        .prepare(
+          "SELECT payload FROM records WHERE type='questionProposals' AND json_extract(payload,'$.payload.topic')='Bulk review'",
+        )
+        .all();
+      const reviewed = stored.results.map((row) => JSON.parse(row.payload));
+      assert.equal(
+        reviewed.filter(
+          (proposal) =>
+            proposal.status === 'approved' &&
+            proposal.reviewedById === 'reviewer',
+        ).length,
+        200,
+      );
+      assert.equal(
+        reviewed.filter(
+          (proposal) =>
+            proposal.status === 'rejected' &&
+            proposal.reviewedById === 'reviewer',
+        ).length,
+        1,
+      );
+      const published = await db
+        .prepare(
+          "SELECT count(*) AS count FROM records WHERE type='sharedQuestions' AND json_extract(payload,'$.topic')='Bulk review'",
+        )
+        .first();
+      assert.equal(published.count, 200);
+      assert.equal(
+        (
+          await call('reviewer', '/platform/bulk-review', {
+            proposalIds: [approved[0].id],
+            status: 'approved',
+          })
+        ).status,
+        409,
+      );
+      assert.equal(
+        (
+          await call('other', '/platform/bulk-review', {
+            proposalIds: [approved[0].id],
+            status: 'rejected',
+          })
+        ).status,
+        403,
+      );
+      assert.equal(
+        (
+          await call('reviewer', '/platform/bulk-review', {
+            proposalIds: Array(201).fill('x'),
+            status: 'approved',
+          })
+        ).status,
+        400,
+      );
+    },
+  );
+  await t.test(
+    'Answer statistics preserve other users and accept option indexes',
+    async () => {
+      const row = await db
+        .prepare(
+          "SELECT payload FROM records WHERE type='sharedQuestions' AND json_extract(payload,'$.questionId')='00002'",
+        )
+        .first();
+      const question = JSON.parse(row.payload);
+      const id = `stat-${question.id}`;
+      const save = (uid, selections) =>
+        call(
+          uid,
+          '/collaboration',
+          {
+            operations: [
+              {
+                collection: 'answerStats',
+                type: 'set',
+                id,
+                value: {
+                  id,
+                  qbankId: 'smle-gs',
+                  questionId: question.id,
+                  selections,
+                },
+              },
+            ],
+          },
+          'PUT',
+        );
+      assert.equal((await save('lite', { lite: 0 })).status, 200);
+      assert.equal((await save('other', { lite: 0, other: 1 })).status, 200);
+      assert.equal((await save('lite', { lite: 2, other: 1 })).status, 200);
+      assert.equal((await save('lite', { lite: 1, other: 2 })).status, 403);
+      assert.equal((await save('lite', { lite: 99, other: 1 })).status, 403);
+    },
+  );
   await t.test(
     'Tickets are private, support clarification, and survive deleted/reused question IDs',
     async () => {
@@ -560,23 +971,73 @@ print(json.dumps(out))`,
       );
     },
   );
-  await t.test('Tickets reject new images and deletion is restricted to owner or Superadmin', async () => {
-    const draft = { title: 'Delete fixture', body: 'Text complaint', requestId: randomUUID() };
-    assert.equal((await call('other', '/contact', { ...draft, attachment: 'data:image/png;base64,aGVsbG8=' })).status, 400);
-    assert.equal((await db.prepare('SELECT count(*) AS total FROM ticket_messages WHERE id=?').bind(draft.requestId).first()).total, 0);
-    const created = await call('other', '/contact', draft);
-    assert.equal(created.status, 200);
-    const id = created.data.id;
-    assert.equal((await call('lite', '/contact', { id }, 'DELETE')).status, 404);
-    assert.equal((await call('other', `/contact?id=${id}`)).status, 200);
-    assert.equal((await call('other', '/contact', { id }, 'DELETE')).status, 200);
-    assert.equal((await call('other', `/contact?id=${id}`)).status, 404);
-    assert.equal((await db.prepare('SELECT count(*) AS total FROM ticket_messages WHERE ticket_id=?').bind(id).first()).total, 0);
-    const second = await call('other', '/contact', { ...draft, requestId: randomUUID() });
-    assert.equal((await call('admin', '/contact', { id: second.data.id }, 'DELETE')).status, 200);
-    const audit = await db.prepare("SELECT count(*) AS total FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='ticket_deleted'").first();
-    assert.equal(audit.total, 2);
-  });
+  await t.test(
+    'Tickets reject new images and deletion is restricted to owner or Superadmin',
+    async () => {
+      const draft = {
+        title: 'Delete fixture',
+        body: 'Text complaint',
+        requestId: randomUUID(),
+      };
+      assert.equal(
+        (
+          await call('other', '/contact', {
+            ...draft,
+            attachment: 'data:image/png;base64,aGVsbG8=',
+          })
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await db
+            .prepare('SELECT count(*) AS total FROM ticket_messages WHERE id=?')
+            .bind(draft.requestId)
+            .first()
+        ).total,
+        0,
+      );
+      const created = await call('other', '/contact', draft);
+      assert.equal(created.status, 200);
+      const id = created.data.id;
+      assert.equal(
+        (await call('lite', '/contact', { id }, 'DELETE')).status,
+        404,
+      );
+      assert.equal((await call('other', `/contact?id=${id}`)).status, 200);
+      assert.equal(
+        (await call('other', '/contact', { id }, 'DELETE')).status,
+        200,
+      );
+      assert.equal((await call('other', `/contact?id=${id}`)).status, 404);
+      assert.equal(
+        (
+          await db
+            .prepare(
+              'SELECT count(*) AS total FROM ticket_messages WHERE ticket_id=?',
+            )
+            .bind(id)
+            .first()
+        ).total,
+        0,
+      );
+      const second = await call('other', '/contact', {
+        ...draft,
+        requestId: randomUUID(),
+      });
+      assert.equal(
+        (await call('admin', '/contact', { id: second.data.id }, 'DELETE'))
+          .status,
+        200,
+      );
+      const audit = await db
+        .prepare(
+          "SELECT count(*) AS total FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='ticket_deleted'",
+        )
+        .first();
+      assert.equal(audit.total, 2);
+    },
+  );
   await t.test('Expired Pro becomes Lite and expiry is audited', async () => {
     await db
       .prepare(

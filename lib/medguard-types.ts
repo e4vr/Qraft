@@ -1,13 +1,31 @@
 export type TestMode = 'tutor' | 'timed';
-export type QuestionStatus = 'new' | 'previous' | 'correct' | 'incorrect' | 'flagged';
-export type UserRole = 'super_admin' | 'admin' | 'reviewer' | 'access_manager' | 'student';
+export type QuestionStatus =
+  | 'new'
+  | 'previous'
+  | 'correct'
+  | 'incorrect'
+  | 'flagged';
+export type UserRole =
+  | 'super_admin'
+  | 'admin'
+  | 'reviewer'
+  | 'access_manager'
+  | 'student';
 export type AccountTier = 'lite' | 'pro';
 export type PlatformRole = 'reviewer' | 'access_manager';
 export type BankRole = 'owner' | 'reviewer' | 'viewer';
 export type QBankVisibility = 'public' | 'private';
 export type AccountStatus = 'pending' | 'approved' | 'rejected';
 export type ProposalStatus = 'pending' | 'approved' | 'rejected';
-export type ProposalEditKind = 'question_text' | 'options' | 'correct_answer' | 'explanation' | 'source' | 'typo_formatting' | 'duplicate' | 'outdated_guideline';
+export type ProposalEditKind =
+  | 'question_text'
+  | 'options'
+  | 'correct_answer'
+  | 'explanation'
+  | 'source'
+  | 'typo_formatting'
+  | 'duplicate'
+  | 'outdated_guideline';
 
 export interface Question {
   id: string;
@@ -54,6 +72,7 @@ export interface QuestionProgress {
   lastAnsweredAt?: string;
   flagged: boolean;
   highlights: HighlightRange[];
+  highlightSections?: Record<string, HighlightRange[]>;
   note: string;
   noteImages: NoteImage[];
 }
@@ -325,7 +344,16 @@ export interface SharedQuestionNote {
 export interface AuditEntry {
   id: string;
   action: string;
-  entityType: 'account' | 'admin' | 'university_id' | 'access_block' | 'qbank' | 'question' | 'note' | 'role' | 'sharing';
+  entityType:
+    | 'account'
+    | 'admin'
+    | 'university_id'
+    | 'access_block'
+    | 'qbank'
+    | 'question'
+    | 'note'
+    | 'role'
+    | 'sharing';
   entityId: string;
   actorId: string;
   actorName: string;
@@ -357,6 +385,8 @@ export interface TestBuilderConfig {
   specialty: string;
   topics: string[];
   count: number;
+  randomAll?: boolean;
+  title?: string;
 }
 
 export function emptyProgress(): QuestionProgress {
@@ -380,29 +410,40 @@ export function initialAppState(): AppState {
     revisions: [],
     questionOverrides: {},
     customQuestions: [],
-    settings: { dailyGoal: 20, theme: 'light', autoSync: true, activeQBankId: 'smle-gs', favoriteQBankIds: [], pinnedQBankIds: [], qbankCategories: [], qbankCategoryById: {} },
+    settings: {
+      dailyGoal: 20,
+      theme: 'light',
+      autoSync: true,
+      activeQBankId: 'smle-gs',
+      favoriteQBankIds: [],
+      pinnedQBankIds: [],
+      qbankCategories: [],
+      qbankCategoryById: {},
+    },
   };
 }
 
 export function initialCollaborationState(): CollaborationState {
   return {
-    qbanks: [{
-      id: 'smle-gs',
-      name: 'SMLE · General Surgery',
-      shortName: 'SMLE GS',
-      description: 'General Surgery question bank for SMLE preparation.',
-      createdAt: '2026-09-02T00:00:00.000Z',
-      createdById: 'system',
-      createdByName: 'Qraft',
-      archived: false,
-      essential: true,
-      ownerId: 'system',
-      ownerName: 'Qraft',
-      visibility: 'public',
-      shareEnabled: false,
-      reviewerIds: [],
-      viewerIds: [],
-    }],
+    qbanks: [
+      {
+        id: 'smle-gs',
+        name: 'SMLE · General Surgery',
+        shortName: 'SMLE GS',
+        description: 'General Surgery question bank for SMLE preparation.',
+        createdAt: '2026-09-02T00:00:00.000Z',
+        createdById: 'system',
+        createdByName: 'Qraft',
+        archived: false,
+        essential: true,
+        ownerId: 'system',
+        ownerName: 'Qraft',
+        visibility: 'public',
+        shareEnabled: false,
+        reviewerIds: [],
+        viewerIds: [],
+      },
+    ],
     memberships: [],
     invitations: [],
     members: [],
@@ -419,34 +460,89 @@ export function initialCollaborationState(): CollaborationState {
   };
 }
 
-export function normalizeCollaborationState(input?: Partial<CollaborationState>): CollaborationState {
+export function normalizeCollaborationState(
+  input?: Partial<CollaborationState>,
+): CollaborationState {
   const base = initialCollaborationState();
   if (!input) return base;
-  const qbanks = (input.qbanks?.length ? input.qbanks : base.qbanks).map((bank) => ({
-    ...bank,
-    ownerId: bank.ownerId ?? bank.createdById,
-    ownerName: bank.ownerName ?? bank.createdByName,
-    visibility: bank.visibility ?? 'public',
-    shareEnabled: bank.shareEnabled ?? false,
-    essential: bank.essential ?? bank.id === 'smle-gs',
-    reviewerIds: bank.reviewerIds ?? [],
-    viewerIds: bank.viewerIds ?? [],
-  }));
+  const qbanks = (input.qbanks?.length ? input.qbanks : base.qbanks).map(
+    (bank) => ({
+      ...bank,
+      ownerId: bank.ownerId ?? bank.createdById,
+      ownerName: bank.ownerName ?? bank.createdByName,
+      visibility: bank.visibility ?? 'public',
+      shareEnabled: bank.shareEnabled ?? false,
+      essential: bank.essential ?? bank.id === 'smle-gs',
+      reviewerIds: bank.reviewerIds ?? [],
+      viewerIds: bank.viewerIds ?? [],
+    }),
+  );
   return {
     ...base,
     ...input,
     qbanks,
     memberships: input.memberships ?? [],
     invitations: input.invitations ?? [],
-    members: (input.members ?? []).map((member) => ({ ...member, tier: member.tier ?? 'lite', platformRoles: member.platformRoles ?? [] })),
+    members: (input.members ?? []).map((member) => ({
+      ...member,
+      tier: member.tier ?? 'lite',
+      platformRoles: member.platformRoles ?? [],
+    })),
     blockedAccess: {
-      phones: [...new Set((input.blockedAccess?.phones ?? base.blockedAccess.phones).map((value) => value.replace(/\D/g, '')).filter(Boolean))],
-      universityIds: [...new Set((input.blockedAccess?.universityIds ?? base.blockedAccess.universityIds).map((value) => value.replace(/\s+/g, '').toUpperCase()).filter(Boolean))],
-      emails: [...new Set((input.blockedAccess?.emails ?? base.blockedAccess.emails).map((value) => value.trim().toLowerCase()).filter(Boolean))],
+      phones: [
+        ...new Set(
+          (input.blockedAccess?.phones ?? base.blockedAccess.phones)
+            .map((value) => value.replace(/\D/g, ''))
+            .filter(Boolean),
+        ),
+      ],
+      universityIds: [
+        ...new Set(
+          (
+            input.blockedAccess?.universityIds ??
+            base.blockedAccess.universityIds
+          )
+            .map((value) => value.replace(/\s+/g, '').toUpperCase())
+            .filter(Boolean),
+        ),
+      ],
+      emails: [
+        ...new Set(
+          (input.blockedAccess?.emails ?? base.blockedAccess.emails)
+            .map((value) => value.trim().toLowerCase())
+            .filter(Boolean),
+        ),
+      ],
     },
-    proposals: (input.proposals ?? []).map((proposal) => ({ ...proposal, editKinds: proposal.editKinds ?? (proposal.type === 'new_question' ? ['question_text'] : ['typo_formatting']), payload: { ...proposal.payload, explanation: proposal.payload.explanation ?? '', sourceReference: proposal.payload.sourceReference ?? proposal.rationale ?? '', images: proposal.payload.images ?? [] }, currentSnapshot: proposal.currentSnapshot ? { ...proposal.currentSnapshot, images: proposal.currentSnapshot.images ?? [] } : undefined })),
+    proposals: (input.proposals ?? []).map((proposal) => ({
+      ...proposal,
+      editKinds:
+        proposal.editKinds ??
+        (proposal.type === 'new_question'
+          ? ['question_text']
+          : ['typo_formatting']),
+      payload: {
+        ...proposal.payload,
+        explanation: proposal.payload.explanation ?? '',
+        sourceReference:
+          proposal.payload.sourceReference ?? proposal.rationale ?? '',
+        images: proposal.payload.images ?? [],
+      },
+      currentSnapshot: proposal.currentSnapshot
+        ? {
+            ...proposal.currentSnapshot,
+            images: proposal.currentSnapshot.images ?? [],
+          }
+        : undefined,
+    })),
     roleApplications: input.roleApplications ?? [],
-    approvedQuestions: (input.approvedQuestions ?? []).map((question, index) => ({ ...question, questionId: question.questionId ?? String(218 + index).padStart(5, '0'), images: question.images ?? [] })),
+    approvedQuestions: (input.approvedQuestions ?? []).map(
+      (question, index) => ({
+        ...question,
+        questionId: question.questionId ?? String(218 + index).padStart(5, '0'),
+        images: question.images ?? [],
+      }),
+    ),
     answerStats: input.answerStats ?? {},
     sharedNotes: input.sharedNotes ?? {},
     auditLog: input.auditLog ?? [],
@@ -466,22 +562,46 @@ export function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 
-export function bankRoleFor(user: AppUser, bank: QBank, memberships: QBankMembership[]): BankRole | undefined {
+export function bankRoleFor(
+  user: AppUser,
+  bank: QBank,
+  memberships: QBankMembership[],
+): BankRole | undefined {
   if (bank.ownerId === user.uid) return 'owner';
-  return memberships.find((item) => item.qbankId === bank.id && item.userId === user.uid)?.role;
+  return memberships.find(
+    (item) => item.qbankId === bank.id && item.userId === user.uid,
+  )?.role;
 }
 
-export function canAccessBank(user: AppUser, bank: QBank, memberships: QBankMembership[]): boolean {
-  return user.role === 'super_admin' || bank.visibility === 'public' || Boolean(bankRoleFor(user, bank, memberships));
+export function canAccessBank(
+  user: AppUser,
+  bank: QBank,
+  memberships: QBankMembership[],
+): boolean {
+  return (
+    user.role === 'super_admin' ||
+    bank.visibility === 'public' ||
+    Boolean(bankRoleFor(user, bank, memberships))
+  );
 }
 
 export function canManageBank(user: AppUser, bank: QBank): boolean {
-  if (bank.essential || bank.id === 'smle-gs') return user.role === 'super_admin';
+  if (bank.essential || bank.id === 'smle-gs')
+    return user.role === 'super_admin';
   return bank.ownerId === user.uid;
 }
 
-export function canReviewBank(user: AppUser, bank: QBank, memberships: QBankMembership[]): boolean {
-  if (user.role === 'super_admin' || user.role === 'reviewer' || user.platformRoles.includes('reviewer')) return true;
+export function canReviewBank(
+  user: AppUser,
+  bank: QBank,
+  memberships: QBankMembership[],
+): boolean {
+  if (
+    user.role === 'super_admin' ||
+    user.role === 'reviewer' ||
+    user.platformRoles.includes('reviewer')
+  )
+    return true;
   const bankRole = bankRoleFor(user, bank, memberships);
   if (bankRole === 'owner' || bankRole === 'reviewer') return true;
   return false;
@@ -495,7 +615,17 @@ export function normalizeAppState(input?: Partial<AppState>): AppState {
     ...input,
     version: 1,
     settings: { ...base.settings, ...input.settings },
-    progress: input.progress ?? {},
+    progress: Object.fromEntries(
+      Object.entries(input.progress ?? {}).map(([id, progress]) => [
+        id,
+        {
+          ...emptyProgress(),
+          ...progress,
+          highlights: progress.highlights ?? [],
+          highlightSections: progress.highlightSections ?? {},
+        },
+      ]),
+    ),
     tests: input.tests ?? [],
     reports: input.reports ?? [],
     revisions: input.revisions ?? [],

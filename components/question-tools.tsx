@@ -1,14 +1,89 @@
 'use client';
 /* oxlint-disable next/no-img-element */
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Check, Copy, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/cloudflare-client';
 import { optionLabel, type Question } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 
-export function QuestionOption({text,index,selected=false,correct=false,wrong=false,revealed=false,percent,onSelect}:{text:string;index:number;selected?:boolean;correct?:boolean;wrong?:boolean;revealed?:boolean;percent?:number;onSelect:()=>void}) {
-  return <button disabled={revealed} aria-pressed={selected} onClick={onSelect} className={cn('q-answer-option flex min-h-14 w-full items-start gap-3 rounded-xl border p-4 text-start text-base leading-7 transition',correct?'border-emerald-400 bg-emerald-50 text-emerald-950 dark:bg-emerald-500/10 dark:text-emerald-100':wrong?'border-red-400 bg-red-50 text-red-950 dark:bg-red-500/10 dark:text-red-100':selected?'border-primary bg-primary/5 ring-2 ring-primary/10':'bg-card hover:border-primary/35 hover:bg-primary/[0.025]')}><span className={cn('grid size-7 shrink-0 place-items-center rounded-full border text-xs font-bold',correct?'border-emerald-500 bg-emerald-500 text-white':wrong?'border-red-500 bg-red-500 text-white':selected?'border-primary bg-primary text-white':'bg-muted/40')}>{correct?<Check className="size-4"/>:wrong?<X className="size-4"/>:optionLabel(index)}</span><span dir="auto" className="min-w-0 flex-1 whitespace-pre-wrap break-words pt-0.5">{text}</span>{revealed&&percent!==undefined&&<span className="mt-0.5 rounded-full bg-card/80 px-2.5 py-0.5 text-xs font-bold tabular-nums ring-1 ring-current/10">{percent}%</span>}</button>;
+export function QuestionOption({
+  text,
+  index,
+  selected = false,
+  correct = false,
+  wrong = false,
+  revealed = false,
+  percent,
+  onSelect,
+  renderText,
+  onTextSelection,
+}: {
+  text: string;
+  index: number;
+  selected?: boolean;
+  correct?: boolean;
+  wrong?: boolean;
+  revealed?: boolean;
+  percent?: number;
+  onSelect: () => void;
+  renderText?: ReactNode;
+  onTextSelection?: (element: HTMLElement) => void;
+}) {
+  return (
+    <button
+      aria-disabled={revealed}
+      aria-pressed={selected}
+      onClick={() => {
+        if (!revealed && !window.getSelection()?.toString().trim()) onSelect();
+      }}
+      className={cn(
+        'q-answer-option flex min-h-14 w-full items-start gap-3 rounded-xl border p-4 text-start text-base leading-7 transition',
+        revealed && 'cursor-default',
+        correct
+          ? 'border-emerald-400 bg-emerald-50 text-emerald-950 dark:bg-emerald-500/10 dark:text-emerald-100'
+          : wrong
+            ? 'border-red-400 bg-red-50 text-red-950 dark:bg-red-500/10 dark:text-red-100'
+            : selected
+              ? 'border-primary bg-primary/5 ring-2 ring-primary/10'
+              : 'bg-card hover:border-primary/35 hover:bg-primary/[0.025]',
+      )}
+    >
+      <span
+        className={cn(
+          'grid size-7 shrink-0 place-items-center rounded-full border text-xs font-bold',
+          correct
+            ? 'border-emerald-500 bg-emerald-500 text-white'
+            : wrong
+              ? 'border-red-500 bg-red-500 text-white'
+              : selected
+                ? 'border-primary bg-primary text-white'
+                : 'bg-muted/40',
+        )}
+      >
+        {correct ? (
+          <Check className="size-4" />
+        ) : wrong ? (
+          <X className="size-4" />
+        ) : (
+          optionLabel(index)
+        )}
+      </span>
+      <span
+        dir="auto"
+        onPointerUp={(event) => onTextSelection?.(event.currentTarget)}
+        onTouchEnd={(event) => onTextSelection?.(event.currentTarget)}
+        className="min-w-0 flex-1 select-text whitespace-pre-wrap break-words pt-0.5 touch-pan-y"
+      >
+        {renderText ?? text}
+      </span>
+      {revealed && percent !== undefined && (
+        <span className="mt-0.5 rounded-full bg-card/80 px-2.5 py-0.5 text-xs font-bold tabular-nums ring-1 ring-current/10">
+          {percent}%
+        </span>
+      )}
+    </button>
+  );
 }
 
 export function QuestionId({
@@ -24,7 +99,9 @@ export function QuestionId({
   const id = value.replace(/^#/, '');
   return (
     <span className="inline-flex max-w-full flex-wrap items-center gap-2 text-xs">
-      <span className={compact ? 'sr-only' : 'text-muted-foreground'}>Question ID</span>
+      <span className={compact ? 'sr-only' : 'text-muted-foreground'}>
+        Question ID
+      </span>
       {onOpen && id !== 'deleted' ? (
         <button className="font-mono font-bold text-primary" onClick={onOpen}>
           #{id}
@@ -47,7 +124,9 @@ export function QuestionId({
           <span className={compact ? 'sr-only' : undefined}>Copy ID</span>
         </button>
       )}
-      <output className={compact ? 'sr-only' : 'text-xs text-emerald-600'}>{message}</output>
+      <output className={compact ? 'sr-only' : 'text-xs text-emerald-600'}>
+        {message}
+      </output>
     </span>
   );
 }
@@ -162,7 +241,13 @@ export function QuestionPreview() {
               ))}
               <div className="space-y-3">
                 {question.options.map((o, i) => (
-                    <QuestionOption key={i} text={o} index={i} selected={selected===i} onSelect={()=>setSelected(i)} />
+                  <QuestionOption
+                    key={i}
+                    text={o}
+                    index={i}
+                    selected={selected === i}
+                    onSelect={() => setSelected(i)}
+                  />
                 ))}
               </div>
             </article>
