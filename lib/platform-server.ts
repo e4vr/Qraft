@@ -11,9 +11,11 @@ import {
   canManageBank,
   canReviewBank,
   initialCollaborationState,
+  optionLabel,
   type AppUser,
   type MemberProfile,
   type Question,
+  type QuestionProposal,
   type QBank,
   type QBankMembership,
 } from './medguard-types';
@@ -163,6 +165,115 @@ export async function platformApi(request: Request, action: string) {
   const root =
     user.role === 'super_admin' && user.mfaEnrolled && user.mfaVerified;
   try {
+    if (action === 'bulk-review') {
+      if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+      const rawProposalIds = input.proposalIds;
+      if (!Array.isArray(rawProposalIds) || rawProposalIds.length < 1 || rawProposalIds.length > 200 || rawProposalIds.some(id => typeof id !== 'string' || id.length < 1 || id.length > 200))
+        return json({ error: 'Choose between 1 and 200 pending questions.' }, 400);
+      const proposalIds = [...new Set(rawProposalIds as string[])];
+      const status = text('status');
+      if ((status !== 'approved' && status !== 'rejected'))
+        return json({ error: 'Choose between 1 and 200 pending questions.' }, 400);
+
+      const rows = await env.DB.prepare(
+        "SELECT id,payload FROM records WHERE type='questionProposals' AND id IN (SELECT value FROM json_each(?))",
+      ).bind(JSON.stringify(proposalIds)).all<{ id: string; payload: string }>();
+      if (rows.results.length !== proposalIds.length) return json({ error: 'One or more proposals no longer exist. Refresh and try again.' }, 409);
+      const proposals = rows.results.map(row => JSON.parse(row.payload) as QuestionProposal);
+      const bankStates = new Map<string, Awaited<ReturnType<typeof bankAccessState>>>();
+      for (const bankId of new Set(proposals.map(proposal => proposal.qbankId))) {
+        const state = await bankAccessState(bankId);
+        const bank = state.qbanks.find(item => item.id === bankId);
+        if (!bank || !canReviewBank(user, bank, state.memberships)) return json({ error: 'Reviewer access is required for every selected QBank.' }, 403);
+        bankStates.set(bankId, state);
+      }
+      if (proposals.some(proposal => proposal.status !== 'pending' || proposal.proposedById === user.uid))
+        return json({ error: 'Some selected questions were already reviewed or were submitted by you. Refresh and try again.' }, 409);
+
+      const existingIds = [...new Set(proposals.filter(proposal => proposal.type === 'question_edit').map(proposal => proposal.questionId).filter((id): id is string => Boolean(id)))];
+      const existingRows = existingIds.length
+        ? await env.DB.prepare("SELECT id,payload FROM records WHERE type='sharedQuestions' AND id IN (SELECT value FROM json_each(?))")
+            .bind(JSON.stringify(existingIds)).all<{ id: string; payload: string }>()
+        : { results: [] as Array<{ id: string; payload: string }> };
+      const existingQuestions = new Map(existingRows.results.map(row => [row.id, JSON.parse(row.payload) as Question]));
+      if (proposals.some(proposal => proposal.type === 'question_edit' && (!proposal.questionId || !existingQuestions.has(proposal.questionId))))
+        return json({ error: 'A question changed or was deleted while you were reviewing it. Refresh and try again.' }, 409);
+
+      const reservedByBank = new Map<string, string[]>();
+      if (status === 'approved') {
+        for (const bankId of new Set(proposals.filter(proposal => proposal.type === 'new_question').map(proposal => proposal.qbankId))) {
+          const count = proposals.filter(proposal => proposal.type === 'new_question' && proposal.qbankId === bankId).length;
+          const allocated = await env.DB.prepare(`WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM numbers WHERE n<99999)
+            INSERT INTO question_ids(question_id,qbank_id,created_by_id,created_at)
+            SELECT printf('%05d',n),?,?,? FROM numbers WHERE NOT EXISTS(SELECT 1 FROM question_ids WHERE question_id=printf('%05d',n)) AND NOT EXISTS(SELECT 1 FROM question_registry WHERE question_id=printf('%05d',n)) ORDER BY n LIMIT ? RETURNING question_id`)
+            .bind(bankId, user.uid, new Date().toISOString(), count).all<{ question_id: string }>();
+          if (allocated.results.length !== count) return json({ error: 'Question ID capacity reached.' }, 409);
+          reservedByBank.set(bankId, allocated.results.map(item => item.question_id));
+        }
+      }
+
+      const now = new Date().toISOString();
+      const nextNumbers = new Map<string, number>();
+      if (status === 'approved') {
+        for (const bankId of new Set(proposals.map(proposal => proposal.qbankId))) {
+          const maximum = await env.DB.prepare("SELECT coalesce(max(CAST(json_extract(payload,'$.number') AS INTEGER)),0) AS value FROM records WHERE type='sharedQuestions' AND qbank_id=?")
+            .bind(bankId).first<{ value: number }>();
+          nextNumbers.set(bankId, maximum?.value ?? 0);
+        }
+      }
+      const statements: D1PreparedStatement[] = [];
+      for (const proposal of proposals) {
+        const existing = proposal.questionId ? existingQuestions.get(proposal.questionId) : undefined;
+        const internalId = proposal.type === 'new_question' ? `shared-${crypto.randomUUID()}` : proposal.questionId!;
+        const reviewedProposal: QuestionProposal = {
+          ...proposal,
+          status,
+          questionId: status === 'approved' ? internalId : proposal.questionId,
+          reviewedById: user.uid,
+          reviewedByName: user.displayName,
+          reviewedAt: now,
+        };
+        statements.push(env.DB.prepare("UPDATE records SET payload=?,updated_at=? WHERE type='questionProposals' AND id=? AND json_extract(payload,'$.status')='pending'")
+          .bind(JSON.stringify(reviewedProposal), now, proposal.id));
+        if (status === 'approved') {
+          const number = existing?.number ?? (nextNumbers.set(proposal.qbankId, (nextNumbers.get(proposal.qbankId) ?? 0) + 1), nextNumbers.get(proposal.qbankId)!);
+          const displayId = existing?.questionId ?? reservedByBank.get(proposal.qbankId)!.shift()!;
+          const question: Question = {
+            id: internalId,
+            questionId: displayId,
+            number,
+            qbankId: proposal.qbankId,
+            specialty: proposal.payload.specialty,
+            topic: proposal.payload.topic,
+            stem: proposal.payload.stem,
+            options: proposal.payload.options,
+            answer: proposal.payload.answer,
+            answerLetter: optionLabel(proposal.payload.answer),
+            explanation: proposal.payload.explanation,
+            sourceReference: proposal.payload.sourceReference,
+            sourcePage: existing?.sourcePage ?? 0,
+            sourceFile: existing?.sourceFile ?? proposal.payload.sourceReference,
+            revision: (existing?.revision ?? 0) + 1,
+            isCustom: true,
+            images: proposal.payload.images ?? existing?.images ?? [],
+            writtenById: proposal.type === 'new_question' ? proposal.proposedById : (existing?.writtenById ?? 'system'),
+            writtenByName: proposal.type === 'new_question' ? proposal.proposedByName : (existing?.writtenByName ?? 'Qraft'),
+            reviewedById: user.uid,
+            reviewedByName: user.displayName,
+            reviewedAt: now,
+          };
+          statements.push(env.DB.prepare("INSERT INTO records(type,id,qbank_id,payload,updated_at) VALUES('sharedQuestions',?,?,?,?) ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,payload=excluded.payload,updated_at=excluded.updated_at")
+            .bind(question.id, question.qbankId, JSON.stringify(question), now));
+        }
+      }
+      statements.push(auditStatement(user, `questions_bulk_${status}`, crypto.randomUUID(), null, {
+        count: proposals.length,
+        proposalIds,
+        submitters: [...new Set(proposals.map(proposal => proposal.proposedById))],
+      }));
+      await env.DB.batch(statements);
+      return json({ ok: true, reviewed: proposals.length });
+    }
     if (action === 'review-history') {
       if (request.method === 'GET') {
         const record = await env.DB.prepare("SELECT payload FROM records WHERE type='reviewHistoryPreferences' AND id=? AND owner_id=?").bind(user.uid, user.uid).first<{ payload: string }>();
@@ -597,6 +708,8 @@ export async function platformApi(request: Request, action: string) {
         ],
         payload,
         rationale: 'Imported from JSON.',
+        submissionMethod: 'json',
+        importBatchId: batchId,
         status: 'pending',
         proposedById: user.uid,
         proposedByName: user.displayName,

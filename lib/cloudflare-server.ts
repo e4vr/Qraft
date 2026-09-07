@@ -511,7 +511,7 @@ function proposalChangeAllowed(user: AppUser, operation: RecordOperation, value:
   if (value.id !== operation.id || !proposalPayloadIsComplete(value)) return false;
   if (!current) return value.proposedById === user.uid && value.status === 'pending';
   if (canReview) {
-    const immutable = ['id', 'qbankId', 'type', 'editKinds', 'payload', 'currentSnapshot', 'rationale', 'proposedById', 'proposedByName', 'proposedAt'];
+    const immutable = ['id', 'qbankId', 'type', 'editKinds', 'payload', 'currentSnapshot', 'rationale', 'submissionMethod', 'importBatchId', 'proposedById', 'proposedByName', 'proposedAt'];
     const questionIdAllowed = current.type === 'new_question'
       ? (value.status === 'approved' ? typeof value.questionId === 'string' && value.questionId.length > 0 : value.questionId === current.questionId)
       : value.questionId === current.questionId;

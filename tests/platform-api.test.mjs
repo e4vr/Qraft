@@ -24,7 +24,7 @@ void test('platform API authorization, import, subscription and ticket workflows
   const workerOptions = {
       modules: true,
       scriptPath: '.ui-review/platform-worker.mjs',
-      compatibilityDate: '2026-09-04',
+      compatibilityDate: '2026-09-07',
       compatibilityFlags: ['nodejs_compat'],
       d1Databases: { DB: 'platform-test' },
       durableObjects: { REALTIME: { className: 'RealtimeChannel', useSQLite: true } },
@@ -35,7 +35,7 @@ void test('platform API authorization, import, subscription and ticket workflows
   const mf = new Miniflare(
     convertV4MiniflareOptions(built ? { workers: [
       { ...workerOptions, name: 'app', modules: productionModules, durableObjects: { REALTIME: { className: 'RealtimeChannel', scriptName: 'realtime', useSQLite: true } } },
-      { name: 'realtime', modules: true, scriptPath: 'dist/qraft_realtime/index.js', compatibilityDate: '2026-09-04', durableObjects: { REALTIME: { className: 'RealtimeChannel', useSQLite: true } } },
+      { name: 'realtime', modules: true, scriptPath: 'dist/qraft_realtime/index.js', compatibilityDate: '2026-09-07', durableObjects: { REALTIME: { className: 'RealtimeChannel', useSQLite: true } } },
     ] } : workerOptions),
   );
   t.after(() => mf.dispose());
@@ -343,6 +343,52 @@ print(json.dumps(out))`,
       );
     },
   );
+  await t.test('Bulk review approves or rejects up to 200 selected proposals atomically', async () => {
+    const payload = index => ({
+      stem: `Bulk fixture ${index}`,
+      options: ['Correct', 'Incorrect'],
+      answer: 0,
+      specialty: 'General',
+      topic: 'Bulk review',
+      explanation: `Explanation ${index}`,
+      sourceReference: `Source ${index}`,
+      images: [],
+    });
+    const imported = await call('other', '/platform/import', {
+      qbankId: 'smle-gs',
+      requestId: randomUUID(),
+      questions: Array.from({ length: 200 }, (_, index) => payload(index + 1)),
+    });
+    assert.equal(imported.status, 200, JSON.stringify(imported));
+    assert.equal(imported.data.proposals.every(proposal => proposal.submissionMethod === 'json' && proposal.importBatchId), true);
+    assert.equal(imported.data.proposals.length, 200);
+    const approved = imported.data.proposals;
+    const approval = await call('reviewer', '/platform/bulk-review', {
+      proposalIds: approved.map(proposal => proposal.id),
+      status: 'approved',
+    });
+    assert.deepEqual(approval, { status: 200, data: { ok: true, reviewed: 200 } });
+    const rejectedImport = await call('other', '/platform/import', {
+      qbankId: 'smle-gs',
+      requestId: randomUUID(),
+      questions: [payload(201)],
+    });
+    const [rejected] = rejectedImport.data.proposals;
+    const rejection = await call('reviewer', '/platform/bulk-review', {
+      proposalIds: [rejected.id],
+      status: 'rejected',
+    });
+    assert.equal(rejection.status, 200);
+    const stored = await db.prepare("SELECT payload FROM records WHERE type='questionProposals' AND json_extract(payload,'$.payload.topic')='Bulk review'").all();
+    const reviewed = stored.results.map(row => JSON.parse(row.payload));
+    assert.equal(reviewed.filter(proposal => proposal.status === 'approved' && proposal.reviewedById === 'reviewer').length, 200);
+    assert.equal(reviewed.filter(proposal => proposal.status === 'rejected' && proposal.reviewedById === 'reviewer').length, 1);
+    const published = await db.prepare("SELECT count(*) AS count FROM records WHERE type='sharedQuestions' AND json_extract(payload,'$.topic')='Bulk review'").first();
+    assert.equal(published.count, 200);
+    assert.equal((await call('reviewer', '/platform/bulk-review', { proposalIds: [approved[0].id], status: 'approved' })).status, 409);
+    assert.equal((await call('other', '/platform/bulk-review', { proposalIds: [approved[0].id], status: 'rejected' })).status, 403);
+    assert.equal((await call('reviewer', '/platform/bulk-review', { proposalIds: Array(201).fill('x'), status: 'approved' })).status, 400);
+  });
   await t.test('Answer statistics preserve other users and accept option indexes', async () => {
     const row = await db.prepare("SELECT payload FROM records WHERE type='sharedQuestions' AND json_extract(payload,'$.questionId')='00002'").first();
     const question = JSON.parse(row.payload);

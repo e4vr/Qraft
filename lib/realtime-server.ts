@@ -69,6 +69,10 @@ export async function notifyMutation(request: Request) {
     topic = 'pricing'; channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'subscriptions') {
     topic = 'account'; channels.add('access');
+  } else if (path[0] === 'platform' && path[1] === 'bulk-review' && Array.isArray(input.proposalIds)) {
+    const rows = await env.DB.prepare("SELECT qbank_id FROM records WHERE type='questionProposals' AND id IN (SELECT value FROM json_each(?)) GROUP BY qbank_id")
+      .bind(JSON.stringify(input.proposalIds)).all<{ qbank_id: string }>();
+    rows.results.forEach(row => addBank(row.qbank_id));
   } else if (path[0] === 'auth') {
     if (path[1] !== 'register') return;
     channels.add('access');

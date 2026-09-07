@@ -248,6 +248,7 @@ export function QBankManagement({
             } : undefined,
             payload,
             rationale: existing ? 'Question update submitted from bank management.' : 'New question submitted from bank management.',
+            submissionMethod: 'manual',
             status: 'pending',
             proposedById: user.uid,
             proposedByName: user.displayName,

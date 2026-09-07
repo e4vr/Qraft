@@ -156,6 +156,7 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
   const review = await readFile(new URL('components/review-workspace.tsx', root), 'utf8');
   const manager = await readFile(new URL('components/qbank-management.tsx', root), 'utf8');
   const importReview = await readFile(new URL('components/question-import-review.tsx', root), 'utf8');
+  const platform = await readFile(new URL('lib/platform-server.ts', root), 'utf8');
   assert.match(app, />\s*Review\s*<\/span>/);
   assert.match(app, /Delete this test\?/);
   assert.match(app, /Question ID/);
@@ -167,6 +168,13 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
   assert.match(importReview, /One question per slide/);
   assert.match(manager, /QuestionImportReview/);
   assert.match(review, /questionId: status === 'approved'/);
+  assert.match(review, /Bulk review/);
+  assert.match(review, /Select latest/);
+  assert.match(review, /Approve selected/);
+  assert.match(review, /Reject selected/);
+  assert.match(review, /submissionMethod/);
+  assert.match(platform, /action === 'bulk-review'/);
+  assert.match(platform, /rawProposalIds\.length > 200/);
   assert.match(server, /current\.status !== 'approved'/);
   assert.match(server, /IMAGEKIT_STORAGE_LIMIT_BYTES = 3 \* 1024 \* 1024 \* 1024/);
   assert.match(server, /upload\.imagekit\.io\/api\/v1\/files\/upload/);

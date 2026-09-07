@@ -52,7 +52,7 @@ function memberMatchesBlocklist(member: MemberProfile, blockedAccess: AccessBloc
   );
 }
 
-export function AdminDashboard({ user, collaboration, update }: { user: AppUser; collaboration: CollaborationState; update: (updater: (current: CollaborationState) => CollaborationState) => void }) {
+export function AdminDashboard({ user, collaboration, update, replaceFromServer }: { user: AppUser; collaboration: CollaborationState; update: (updater: (current: CollaborationState) => CollaborationState) => void; replaceFromServer: (next: CollaborationState) => void }) {
   const canAccess = user.role === 'super_admin' || user.platformRoles.includes('access_manager') || user.role === 'admin' || user.role === 'access_manager';
   const isRoot = user.role === 'super_admin';
   const isReviewer = isRoot || user.platformRoles.includes('reviewer') || user.role === 'reviewer';
@@ -675,7 +675,7 @@ export function AdminDashboard({ user, collaboration, update }: { user: AppUser;
             ))}
           </section>
         )}
-        {tab === 'proposals' && <ReviewWorkspace user={user} collaboration={collaboration} update={update} embedded />}
+        {tab === 'proposals' && <ReviewWorkspace user={user} collaboration={collaboration} update={update} replaceFromServer={replaceFromServer} embedded />}
         {tab === 'audit' && (
           <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
             <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">

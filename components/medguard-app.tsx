@@ -2741,6 +2741,11 @@ export default function MedGuardApp() {
     lastSavedCollaboration.current = updater(lastSavedCollaboration.current);
     setCollaboration(updater);
   };
+  const replaceCollaborationFromServer = useCallback((next: CollaborationState) => {
+    lastSavedCollaboration.current = next;
+    setCollaboration(next);
+    if (user) void saveLocalCollaboration(next, user.uid);
+  }, [user]);
   useEffect(() => {
     if (!user) return;
     const refresh = () => { void observeCloudflareUser(next => { if (next && next.uid === user.uid) setUser(next); }).catch(() => undefined); };
@@ -3311,7 +3316,7 @@ export default function MedGuardApp() {
               }}
             />
           )}
-          {view === 'review' && showReview && <ReviewWorkspace user={user} collaboration={collaboration} update={(updater) => setCollaboration(updater)} />}
+          {view === 'review' && showReview && <ReviewWorkspace user={user} collaboration={collaboration} update={(updater) => setCollaboration(updater)} replaceFromServer={replaceCollaborationFromServer} />}
           {view === 'create' && <CreateTest questions={questions} state={state} onStart={createTest} />}
           {view === 'history' && (
             <HistoryView
@@ -3335,7 +3340,7 @@ export default function MedGuardApp() {
           {view === 'progress' && <ProgressView state={state} questions={questions} />}
           {view === 'settings' && <SettingsView state={state} setState={setState} syncStatus={syncStatus} onSync={() => void manualSync()} questions={questions} collaboration={collaboration} user={user} updateCollaboration={(updater) => setCollaboration(updater)} />}
           {view === 'manager' && <QuestionManager confirmUpdate={confirmUpdate} user={user} collaboration={collaboration} updateCollaboration={(updater) => setCollaboration(updater)} questions={questions} allQuestions={allQuestions} activeQBankId={activeQBankId} />}
-          {view === 'admin' && user.isAdmin && <AdminDashboard user={user} collaboration={collaboration} update={(updater) => setCollaboration(updater)} />}
+          {view === 'admin' && user.isAdmin && <AdminDashboard user={user} collaboration={collaboration} update={(updater) => setCollaboration(updater)} replaceFromServer={replaceCollaborationFromServer} />}
         </section>
       </div>
     </main>

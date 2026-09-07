@@ -258,6 +258,8 @@ export interface QuestionProposal {
   payload: QuestionProposalPayload;
   currentSnapshot?: QuestionProposalPayload;
   rationale: string;
+  submissionMethod?: 'manual' | 'json';
+  importBatchId?: string;
   status: ProposalStatus;
   proposedById: string;
   proposedByName: string;
