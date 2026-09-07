@@ -19,7 +19,7 @@ import {
   type QBank,
   type QBankMembership,
 } from './medguard-types';
-import { parseQuestionImport } from './question-import';
+import { parseQuestionImportReport } from './question-import';
 
 export async function bankAccessState(bankId: string) {
   const rows = await env.DB.prepare(
@@ -251,8 +251,8 @@ export async function platformApi(request: Request, action: string) {
             answerLetter: optionLabel(proposal.payload.answer),
             explanation: proposal.payload.explanation,
             sourceReference: proposal.payload.sourceReference,
-            sourcePage: existing?.sourcePage ?? 0,
-            sourceFile: existing?.sourceFile ?? proposal.payload.sourceReference,
+            sourcePage: proposal.payload.sourcePage ?? existing?.sourcePage ?? 0,
+            sourceFile: proposal.payload.sourceFile ?? existing?.sourceFile ?? proposal.payload.sourceReference,
             revision: (existing?.revision ?? 0) + 1,
             isCustom: true,
             images: proposal.payload.images ?? existing?.images ?? [],
@@ -693,7 +693,23 @@ export async function platformApi(request: Request, action: string) {
       const bank = state.qbanks.find((x) => x.id === text('qbankId'));
       if (!bank || !canAccessBank(user, bank, state.memberships))
         return json({ error: 'QBank access required.' }, 403);
-      const drafts = parseQuestionImport(input.questions),
+      const uploadedFileName = text('fileName').split(/[\\/]/).pop()?.trim().slice(0, 240) ?? '';
+      const normalizedName = uploadedFileName.toLocaleLowerCase('en-US');
+      const fileHash = text('fileHash').toLowerCase();
+      if (!uploadedFileName || !/^[a-f0-9]{64}$/.test(fileHash))
+        return json({ error: 'اسم الملف أو بصمته غير صالح.' }, 400);
+      const duplicate = await env.DB.prepare(
+        'SELECT file_name FROM imported_files WHERE user_id=? AND (normalized_name=? OR file_hash=?) LIMIT 1',
+      ).bind(user.uid, normalizedName, fileHash).first<{ file_name: string }>();
+      if (duplicate)
+        return json({ error: 'هذا الملف تم رفعه مسبقًا. الأسئلة المستخرجة منه إما تحت المراجعة أو تمت معالجتها بالفعل، لذلك لا تحتاج إلى رفع الملف مرة أخرى. لرفع نسخة محدثة يجب أن يكون محتواها واسمها مختلفين.' }, 409);
+      const rawImport = typeof input.questions === 'string'
+        ? input.questions
+        : { sourceFile: text('sourceFile'), questions: input.questions, skipped: input.skipped };
+      const report = parseQuestionImportReport(rawImport);
+      if (!report.questions.length)
+        return json({ error: 'لم يتم العثور على أي سؤال مكتمل وصالح للاستيراد.', skipped: report.skipped }, 400);
+      const drafts = report.questions,
         now = new Date().toISOString();
       const proposals = drafts.map((payload, index) => ({
         id: `${batchId}-${index}`,
@@ -717,25 +733,30 @@ export async function platformApi(request: Request, action: string) {
       }));
       const result = {
         proposals,
-        total: proposals.length,
+        total: proposals.length + report.skipped.length,
         successful: proposals.length,
-        failed: 0,
-        errors: [],
+        failed: report.skipped.length,
+        skipped: report.skipped,
+        repaired: report.repaired || input.repaired === true,
       };
-      await env.DB.batch([
-        env.DB.prepare('INSERT INTO import_batches VALUES(?,?,?)').bind(
-          batchId,
-          user.uid,
-          JSON.stringify(result),
-        ),
-        env.DB.prepare(
-          "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'questionProposals',json_extract(value,'$.id'),?,?,value,? FROM json_each(?)",
-        ).bind(bank.id, user.uid, now, JSON.stringify(proposals)),
-        auditStatement(user, 'questions_json_imported', bank.id, null, {
-          batchId,
-          count: proposals.length,
-        }),
-      ]);
+      try {
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO import_batches VALUES(?,?,?)').bind(batchId, user.uid, JSON.stringify(result)),
+          env.DB.prepare(
+            'INSERT INTO imported_files(id,user_id,file_name,normalized_name,file_hash,batch_id,source_file,successful_count,skipped_count,report_json,uploaded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+          ).bind(crypto.randomUUID(), user.uid, uploadedFileName, normalizedName, fileHash, batchId, report.sourceFile, proposals.length, report.skipped.length, JSON.stringify(report.skipped), now),
+          env.DB.prepare(
+            "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'questionProposals',json_extract(value,'$.id'),?,?,value,? FROM json_each(?)",
+          ).bind(bank.id, user.uid, now, JSON.stringify(proposals)),
+          auditStatement(user, 'questions_json_imported', bank.id, null, {
+            batchId, fileName: uploadedFileName, fileHash, count: proposals.length, skipped: report.skipped.length,
+          }),
+        ]);
+      } catch (error) {
+        if (String(error).includes('UNIQUE constraint failed'))
+          return json({ error: 'هذا الملف تم رفعه مسبقًا. لا تحتاج إلى رفعه مرة أخرى.' }, 409);
+        throw error;
+      }
       return json(result);
     }
     if (action === 'reviewers') {

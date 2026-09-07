@@ -74,12 +74,12 @@ void test('private banks, per-bank roles, and owner boundaries are enforced', as
   assert.match(server, /operation\.collection === 'qbankShareLinks'/);
 });
 
-void test('edit proposals require classified changes, explanation, source, and review', async () => {
+void test('edit proposals require classified changes, a source, and review', async () => {
   const server = await readFile(new URL('lib/cloudflare-server.ts', root), 'utf8');
   const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
   const review = await readFile(new URL('components/review-workspace.tsx', root), 'utf8');
   assert.match(server, /proposal\.editKinds\.length > 0/);
-  assert.match(server, /payload\.explanation\.trim/);
+  assert.match(server, /typeof payload\?\.explanation === 'string'/);
   assert.match(server, /payload\.sourceReference\.trim/);
   assert.match(app, /Suggest Edit → Review → Approve\s*\/\s*Reject/);
   assert.match(review, /Proposed · \{label\}/);

@@ -4,8 +4,9 @@ import { useId, useRef, useState } from 'react';
 import { Check, ChevronDown, Copy, FileJson, GraduationCap, Upload, LoaderCircle } from 'lucide-react';
 import { api } from '@/lib/cloudflare-client';
 import {
-  parseQuestionImport,
+  parseQuestionImportReport,
   buildQuestionPrompt,
+  type SkippedImportedQuestion,
   type QuestionPromptSettings,
 } from '@/lib/question-import';
 import {
@@ -30,6 +31,10 @@ export function QuestionImportReview({
     [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [reading, setReading] = useState(false);
   const [fileName, setFileName] = useState('');
+  const [fileHash, setFileHash] = useState('');
+  const [sourceFile, setSourceFile] = useState('');
+  const [skipped, setSkipped] = useState<SkippedImportedQuestion[]>([]);
+  const [repaired, setRepaired] = useState(false);
   const operation = useRef(false);
   const panelId = useId();
   const [selectedSource, setSelectedSource] = useState<QuestionPromptSettings['source'] | null>(null);
@@ -55,18 +60,27 @@ export function QuestionImportReview({
     operation.current = true;
     setReading(true);
     setError('');
+    setMessage('');
+    if (!drafts.length) setSkipped([]);
     try {
       if (file.size > 1500000)
         throw new Error('JSON file must be smaller than 1.5 MB.');
       if (!/\.(json|txt|text)$/i.test(file.name)) throw new Error('اختر ملف JSON أو TXT يحتوي على أسئلة بصيغة JSON.');
-      const content = (await file.text()).replace(/^\uFEFF/, '').trim();
-      let json: unknown;
-      try { json = JSON.parse(content); } catch {
-        throw new Error('الملف لا يحتوي على JSON صالح. إذا كان نص أسئلة عاديًا، استخدم أحد خياري AI أدناه لتحويله أولًا.');
+      const bytes = await file.arrayBuffer();
+      const content = new TextDecoder().decode(bytes).replace(/^\uFEFF/, '').trim();
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+      const report = parseQuestionImportReport(content);
+      if (!report.questions.length) {
+        if (!drafts.length) setSkipped(report.skipped);
+        throw new Error('لم يتم العثور على أي سؤال مكتمل وصالح. راجع تقرير الأسئلة المتخطاة أدناه.');
       }
-      const parsed = parseQuestionImport(json);
-      setDrafts(parsed);
+      setSkipped(report.skipped);
+      setDrafts(report.questions);
       setFileName(file.name);
+      setFileHash(hash);
+      setSourceFile(report.sourceFile);
+      setRepaired(report.repaired);
       setIndex(0);
       setOpen(true);
       setMessage('');
@@ -89,25 +103,36 @@ export function QuestionImportReview({
     setBusy(true);
     setError('');
     try {
-      parseQuestionImport(drafts);
+      const validated = parseQuestionImportReport({ sourceFile, questions: drafts, skipped });
+      if (!validated.questions.length) throw new Error('لا يوجد سؤال صالح للإرسال.');
       const result = await api<{
         proposals: QuestionProposal[];
         total: number;
         successful: number;
         failed: number;
+        skipped: SkippedImportedQuestion[];
+        repaired: boolean;
       }>('/platform/import', {
         method: 'POST',
-        body: JSON.stringify({ questions: drafts, qbankId: bankId, requestId }),
+        body: JSON.stringify({
+          questions: validated.questions,
+          skipped: validated.skipped,
+          sourceFile: validated.sourceFile,
+          repaired: repaired || validated.repaired,
+          fileName,
+          fileHash,
+          qbankId: bankId,
+          requestId,
+        }),
       });
       onImported(result.proposals);
-      setMessage(
-        `تم رفع الأسئلة بنجاح — Total: ${result.total} · Successful: ${result.successful} · Failed: ${result.failed}. Awaiting reviewer approval.`,
-      );
+      setSkipped(result.skipped);
+      setMessage(`تم استلام ${result.successful} سؤالًا بنجاح 🎉`);
       setOpen(false);
       setDrafts([]);
     } catch (e) {
       setError(
-        `${e instanceof Error ? e.message : 'Upload failed.'} Your questions remain available for editing and retry. No questions in this batch were partially published.`,
+        `${e instanceof Error ? e.message : 'تعذر الرفع.'} بقيت الأسئلة متاحة للتعديل وإعادة المحاولة، ولم يُحفظ جزء غير مكتمل من الدفعة.`,
       );
     } finally {
       operation.current = false;
@@ -131,10 +156,22 @@ export function QuestionImportReview({
         <p className="text-xs text-muted-foreground" dir="auto">JSON أو ملف نصي يحتوي على JSON · من 1 إلى 200 سؤال · حتى 1.5 MB. راجع الأسئلة قبل إرسالها.</p>
         {reading && <output className="block text-sm">Validating file… · جارٍ التحقق من الملف</output>}
         {drafts.length > 0 && <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg bg-muted p-3">
-          <p className="min-w-0 flex-1 break-words text-sm">{fileName} · {drafts.length} questions ready for review</p>
+          <p className="min-w-0 flex-1 break-words text-sm">{fileName} · {drafts.length} questions ready for review{skipped.length ? ` · ${skipped.length} skipped` : ''}{repaired ? ' · JSON repaired' : ''}</p>
           <button type="button" disabled={reading || busy} className="q-button min-h-11 border" onClick={() => setOpen(true)}>Resume review · متابعة المراجعة</button>
         </div>}
-        {message && <output className="block break-words text-sm text-emerald-600">{message}</output>}
+        {message && <output className="block space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm" dir="rtl">
+          <strong className="block text-base text-emerald-700 dark:text-emerald-300">{message}</strong>
+          <span className="block">تم رفع الأسئلة وإرسالها إلى فريق المراجعة للتحقق منها قبل إضافتها إلى Q Bank.</span>
+          <span className="block">عدم ظهورها مباشرة في البنك أمر طبيعي. لا تحتاج إلى رفع الملف مرة أخرى؛ ستُضاف تلقائيًا بعد اعتماد المراجعين.</span>
+        </output>}
+        {skipped.length > 0 && <section className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4" dir="rtl">
+          <h3 className="font-semibold">لم تتم إضافة {skipped.length} أسئلة بسبب مشاكل في المصدر:</h3>
+          <ul className="mt-2 list-disc space-y-1 ps-5 text-sm">
+            {skipped.map((item, itemIndex) => <li key={`${item.originalQuestionNumber ?? 'unknown'}-${item.page ?? 'unknown'}-${itemIndex}`}>
+              {item.originalQuestionNumber ? `Question ${item.originalQuestionNumber} — ` : ''}{item.page ? `Page ${item.page}: ` : ''}{item.reason}
+            </li>)}
+          </ul>
+        </section>}
         {error && !open && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
       </section>
       <div className="space-y-3">
@@ -153,7 +190,7 @@ export function QuestionImportReview({
           <p className="mt-1 text-sm text-muted-foreground" dir="auto">اختر الإعدادات، وانسخ Prompt إلى أداة الذكاء الاصطناعي مع ملفك، ثم ارفع ملف JSON الناتج هنا لمراجعته. لا يتم إرسال ملفك إلى الذكاء الاصطناعي من داخل الموقع.</p>
           <p className="mt-2 text-sm text-muted-foreground" dir="auto">يتضمن Prompt تصنيف كل سؤال إلى تخصص (specialty) وموضوع (topic). يقرأهما الموقع مباشرة من JSON، ويمكنك مراجعتهما وتعديلهما قبل الرفع.</p>
         </div>
-        {!lecture && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">سيطلب Prompt نقل الأسئلة والخيارات بالترتيب الأصلي، مع تصحيح الأخطاء اللغوية الواضحة فقط دون تغيير المعنى أو المعلومات الطبية أو الإجابة المسجلة. لن يعيد صياغة الأسئلة أو يخمّن الإجابات الناقصة، وسيطلب توضيح أي جزء غير مقروء.</p>}
+        {!lecture && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">سيطلب Prompt نقل الأسئلة والخيارات بالترتيب الأصلي دون تخمين. أي سؤال ناقص أو غير مقروء سيُتجاوز وحده مع تسجيل السبب، بينما تستمر معالجة بقية الملف. يدعم اختلاف ترقيم الأسئلة وصفحات PDF الممسوحة والمحتوى المختلط قدر الإمكان.</p>}
         {lecture && <div className="grid min-w-0 gap-4 sm:grid-cols-2">
           <label className="min-w-0 text-sm font-semibold">Question type · نوع السؤال
             <select className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" value={settings.kind} onChange={e => setSettings(s => ({ ...s, kind: e.target.value as QuestionPromptSettings['kind'] }))}>
@@ -269,7 +306,6 @@ export function QuestionImportReview({
                   'specialty',
                   'topic',
                   'explanation',
-                  'sourceReference',
                 ] as const
               ).map((k) => (
                 <label className="block text-sm" key={k}>
@@ -282,6 +318,10 @@ export function QuestionImportReview({
                   />
                 </label>
               ))}
+              <div className="rounded-xl bg-muted p-3 text-sm" dir="auto">
+                <span className="font-semibold">Source · المصدر المختصر</span>
+                <p className="mt-1 break-words">{draft.sourceReference}</p>
+              </div>
             </fieldset>
           )}
           {error && (

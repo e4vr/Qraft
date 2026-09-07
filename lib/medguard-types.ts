@@ -246,6 +246,8 @@ export interface QuestionProposalPayload {
   topic: string;
   explanation: string;
   sourceReference: string;
+  sourceFile?: string;
+  sourcePage?: number;
   images: NoteImage[];
 }
 

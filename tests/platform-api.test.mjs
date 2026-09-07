@@ -316,14 +316,19 @@ print(json.dumps(out))`,
         specialty: 'General',
         topic: 'Topic',
         explanation: 'Fixture explanation',
-        sourceReference: 'Fixture source',
+        sourceFile: 'Fixture.pdf',
+        sourcePage: 12,
+        sourceReference: 'This long source is ignored',
         images: [],
       };
+      const invalidFileHash = createHash('sha256').update('invalid-import').digest('hex');
       assert.equal(
         (
           await call('lite', '/platform/import', {
             qbankId: 'smle-gs',
             requestId: randomUUID(),
+            fileName: 'invalid.json',
+            fileHash: invalidFileHash,
             questions: [{ ...payload, options: [{}, 'B'] }],
           })
         ).status,
@@ -332,15 +337,39 @@ print(json.dumps(out))`,
       const request = {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
+        fileName: 'fixture.json',
+        fileHash: createHash('sha256').update('fixture-import').digest('hex'),
         questions: [payload],
       };
       const first = await call('lite', '/platform/import', request);
       assert.equal(first.status, 200, JSON.stringify(first));
       assert.equal(first.data.successful, 1);
+      assert.equal(first.data.proposals[0].payload.sourceReference, 'Fixture.pdf - p.12');
       assert.equal(
         (await call('lite', '/platform/import', request)).data.proposals[0].id,
         first.data.proposals[0].id,
       );
+      const partial = await call('lite', '/platform/import', {
+        qbankId: 'smle-gs',
+        requestId: randomUUID(),
+        fileName: 'gemini-output.txt',
+        fileHash: createHash('sha256').update('gemini-output').digest('hex'),
+        questions: '```json\n{sourceFile:"Scan.pdf",questions:[{stem:"Valid",options:["Yes","No",],correctAnswer:"A",sourcePage:4,},{stem:"Broken",options:["Only one"],correctAnswer:"A",sourcePage:5,}],}\n```',
+      });
+      assert.equal(partial.status, 200, JSON.stringify(partial));
+      assert.equal(partial.data.successful, 1);
+      assert.equal(partial.data.failed, 1);
+      assert.equal(partial.data.repaired, true);
+      assert.equal(partial.data.skipped[0].page, 5);
+      assert.equal(partial.data.proposals[0].payload.sourceReference, 'Scan.pdf - p.4');
+      const duplicateName = await call('lite', '/platform/import', {
+        ...request, requestId: randomUUID(), fileHash: createHash('sha256').update('different').digest('hex'),
+      });
+      assert.equal(duplicateName.status, 409);
+      const duplicateHash = await call('lite', '/platform/import', {
+        ...request, requestId: randomUUID(), fileName: 'renamed.json',
+      });
+      assert.equal(duplicateHash.status, 409);
     },
   );
   await t.test('Bulk review approves or rejects up to 200 selected proposals atomically', async () => {
@@ -351,12 +380,16 @@ print(json.dumps(out))`,
       specialty: 'General',
       topic: 'Bulk review',
       explanation: `Explanation ${index}`,
+      sourceFile: 'Bulk.pdf',
+      sourcePage: index,
       sourceReference: `Source ${index}`,
       images: [],
     });
     const imported = await call('other', '/platform/import', {
       qbankId: 'smle-gs',
       requestId: randomUUID(),
+      fileName: 'bulk-200.json',
+      fileHash: createHash('sha256').update('bulk-200').digest('hex'),
       questions: Array.from({ length: 200 }, (_, index) => payload(index + 1)),
     });
     assert.equal(imported.status, 200, JSON.stringify(imported));
@@ -371,6 +404,8 @@ print(json.dumps(out))`,
     const rejectedImport = await call('other', '/platform/import', {
       qbankId: 'smle-gs',
       requestId: randomUUID(),
+      fileName: 'bulk-rejected.json',
+      fileHash: createHash('sha256').update('bulk-rejected').digest('hex'),
       questions: [payload(201)],
     });
     const [rejected] = rejectedImport.data.proposals;

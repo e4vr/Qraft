@@ -498,7 +498,7 @@ function proposalPayloadIsComplete(proposal: Record<string, unknown>) {
   const payload = isRecord(proposal.payload) ? proposal.payload : undefined;
   const options = Array.isArray(payload?.options) ? payload.options : [];
   return Array.isArray(proposal.editKinds) && proposal.editKinds.length > 0 && proposal.editKinds.every((item) => typeof item === 'string')
-    && typeof payload?.explanation === 'string' && Boolean(payload.explanation.trim())
+    && typeof payload?.explanation === 'string'
     && typeof payload.sourceReference === 'string' && Boolean(payload.sourceReference.trim())
     && typeof payload.stem === 'string' && Boolean(payload.stem.trim())
     && options.length >= 2 && options.length <= 10 && options.every((item) => typeof item === 'string' && item.trim())

@@ -245,3 +245,27 @@ export const importBatches = sqliteTable('import_batches', {
   userId: text('user_id').notNull(),
   result: text('result').notNull(),
 });
+
+export const importedFiles = sqliteTable(
+  'imported_files',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    fileName: text('file_name').notNull(),
+    normalizedName: text('normalized_name').notNull(),
+    fileHash: text('file_hash').notNull(),
+    batchId: text('batch_id').notNull(),
+    sourceFile: text('source_file').notNull(),
+    successfulCount: integer('successful_count').notNull(),
+    skippedCount: integer('skipped_count').notNull(),
+    reportJson: text('report_json').notNull(),
+    uploadedAt: text('uploaded_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_imported_files_user_name').on(table.userId, table.normalizedName),
+    uniqueIndex('idx_imported_files_user_hash').on(table.userId, table.fileHash),
+    uniqueIndex('idx_imported_files_batch').on(table.batchId),
+  ],
+);
