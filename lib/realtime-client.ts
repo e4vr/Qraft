@@ -18,6 +18,7 @@ export function openLiveChannels(channels: string[], changed: () => void) {
   const retries = new Map<string, ReturnType<typeof setTimeout>>();
   const attempts = new Map<string, number>();
   const lastMessage = new Map<string, number>();
+  const connectedBefore = new Set<string>();
   const emit = (topic = 'connected') => { changed(); window.dispatchEvent(new CustomEvent(LIVE_CHANGE, { detail: topic })); };
   function connect(channel: string) {
     if (stopped || !navigator.onLine || document.visibilityState === 'hidden' || sockets.has(channel)) return;
@@ -26,7 +27,12 @@ export function openLiveChannels(channels: string[], changed: () => void) {
     url.searchParams.set('channel', channel);
     const socket = new WebSocket(url);
     sockets.set(channel, socket);
-    socket.onopen = () => { attempts.set(channel, 0); lastMessage.set(channel, Date.now()); emit(); };
+    socket.onopen = () => {
+      attempts.set(channel, 0);
+      lastMessage.set(channel, Date.now());
+      if (connectedBefore.has(channel)) emit();
+      else connectedBefore.add(channel);
+    };
     socket.onmessage = event => {
       lastMessage.set(channel, Date.now());
       if (event.data === 'pong') return;
@@ -48,7 +54,7 @@ export function openLiveChannels(channels: string[], changed: () => void) {
     if (!navigator.onLine || document.visibilityState === 'hidden') {
       for (const socket of sockets.values()) socket.close(1000, 'Background');
       sockets.clear();
-    } else { channels.forEach(connect); emit(); }
+    } else channels.forEach(connect);
   };
   const heartbeat = setInterval(() => {
     for (const [channel, socket] of sockets) {
@@ -58,15 +64,13 @@ export function openLiveChannels(channels: string[], changed: () => void) {
       }
     }
   }, 25_000);
-  // A lightweight fallback only when an expected connection is unavailable.
-  const fallback = setInterval(() => { if (navigator.onLine && document.visibilityState !== 'hidden' && channels.some(channel => sockets.get(channel)?.readyState !== WebSocket.OPEN)) emit(); }, 15_000);
   window.addEventListener('online', resume);
   window.addEventListener('offline', resume);
   document.addEventListener('visibilitychange', resume);
   channels.forEach(connect);
   return () => {
     stopped = true;
-    clearInterval(heartbeat); clearInterval(fallback);
+    clearInterval(heartbeat);
     retries.forEach(clearTimeout);
     sockets.forEach(socket => socket.close(1000, 'Leaving'));
     window.removeEventListener('online', resume);

@@ -1,8 +1,15 @@
 declare namespace Cloudflare {
   interface Env {
-    REALTIME: DurableObjectNamespace<import('./workers/realtime').RealtimeChannel>;
-    ROOT_ADMIN_EMAIL?: string;
-    ROOT_ADMIN_SETUP_TOKEN?: string;
     IMAGEKIT_PRIVATE_KEY?: string;
+    R2_PUBLIC_URL?: string;
+    R2_BILLING_CYCLE_DAY?: string;
+    R2_STORAGE_CAP_BYTES?: string;
+    R2_CLASS_A_MONTHLY_CAP?: string;
+    R2_CLASS_B_MONTHLY_CAP?: string;
+    API_RATE_LIMITER?: RateLimit;
+    MUTATION_RATE_LIMITER?: RateLimit;
+    AUTH_RATE_LIMITER?: RateLimit;
+    QUESTION_BACKUP_RETENTION_DAYS?: string;
+    QUESTION_BACKUP_MAX_BYTES?: string;
   }
 }

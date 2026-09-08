@@ -1,5 +1,6 @@
 import application from 'vinext/server/fetch-handler';
 import { connectRealtime } from './lib/realtime-server';
+import { createQuestionBackup } from './lib/question-backup';
 
 const worker = {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext) {
@@ -9,6 +10,13 @@ const worker = {
       catch { return Response.json({ error: 'Live connection unavailable.' }, { status: 503 }); }
     }
     return application.fetch(request, env, ctx);
+  },
+  scheduled(
+    controller: ScheduledController,
+    env: Cloudflare.Env,
+    ctx: ExecutionContext,
+  ) {
+    ctx.waitUntil(createQuestionBackup(env, controller.scheduledTime));
   },
 };
 export default worker;

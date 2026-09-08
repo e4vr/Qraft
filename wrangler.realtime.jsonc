@@ -4,7 +4,11 @@
   "main": "workers/realtime.ts",
   "compatibility_date": "2026-09-07",
   "workers_dev": false,
-  "observability": { "enabled": true },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.01,
+    "redact_query_string": true
+  },
   "durable_objects": { "bindings": [{ "name": "REALTIME", "class_name": "RealtimeChannel" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RealtimeChannel"] }]
 }

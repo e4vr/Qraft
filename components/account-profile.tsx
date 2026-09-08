@@ -18,7 +18,7 @@ import {
 import {
   changeCloudflarePassword,
   updateCloudflareProfile,
-} from '@/lib/cloudflare-client';
+} from '@/lib/application-services';
 import type { AppUser } from '@/lib/medguard-types';
 
 export function AccountProfile({

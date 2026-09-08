@@ -3,11 +3,13 @@
 /* oxlint-disable next/no-img-element, jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions, jsx-a11y/control-has-associated-label */
 
 import {
+  openUpgrade,
   Subscribe,
   UpgradeButton,
   UpgradeDialog,
 } from '@/components/subscription-workspace';
 import { ContactWorkspace } from '@/components/contact-workspace';
+import { ContributionCenter } from '@/components/contribution-center';
 import { AccountProfile } from '@/components/account-profile';
 import { SystemStatePage } from '@/components/system-state-page';
 import { QuestionImportReview } from '@/components/question-import-review';
@@ -20,6 +22,7 @@ import { openLiveChannels } from '@/lib/realtime-client';
 import { mergeLiveState } from '@/lib/merge-live-state';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
+  Award,
   ArrowRight,
   BarChart3,
   Bold,
@@ -48,6 +51,7 @@ import {
   LayoutDashboard,
   Library,
   Layers3,
+  LockKeyhole,
   List,
   LogOut,
   Menu,
@@ -89,19 +93,20 @@ import {
   loadCloudState,
   observeCloudflareUser,
   previewCloudflareQBankInvitation,
+  registerStartedExam,
   saveCloudState,
   saveCollaborationState,
   signInCloudflare,
   signOutCloudflare,
   uploadNoteImage,
   type QBankLinkInvitation,
-} from '@/lib/cloudflare-client';
+} from '@/lib/application-services';
 import {
   loadLocalCollaboration,
   loadLocalState,
   saveLocalState,
   saveLocalCollaboration,
-} from '@/lib/local-db';
+} from '@/lib/application-services';
 import {
   emptyProgress,
   initialCollaborationState,
@@ -124,6 +129,7 @@ import {
   type TestBuilderConfig,
   type TestSession,
 } from '@/lib/medguard-types';
+import { getPlanLimits, hasFeature } from '@/lib/plan-config';
 import {
   AdminDashboard,
   PendingApproval,
@@ -166,6 +172,7 @@ type View =
   | 'progress'
   | 'settings'
   | 'manager'
+  | 'contribution-center'
   | 'admin'
   | 'test';
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'offline' | 'error';
@@ -1126,11 +1133,15 @@ function AppSidebar({
           aria-label="Primary navigation"
         >
           <p className="q-eyebrow px-3 pb-2 pt-3">Study space</p>
-          {NAV_ITEMS.map((item) => (
+          {NAV_ITEMS.map((item) => {
+            const locked =
+              item.id === 'flashcards' &&
+              !hasFeature(user.effectivePlan ?? user.tier, 'flashcards');
+            return (
             <button
               key={item.id}
               aria-current={view === item.id ? 'page' : undefined}
-              onClick={() => navigate(item.id)}
+              onClick={() => (locked ? openUpgrade() : navigate(item.id))}
               className={cx(
                 'group relative flex h-11 w-full min-w-0 items-center gap-3 overflow-hidden rounded-xl px-3 text-left text-sm font-semibold transition',
                 view === item.id
@@ -1148,6 +1159,11 @@ function AppSidebar({
               <span className="min-w-0 truncate whitespace-nowrap">
                 {item.label}
               </span>
+              {locked && (
+                <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-bold text-muted-foreground">
+                  <LockKeyhole className="size-3" /> Pro
+                </span>
+              )}
               {item.id === 'flashcards' && dueFlashcardCount > 0 && (
                 <span
                   aria-label={`${dueFlashcardCount} flashcards due`}
@@ -1157,7 +1173,8 @@ function AppSidebar({
                 </span>
               )}
             </button>
-          ))}
+            );
+          })}
           {showReview && (
             <button
               aria-current={view === 'review' ? 'page' : undefined}
@@ -1188,7 +1205,7 @@ function AppSidebar({
             <CircleAlert className="size-4" />
             Contact Us
           </button>
-          {user.tier === 'lite' && (
+          {(user.effectivePlan ?? user.tier) !== 'unlimited' && (
             <button
               onClick={() => navigate('subscribe')}
               className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-semibold text-amber-700 dark:text-amber-300"
@@ -1199,6 +1216,19 @@ function AppSidebar({
           )}
           <div className="my-3 border-t" />
           <p className="q-eyebrow px-3 pb-2">Learn together</p>
+          <button
+            aria-current={view === 'contribution-center' ? 'page' : undefined}
+            onClick={() => navigate('contribution-center')}
+            className={cx(
+              'flex h-11 w-full min-w-0 items-center gap-3 overflow-hidden rounded-xl px-3 text-left text-sm font-semibold transition',
+              view === 'contribution-center'
+                ? 'bg-primary/10 text-primary'
+                : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+            )}
+          >
+            <Award className="size-[18px] shrink-0" />
+            <span className="min-w-0 truncate whitespace-nowrap">Contribution Center</span>
+          </button>
           <button
             aria-current={view === 'manager' ? 'page' : undefined}
             onClick={() => navigate('manager')}
@@ -1211,7 +1241,7 @@ function AppSidebar({
           >
             <ClipboardList className="size-[18px] shrink-0" />
             <span className="min-w-0 truncate whitespace-nowrap">
-              Contributions
+              Submit contribution
             </span>
           </button>
           {user.isAdmin && (
@@ -1266,7 +1296,7 @@ function AppSidebar({
                 <LogOut className="size-4" />
               </button>
             </div>
-            {user.tier === 'lite' && (
+            {(user.effectivePlan ?? user.tier) !== 'unlimited' && (
               <div className="mt-3">
                 <UpgradeButton />
               </div>
@@ -3131,13 +3161,33 @@ function TestView({
                   <FlaskConical className="size-4" />
                   Labs
                 </SecondaryButton>
-                <SecondaryButton onClick={() => setPrivateNotesOpen(true)}>
-                  <StickyNote className="size-4" />
-                  Private Note {progress.note.trim() ? '•' : ''}
+                <SecondaryButton
+                  onClick={() =>
+                    hasFeature(user.effectivePlan ?? user.tier, 'privateNotes')
+                      ? setPrivateNotesOpen(true)
+                      : openUpgrade()
+                  }
+                >
+                  {hasFeature(user.effectivePlan ?? user.tier, 'privateNotes') ? (
+                    <StickyNote className="size-4" />
+                  ) : (
+                    <LockKeyhole className="size-4" />
+                  )}
+                  Private Note {hasFeature(user.effectivePlan ?? user.tier, 'privateNotes') ? (progress.note.trim() ? '•' : '') : '· Pro'}
                 </SecondaryButton>
-                <SecondaryButton onClick={() => setFlashcardOpen(true)}>
-                  <Layers3 className="size-4" />
-                  Create Flashcard
+                <SecondaryButton
+                  onClick={() =>
+                    hasFeature(user.effectivePlan ?? user.tier, 'flashcards')
+                      ? setFlashcardOpen(true)
+                      : openUpgrade()
+                  }
+                >
+                  {hasFeature(user.effectivePlan ?? user.tier, 'flashcards') ? (
+                    <Layers3 className="size-4" />
+                  ) : (
+                    <LockKeyhole className="size-4" />
+                  )}
+                  Create Flashcard {hasFeature(user.effectivePlan ?? user.tier, 'flashcards') ? '' : '· Pro'}
                 </SecondaryButton>
                 <SecondaryButton onClick={openReport}>
                   <CircleAlert className="size-4" />
@@ -4219,7 +4269,7 @@ function SettingsView({
             <div>
               <h2 className="font-bold">Cloud sync</h2>
               <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                Cloudflare D1 and ImageKit are connected. Changes sync
+                Cloudflare D1 and R2 are connected. Changes sync
                 automatically and can be forced at any time.
               </p>
             </div>
@@ -4782,12 +4832,26 @@ function QuestionManager({
                 Request role
               </SecondaryButton>
             )}
-            <SecondaryButton onClick={() => setImportOpen(true)}>
-              Import JSON / Use AI
+            <SecondaryButton
+              onClick={() =>
+                hasFeature(user.effectivePlan ?? user.tier, 'jsonImport')
+                  ? setImportOpen(true)
+                  : openUpgrade()
+              }
+            >
+              {!hasFeature(user.effectivePlan ?? user.tier, 'jsonImport') && <LockKeyhole className="size-4" />}
+              Import JSON {hasFeature(user.effectivePlan ?? user.tier, 'jsonImport') ? '/ Use AI' : '· Pro'}
             </SecondaryButton>
-            <PrimaryButton tone="contribute" onClick={startNewContribution}>
-              <Plus className="size-4" />
-              Add Manually
+            <PrimaryButton
+              tone="contribute"
+              onClick={() =>
+                hasFeature(user.effectivePlan ?? user.tier, 'addQuestions')
+                  ? startNewContribution()
+                  : openUpgrade()
+              }
+            >
+              {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions') ? <Plus className="size-4" /> : <LockKeyhole className="size-4" />}
+              Add Manually {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions') ? '' : '· Pro'}
             </PrimaryButton>
           </div>
         }
@@ -5054,6 +5118,9 @@ export default function MedGuardApp() {
   const [linkInvitationBusy, setLinkInvitationBusy] = useState(false);
   const [linkInvitationError, setLinkInvitationError] = useState('');
   const saveTimer = useRef<number | undefined>(undefined);
+  const stateDirty = useRef(false);
+  const stateSyncInFlight = useRef(false);
+  const stateSnapshot = useRef(state);
   const collaborationSaveTimer = useRef<number | undefined>(undefined);
   const lastSavedCollaboration = useRef<CollaborationState>(
     initialCollaborationState(),
@@ -5063,6 +5130,9 @@ export default function MedGuardApp() {
   useEffect(() => {
     liveSnapshot.current = { collaboration, user };
   }, [collaboration, user]);
+  useEffect(() => {
+    stateSnapshot.current = state;
+  }, [state]);
   const handledInvitationLink = useRef('');
   const hydratedIdentity = useRef('');
   const cloudLoaded = useRef(false);
@@ -5089,7 +5159,7 @@ export default function MedGuardApp() {
     };
     const changed = (event: Event) => {
       const { userId, tier } = (
-        event as CustomEvent<{ userId: string; tier: 'lite' | 'pro' }>
+        event as CustomEvent<{ userId: string; tier: AppUser['tier'] }>
       ).detail;
       const patch = (current: CollaborationState) => ({
         ...current,
@@ -5375,26 +5445,66 @@ export default function MedGuardApp() {
 
   useEffect(() => {
     if (!user || !hydrated) return;
+    stateDirty.current = true;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
       if (creatingTest.current) return;
       void saveLocalState(user.uid, state);
-      if (
-        cloudLoaded.current &&
-        state.settings.autoSync &&
-        navigator.onLine &&
-        user.status === 'approved'
-      ) {
-        setSyncStatus('syncing');
-        void saveCloudState(user.uid, state)
-          .then(() => setSyncStatus('synced'))
-          .catch(() => setSyncStatus('error'));
-      } else setSyncStatus(navigator.onLine ? 'local' : 'offline');
-    }, 450);
+      setSyncStatus(navigator.onLine ? 'local' : 'offline');
+    }, 200);
     return () => {
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
     };
   }, [state, user, hydrated]);
+
+  const flushCloudState = useCallback(async () => {
+    const account = liveSnapshot.current.user;
+    const snapshot = stateSnapshot.current;
+    if (
+      !account ||
+      account.status !== 'approved' ||
+      !cloudLoaded.current ||
+      !snapshot.settings.autoSync ||
+      !navigator.onLine ||
+      !stateDirty.current ||
+      stateSyncInFlight.current
+    )
+      return;
+    stateSyncInFlight.current = true;
+    setSyncStatus('syncing');
+    try {
+      await saveCloudState(account.uid, snapshot);
+      if (stateSnapshot.current === snapshot) stateDirty.current = false;
+      setSyncStatus('synced');
+    } catch {
+      setSyncStatus('error');
+    } finally {
+      stateSyncInFlight.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user || !hydrated) return;
+    const interval = window.setInterval(() => void flushCloudState(), 15_000);
+    const onlineHandler = () => void flushCloudState();
+    const visibilityHandler = () => {
+      if (document.visibilityState === 'hidden') {
+        void saveLocalState(user.uid, stateSnapshot.current);
+        void flushCloudState();
+      }
+    };
+    const pageHideHandler = () =>
+      void saveLocalState(user.uid, stateSnapshot.current);
+    window.addEventListener('online', onlineHandler);
+    window.addEventListener('pagehide', pageHideHandler);
+    document.addEventListener('visibilitychange', visibilityHandler);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('online', onlineHandler);
+      window.removeEventListener('pagehide', pageHideHandler);
+      document.removeEventListener('visibilitychange', visibilityHandler);
+    };
+  }, [flushCloudState, hydrated, user]);
 
   useEffect(() => {
     if (!user || !collaborationHydrated || user.status !== 'approved') return;
@@ -5578,14 +5688,16 @@ export default function MedGuardApp() {
     async (config: TestBuilderConfig) => {
       if (!user || creatingTest.current) return;
       setTestError('');
-      if (
-        user.tier === 'lite' &&
-        (config.count > 30 || state.tests.length >= 3)
-      ) {
+      const limits = getPlanLimits(user.effectivePlan ?? user.tier);
+      if (config.count > limits.maxQuestionsPerExam) {
         setTestError(
-          config.count > 30
-            ? 'Lite allows a maximum of 30 questions per test. Your selections are preserved.'
-            : 'The free Lite limit is 3 tests. Upgrade to Pro to create more.',
+          `${limits.name} allows a maximum of ${limits.maxQuestionsPerExam} questions per exam. Your selections are preserved.`,
+        );
+        return;
+      }
+      if (!navigator.onLine) {
+        setTestError(
+          'Connect to the internet to securely register this started exam. Your selections are preserved.',
         );
         return;
       }
@@ -5642,22 +5754,19 @@ export default function MedGuardApp() {
       };
       creatingTest.current = true;
       try {
-        if (navigator.onLine) {
-          await saveCloudState(user.uid, {
-            ...state,
-            tests: [test, ...state.tests],
-          });
-        } else if (user.tier === 'lite') {
-          throw new Error(
-            'Connect to the internet to check your Lite test allowance. Your selections are preserved.',
-          );
-        }
+        await registerStartedExam(test.id, test.questionIds.length);
+        const nextState = { ...state, tests: [test, ...state.tests] };
         setState((current) => ({
           ...current,
           tests: [test, ...current.tests],
         }));
         setActiveTestId(test.id);
         setView('test');
+        try {
+          await saveCloudState(user.uid, nextState);
+        } catch {
+          setSyncStatus('error');
+        }
       } catch (error) {
         setTestError(
           error instanceof Error
@@ -6081,6 +6190,15 @@ export default function MedGuardApp() {
               questions={questions}
               allQuestions={allQuestions}
               activeQBankId={activeQBankId}
+            />
+          )}
+          {view === 'contribution-center' && (
+            <ContributionCenter
+              onEntitlementChange={() => {
+                void observeCloudflareUser((next) => {
+                  if (next) setUser(next);
+                });
+              }}
             />
           )}
           {view === 'admin' && user.isAdmin && (

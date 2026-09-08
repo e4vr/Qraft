@@ -2,7 +2,7 @@
 /* oxlint-disable next/no-img-element */
 import { useEffect, useState } from 'react';
 import { MessageSquareText, ArrowLeft } from 'lucide-react';
-import { api } from '@/lib/cloudflare-client';
+import { api } from '@/lib/api-client';
 import { subscribeLive } from '@/lib/realtime-client';
 import { QuestionId } from '@/components/question-tools';
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from '@/components/ui/alert-dialog';

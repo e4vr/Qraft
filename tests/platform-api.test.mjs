@@ -27,10 +27,17 @@ void test('platform API authorization, import, subscription and ticket workflows
     compatibilityDate: '2026-09-07',
     compatibilityFlags: ['nodejs_compat'],
     d1Databases: { DB: 'platform-test' },
+    r2Buckets: { ASSETS: 'assets-test' },
     durableObjects: {
       REALTIME: { className: 'RealtimeChannel', useSQLite: true },
     },
-    bindings: { ROOT_ADMIN_EMAIL: 'admin@example.test' },
+    bindings: {
+      ROOT_ADMIN_EMAIL: 'admin@example.test',
+      R2_BILLING_CYCLE_DAY: '7',
+      R2_CLASS_A_MONTHLY_CAP: '1',
+      R2_CLASS_B_MONTHLY_CAP: '1',
+      R2_STORAGE_CAP_BYTES: '1024',
+    },
   };
   const built = process.env.PLATFORM_TEST_BUILT === '1';
   const productionModules = built
@@ -95,9 +102,15 @@ print(json.dumps(out))`,
   for (const sql of statements) await db.prepare(sql).run();
   for (const uid of [
     'admin',
+    'free',
     'lite',
     'other',
+    'pro',
+    'pro-limit',
+    'pro-pending',
+    'unlimited',
     'reviewer',
+    'reviewer2',
     'access',
     'manual-member',
     'paid-member',
@@ -107,16 +120,23 @@ print(json.dumps(out))`,
       uid,
       email: `${uid}@example.test`,
       displayName: uid,
-      tier: 'lite',
+      tier:
+        uid === 'free'
+          ? 'free'
+          : uid === 'pro' || uid === 'pro-limit' || uid === 'pro-pending'
+            ? 'pro'
+            : uid === 'unlimited'
+              ? 'unlimited'
+              : 'lite',
       status: 'approved',
       role:
         uid === 'admin'
           ? 'super_admin'
-          : uid === 'reviewer'
+          : uid === 'reviewer' || uid === 'reviewer2'
             ? 'reviewer'
             : 'student',
       platformRoles:
-        uid === 'reviewer'
+        uid === 'reviewer' || uid === 'reviewer2'
           ? ['reviewer']
           : uid === 'access'
             ? ['access_manager']
@@ -165,7 +185,88 @@ print(json.dumps(out))`,
     );
     return { status: response.status, data: await response.json() };
   };
+  const uploadImage = async (
+    uid,
+    name = 'scan.png',
+    content = 'png-test-content',
+  ) => {
+    const body = new FormData();
+    body.append(
+      'file',
+      new File(
+        [
+          new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+          new TextEncoder().encode(content),
+        ],
+        name,
+        { type: 'image/png' },
+      ),
+    );
+    body.append('qbankId', 'smle-gs');
+    body.append('questionId', 'gs-001');
+    const encoded = new Request('https://qraft.test/upload-body', {
+      method: 'POST',
+      body,
+    });
+    return mf.dispatchFetch('https://qraft.test/api/cloudflare/media/notes', {
+      method: 'POST',
+      headers: {
+        cookie: `__Host-qraft_session=fixture-${uid}`,
+        origin: 'https://qraft.test',
+        'content-type': encoded.headers.get('content-type'),
+      },
+      body: await encoded.arrayBuffer(),
+    });
+  };
   let codeId;
+  await t.test('R2 uploads are private, hashed, and deduplicated', async () => {
+    const first = await uploadImage('pro');
+    assert.equal(first.status, 201);
+    const uploaded = await first.json();
+    assert.match(uploaded.url, /^\/api\/cloudflare\/media\/notes\//);
+    const duplicate = await uploadImage('pro', 'renamed.png');
+    assert.equal(duplicate.status, 200);
+    assert.equal((await duplicate.json()).duplicate, true);
+    const asset = await mf.dispatchFetch(`https://qraft.test${uploaded.url}`, {
+      headers: { cookie: '__Host-qraft_session=fixture-pro' },
+    });
+    assert.equal(asset.status, 200);
+    assert.equal(asset.headers.get('content-type'), 'image/png');
+    assert.match(asset.headers.get('cache-control'), /private/);
+    const storage = await db
+      .prepare("SELECT value FROM counters WHERE id='r2-storage-bytes'")
+      .first();
+    assert.ok(storage.value > 0);
+    await db
+      .prepare("UPDATE counters SET value=1024 WHERE id='r2-storage-bytes'")
+      .run();
+    assert.equal(
+      (await uploadImage('pro', 'storage-limit.png', 'different')).status,
+      413,
+    );
+    await db
+      .prepare("UPDATE counters SET value=? WHERE id='r2-storage-bytes'")
+      .bind(storage.value)
+      .run();
+    assert.equal((await uploadImage('pro', 'new.png', 'different')).status, 429);
+    assert.equal(
+      (
+        await mf.dispatchFetch(`https://qraft.test${uploaded.url}`, {
+          headers: { cookie: '__Host-qraft_session=fixture-lite' },
+        })
+      ).status,
+      429,
+    );
+    const rows = await db
+      .prepare("SELECT provider,file_hash FROM media WHERE owner_id='pro'")
+      .all();
+    assert.equal(rows.results.length, 1);
+    assert.equal(rows.results[0].provider, 'r2');
+    assert.match(rows.results[0].file_hash, /^[a-f0-9]{64}$/);
+    const usage = await db.prepare('SELECT * FROM r2_usage_periods').first();
+    assert.equal(usage.class_a_operations, 1);
+    assert.equal(usage.class_b_operations, 1);
+  });
   await t.test(
     'Members can update their profile and securely change their password',
     async () => {
@@ -295,10 +396,10 @@ print(json.dumps(out))`,
         id: uid,
         value: { ...members.find((m) => m.uid === uid), ...changes },
       });
-      assert.equal(
-        (await save([profileOp('manual-member', { suspended: true })])).status,
-        200,
-      );
+      const suspendManual = await save([
+        profileOp('manual-member', { suspended: true }),
+      ]);
+      assert.equal(suspendManual.status, 200, JSON.stringify(suspendManual.data));
       const stored = JSON.parse(
         (
           await db
@@ -448,6 +549,56 @@ print(json.dumps(out))`,
       );
     },
   );
+  await t.test('Free exam allowance is lifetime-based and server enforced', async () => {
+    assert.equal(
+      (
+        await call('free', '/platform/exam-start', {
+          testId: randomUUID(),
+          questionCount: 16,
+        })
+      ).status,
+      403,
+    );
+    for (let index = 0; index < 2; index += 1) {
+      const started = await call('free', '/platform/exam-start', {
+        testId: randomUUID(),
+        questionCount: 15,
+      });
+      assert.equal(started.status, 201, JSON.stringify(started));
+    }
+    const blocked = await call('free', '/platform/exam-start', {
+      testId: randomUUID(),
+      questionCount: 1,
+    });
+    assert.equal(blocked.status, 403);
+    assert.match(blocked.data.error, /lifetime/i);
+    const status = await call('free', '/platform/plan-status');
+    assert.equal(status.data.plan, 'free');
+    assert.equal(status.data.usage.lifetimeStartedExams, 2);
+  });
+  await t.test('Pro monthly exam limit is enforced at exactly 250 starts', async () => {
+    const now = new Date().toISOString();
+    await db
+      .prepare(`INSERT INTO test_registry(user_id,test_id,question_count,started_at)
+        SELECT 'pro-limit','pro-limit-'||value,1,? FROM json_each(?)`)
+      .bind(now, JSON.stringify(Array.from({ length: 249 }, (_, index) => index)))
+      .run();
+    assert.equal(
+      (
+        await call('pro-limit', '/platform/exam-start', {
+          testId: randomUUID(),
+          questionCount: 200,
+        })
+      ).status,
+      201,
+    );
+    const blocked = await call('pro-limit', '/platform/exam-start', {
+      testId: randomUUID(),
+      questionCount: 1,
+    });
+    assert.equal(blocked.status, 403);
+    assert.match(blocked.data.error, /monthly/i);
+  });
   await t.test('Free redemption is atomic and idempotent', async () => {
     codeId = randomUUID();
     assert.equal(
@@ -483,6 +634,64 @@ print(json.dumps(out))`,
     );
     assert.equal((await call('lite', '/auth/session')).data.user.tier, 'pro');
   });
+  await t.test(
+    'Credit rewards are atomic, activate separately, and fall back to the paid plan',
+    async () => {
+      const adjustment = await call('admin', '/platform/economy-admin', {
+        operation: 'adjust-credits',
+        userId: 'lite',
+        amount: 700,
+        reason: 'Reward integration fixture',
+        requestId: randomUUID(),
+      });
+      assert.equal(adjustment.status, 200, JSON.stringify(adjustment));
+      assert.equal(
+        (await call('lite', '/platform/contributions')).data.creditsBalance,
+        700,
+      );
+      const requestId = randomUUID();
+      const redemption = await call('lite', '/platform/rewards', {
+        operation: 'redeem',
+        rewardId: 'unlimited-month',
+        requestId,
+      });
+      assert.equal(redemption.status, 201, JSON.stringify(redemption));
+      const repeated = await call('lite', '/platform/rewards', {
+        operation: 'redeem',
+        rewardId: 'unlimited-month',
+        requestId,
+      });
+      assert.equal(repeated.status, 200);
+      assert.equal(repeated.data.duplicate, true);
+      assert.equal(
+        (await call('lite', '/platform/contributions')).data.creditsBalance,
+        0,
+      );
+      const activation = await call('lite', '/platform/rewards', {
+        operation: 'activate',
+        passId: redemption.data.pass.id,
+      });
+      assert.equal(activation.status, 200, JSON.stringify(activation));
+      assert.equal(activation.data.effectivePlan, 'unlimited');
+      const paid = await db
+        .prepare('SELECT plan,status FROM subscriptions WHERE user_id=?')
+        .bind('lite')
+        .first();
+      assert.deepEqual(paid, { plan: 'pro', status: 'active' });
+      await db
+        .prepare("UPDATE reward_passes SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?")
+        .bind(redemption.data.pass.id)
+        .run();
+      assert.equal((await call('lite', '/auth/session')).data.user.tier, 'pro');
+      assert.deepEqual(
+        await db
+          .prepare('SELECT plan,status FROM subscriptions WHERE user_id=?')
+          .bind('lite')
+          .first(),
+        paid,
+      );
+    },
+  );
   await t.test(
     'Paid subscription prepares WhatsApp without upgrading',
     async () => {
@@ -524,19 +733,16 @@ print(json.dumps(out))`,
           await call(
             'other',
             '/state',
-            { state: { ...state, tests: [make('oversized', 31)] } },
+            { state: { ...state, tests: [make('oversized', 51)] } },
             'PUT',
           )
         ).status,
         403,
       );
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 30; i++) {
         state.tests.push(make(`test-${i}`, 30));
-        assert.equal(
-          (await call('other', '/state', { state }, 'PUT')).status,
-          200,
-        );
       }
+      assert.equal((await call('other', '/state', { state }, 'PUT')).status, 200);
       const duplicateTitles = {
         ...state,
         tests: [
@@ -552,22 +758,34 @@ print(json.dumps(out))`,
       const denied = await call(
         'other',
         '/state',
-        { state: { ...state, tests: [...state.tests, make('fourth', 1)] } },
+        { state: { ...state, tests: [...state.tests, make('thirty-first', 1)] } },
         'PUT',
       );
       assert.equal(denied.status, 403, JSON.stringify(denied));
-      assert.equal((await call('other', '/state')).data.state.tests.length, 3);
+      assert.equal((await call('other', '/state')).data.state.tests.length, 30);
       await call('other', '/state', { state: { ...state, tests: [] } }, 'PUT');
       assert.equal(
         (
           await call(
             'other',
             '/state',
-            { state: { ...state, tests: [make('fifth', 1)] } },
+            { state: { ...state, tests: [make('after-delete', 1)] } },
             'PUT',
           )
         ).status,
         403,
+      );
+      await db
+        .prepare("UPDATE test_registry SET started_at='2000-01-01T00:00:00.000Z' WHERE user_id='other'")
+        .run();
+      assert.equal(
+        (
+          await call('other', '/platform/exam-start', {
+            testId: randomUUID(),
+            questionCount: 50,
+          })
+        ).status,
+        201,
       );
     },
   );
@@ -767,7 +985,7 @@ print(json.dumps(out))`,
         .digest('hex');
       assert.equal(
         (
-          await call('lite', '/platform/import', {
+          await call('pro', '/platform/import', {
             qbankId: 'smle-gs',
             requestId: randomUUID(),
             fileName: 'invalid.json',
@@ -784,7 +1002,7 @@ print(json.dumps(out))`,
         fileHash: createHash('sha256').update('fixture-import').digest('hex'),
         questions: [payload],
       };
-      const first = await call('lite', '/platform/import', request);
+      const first = await call('pro', '/platform/import', request);
       assert.equal(first.status, 200, JSON.stringify(first));
       assert.equal(first.data.successful, 1);
       assert.equal(
@@ -792,10 +1010,10 @@ print(json.dumps(out))`,
         'Fixture.pdf - p.12',
       );
       assert.equal(
-        (await call('lite', '/platform/import', request)).data.proposals[0].id,
+        (await call('pro', '/platform/import', request)).data.proposals[0].id,
         first.data.proposals[0].id,
       );
-      const partial = await call('lite', '/platform/import', {
+      const partial = await call('pro', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: 'gemini-output.txt',
@@ -812,18 +1030,200 @@ print(json.dumps(out))`,
         partial.data.proposals[0].payload.sourceReference,
         'Scan.pdf - p.4',
       );
-      const duplicateName = await call('lite', '/platform/import', {
+      const duplicateName = await call('pro', '/platform/import', {
         ...request,
         requestId: randomUUID(),
         fileHash: createHash('sha256').update('different').digest('hex'),
       });
       assert.equal(duplicateName.status, 409);
-      const duplicateHash = await call('lite', '/platform/import', {
+      const duplicateHash = await call('pro', '/platform/import', {
         ...request,
         requestId: randomUUID(),
         fileName: 'renamed.json',
       });
       assert.equal(duplicateHash.status, 409);
+      const dailyPayload = (index) => ({
+        ...payload,
+        stem: `Daily limit fixture ${index} with distinct clinical wording`,
+        topic: 'Daily import quota',
+      });
+      const third = await call('pro', '/platform/import', {
+        qbankId: 'smle-gs',
+        requestId: randomUUID(),
+        fileName: 'daily-third.json',
+        fileHash: createHash('sha256').update('daily-third').digest('hex'),
+        questions: [dailyPayload(3)],
+      });
+      assert.equal(third.status, 200, JSON.stringify(third));
+      const fourth = await call('pro', '/platform/import', {
+        qbankId: 'smle-gs',
+        requestId: randomUUID(),
+        fileName: 'daily-fourth.json',
+        fileHash: createHash('sha256').update('daily-fourth').digest('hex'),
+        questions: [dailyPayload(4)],
+      });
+      assert.equal(fourth.status, 403);
+      assert.match(fourth.data.error, /daily JSON import limit/i);
+    },
+  );
+  await t.test(
+    'Pending queue and JSON-only suspensions cannot be bypassed through the import API',
+    async () => {
+      const now = new Date().toISOString();
+      await db
+        .prepare(`INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at)
+          SELECT 'questionProposals','pending-limit-'||value,'smle-gs','pro-pending',
+            json_object(
+              'id','pending-limit-'||value,
+              'status','pending',
+              'payload',json_object('stem','Existing pending '||value,'options',json_array('Yes','No'))
+            ),?
+          FROM json_each(?)`)
+        .bind(now, JSON.stringify(Array.from({ length: 300 }, (_, index) => index)))
+        .run();
+      const request = (suffix) => ({
+        qbankId: 'smle-gs',
+        requestId: randomUUID(),
+        fileName: `${suffix}.json`,
+        fileHash: createHash('sha256').update(suffix).digest('hex'),
+        questions: [
+          {
+            stem: `Pending and suspension fixture ${suffix}`,
+            options: ['Yes', 'No'],
+            answer: 0,
+            specialty: 'General',
+            topic: 'Import protection',
+            explanation: 'Fixture explanation',
+            sourceFile: 'Fixture.pdf',
+            sourcePage: 1,
+            sourceReference: 'Fixture.pdf - p.1',
+            images: [],
+          },
+        ],
+      });
+      const queueBlocked = await call(
+        'pro-pending',
+        '/platform/import',
+        request('pending-full'),
+      );
+      assert.equal(queueBlocked.status, 403);
+      assert.match(queueBlocked.data.error, /submission queue is full/i);
+      await db
+        .prepare("DELETE FROM records WHERE type='questionProposals' AND owner_id='pro-pending'")
+        .run();
+      const suspended = await call('admin', '/platform/economy-admin', {
+        operation: 'suspend-json',
+        userId: 'pro-pending',
+        reason: 'Import suspension integration fixture',
+        days: 7,
+      });
+      assert.equal(suspended.status, 200);
+      const suspensionBlocked = await call(
+        'pro-pending',
+        '/platform/import',
+        request('suspended-import'),
+      );
+      assert.equal(suspensionBlocked.status, 403);
+      assert.match(suspensionBlocked.data.error, /suspended until/i);
+      assert.equal(
+        (await call('pro-pending', '/platform/exam-start', {
+          testId: randomUUID(),
+          questionCount: 10,
+        })).status,
+        201,
+      );
+    },
+  );
+  await t.test(
+    'High-risk corrections require two independent reviewers before credits are awarded',
+    async () => {
+      const existingRow = await db
+        .prepare("SELECT id,payload FROM records WHERE type='sharedQuestions' AND qbank_id='smle-gs' LIMIT 1")
+        .first();
+      const existing = JSON.parse(existingRow.payload);
+      const proposalId = `high-risk-${randomUUID()}`;
+      const proposedAt = new Date().toISOString();
+      const changedAnswer = existing.answer === 0 ? 1 : 0;
+      const proposal = {
+        id: proposalId,
+        qbankId: 'smle-gs',
+        type: 'question_edit',
+        editKinds: ['correct_answer'],
+        questionId: existingRow.id,
+        payload: {
+          stem: existing.stem,
+          options: existing.options,
+          answer: changedAnswer,
+          specialty: existing.specialty,
+          topic: existing.topic,
+          explanation: existing.explanation,
+          sourceReference: existing.sourceReference || 'Verified source',
+          sourceFile: existing.sourceFile,
+          sourcePage: existing.sourcePage,
+          images: existing.images || [],
+        },
+        rationale: 'Correct answer verified against the cited source.',
+        submissionMethod: 'manual',
+        status: 'pending',
+        proposedById: 'other',
+        proposedByName: 'other',
+        proposedAt,
+      };
+      await db
+        .prepare("INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES('questionProposals',?,?,?,?,?)")
+        .bind(proposalId, 'smle-gs', 'other', JSON.stringify(proposal), proposedAt)
+        .run();
+
+      const first = await call('reviewer', '/platform/bulk-review', {
+        proposalIds: [proposalId],
+        status: 'approved',
+      });
+      assert.deepEqual(first, {
+        status: 200,
+        data: { ok: true, reviewed: 0, awaitingSecondReview: 1 },
+      });
+      assert.equal(
+        JSON.parse(
+          (
+            await db
+              .prepare("SELECT payload FROM records WHERE type='questionProposals' AND id=?")
+              .bind(proposalId)
+              .first()
+          ).payload,
+        ).status,
+        'pending',
+      );
+      assert.equal(
+        (
+          await db
+            .prepare("SELECT count(*) AS value FROM credit_transactions WHERE reference_id=?")
+            .bind(proposalId)
+            .first()
+        ).value,
+        0,
+      );
+
+      const second = await call('reviewer2', '/platform/bulk-review', {
+        proposalIds: [proposalId],
+        status: 'approved',
+      });
+      assert.deepEqual(second, {
+        status: 200,
+        data: { ok: true, reviewed: 1, awaitingSecondReview: 0 },
+      });
+      const reviews = await db
+        .prepare('SELECT reviewer_id FROM contribution_reviews WHERE proposal_id=? ORDER BY reviewer_id')
+        .bind(proposalId)
+        .all();
+      assert.deepEqual(
+        reviews.results.map((review) => review.reviewer_id),
+        ['reviewer', 'reviewer2'],
+      );
+      const reward = await db
+        .prepare('SELECT amount,lifetime_delta FROM credit_transactions WHERE reference_id=?')
+        .bind(proposalId)
+        .first();
+      assert.deepEqual(reward, { amount: 15, lifetime_delta: 15 });
     },
   );
   await t.test(
@@ -841,12 +1241,12 @@ print(json.dumps(out))`,
         sourceReference: `Source ${index}`,
         images: [],
       });
-      const imported = await call('other', '/platform/import', {
+      const imported = await call('unlimited', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
-        fileName: 'bulk-200.json',
-        fileHash: createHash('sha256').update('bulk-200').digest('hex'),
-        questions: Array.from({ length: 200 }, (_, index) =>
+        fileName: 'bulk-150.json',
+        fileHash: createHash('sha256').update('bulk-150').digest('hex'),
+        questions: Array.from({ length: 150 }, (_, index) =>
           payload(index + 1),
         ),
       });
@@ -858,7 +1258,7 @@ print(json.dumps(out))`,
         ),
         true,
       );
-      assert.equal(imported.data.proposals.length, 200);
+      assert.equal(imported.data.proposals.length, 150);
       const approved = imported.data.proposals;
       const approval = await call('reviewer', '/platform/bulk-review', {
         proposalIds: approved.map((proposal) => proposal.id),
@@ -866,14 +1266,14 @@ print(json.dumps(out))`,
       });
       assert.deepEqual(approval, {
         status: 200,
-        data: { ok: true, reviewed: 200 },
+        data: { ok: true, reviewed: 150, awaitingSecondReview: 0 },
       });
-      const rejectedImport = await call('other', '/platform/import', {
+      const rejectedImport = await call('unlimited', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: 'bulk-rejected.json',
         fileHash: createHash('sha256').update('bulk-rejected').digest('hex'),
-        questions: [payload(201)],
+        questions: [payload(151)],
       });
       const [rejected] = rejectedImport.data.proposals;
       const rejection = await call('reviewer', '/platform/bulk-review', {
@@ -893,7 +1293,7 @@ print(json.dumps(out))`,
             proposal.status === 'approved' &&
             proposal.reviewedById === 'reviewer',
         ).length,
-        200,
+        150,
       );
       assert.equal(
         reviewed.filter(
@@ -908,7 +1308,7 @@ print(json.dumps(out))`,
           "SELECT count(*) AS count FROM records WHERE type='sharedQuestions' AND json_extract(payload,'$.topic')='Bulk review'",
         )
         .first();
-      assert.equal(published.count, 200);
+      assert.equal(published.count, 150);
       assert.equal(
         (
           await call('reviewer', '/platform/bulk-review', {
@@ -1047,6 +1447,21 @@ print(json.dumps(out))`,
         (await call('other', `/contact?id=${id}`)).data.messages[0].body,
         'Keep my description',
       );
+      assert.equal(
+        (
+          await call('admin', '/contact', {
+            id,
+            operation: 'status',
+            status: 'resolved',
+          })
+        ).status,
+        200,
+      );
+      const reportReward = await db
+        .prepare("SELECT amount,lifetime_delta FROM credit_transactions WHERE reference_type='ticket' AND reference_id=?")
+        .bind(id)
+        .first();
+      assert.deepEqual(reportReward, { amount: 3, lifetime_delta: 3 });
     },
   );
   await t.test(
@@ -1061,7 +1476,7 @@ print(json.dumps(out))`,
         'admin',
         '/platform/reviewers?bank=smle-gs&search=rev',
       );
-      assert.equal(matches.data.users[0].uid, 'reviewer');
+      assert.ok(matches.data.users.some((match) => match.uid === 'reviewer'));
       assert.equal(
         (
           await call('admin', '/platform/reviewers', {

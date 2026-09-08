@@ -17,18 +17,14 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { QuestionPreview } from '@/components/question-tools';
-import {
-  api,
-  loadCollaborationState,
-  reserveQuestionIds,
-} from '@/lib/cloudflare-client';
+import { api } from '@/lib/api-client';
+import { loadCollaborationState } from '@/lib/application-services';
 import { subscribeLive } from '@/lib/realtime-client';
 import {
   canReviewBank,
   optionLabel,
   type AppUser,
   type CollaborationState,
-  type Question,
   type QuestionProposal,
 } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
@@ -111,7 +107,7 @@ function proposalMethod(proposal: QuestionProposal): 'json' | 'manual' {
 export function ReviewWorkspace({
   user,
   collaboration,
-  update,
+  update: _update,
   replaceFromServer,
   activeQBankId,
   embedded = false,
@@ -261,7 +257,7 @@ export function ReviewWorkspace({
     setError('');
     setNotice('');
     try {
-      const result = await api<{ reviewed: number }>('/platform/bulk-review', {
+      const result = await api<{ reviewed: number; awaitingSecondReview: number }>('/platform/bulk-review', {
         method: 'POST',
         body: JSON.stringify({
           proposalIds: selectedProposals.map((proposal) => proposal.id),
@@ -275,7 +271,7 @@ export function ReviewWorkspace({
       setMethodPreset('');
       setBulkDecision(undefined);
       setNotice(
-        `${result.reviewed} questions ${bulkDecision === 'approved' ? 'approved' : 'rejected'} successfully.`,
+        `${result.reviewed} questions ${bulkDecision === 'approved' ? 'approved' : 'rejected'} successfully.${result.awaitingSecondReview ? ` ${result.awaitingSecondReview} high-risk changes await a second independent reviewer.` : ''}`,
       );
     } catch (caught) {
       setError(
@@ -296,123 +292,21 @@ export function ReviewWorkspace({
     if (busyId) return;
     setBusyId(proposal.id);
     setError('');
+    setNotice('');
     try {
-      const baseQuestions: Question[] = [];
-      const reservedId =
-        status === 'approved' && proposal.type === 'new_question'
-          ? (
-              await reserveQuestionIds(
-                1,
-                proposal.qbankId,
-                user,
-                [...baseQuestions, ...collaboration.approvedQuestions].map(
-                  (item) => item.questionId,
-                ),
-              )
-            )[0]
-          : undefined;
-      const assignedQuestionInternalId =
-        status === 'approved' && proposal.type === 'new_question'
-          ? (proposal.questionId ?? `shared-${crypto.randomUUID()}`)
-          : proposal.questionId;
-      const reviewedAt = new Date().toISOString();
-      update((current) => {
-        const bank = current.qbanks.find(
-          (item) => item.id === proposal.qbankId,
-        );
-        if (!bank || !canReviewBank(user, bank, current.memberships))
-          return current;
-        let approvedQuestions = current.approvedQuestions;
-        if (status === 'approved') {
-          const available = [
-            ...baseQuestions.map((item) => ({
-              ...item,
-              qbankId: item.qbankId ?? 'smle-gs',
-            })),
-            ...approvedQuestions,
-          ];
-          const existing = proposal.questionId
-            ? available.find((item) => item.id === proposal.questionId)
-            : undefined;
-          const question: Question = {
-            id: assignedQuestionInternalId!,
-            questionId: existing?.questionId ?? reservedId!,
-            number:
-              existing?.number ??
-              Math.max(
-                0,
-                ...available
-                  .filter((item) => item.qbankId === proposal.qbankId)
-                  .map((item) => item.number),
-              ) + 1,
-            qbankId: proposal.qbankId,
-            specialty: proposal.payload.specialty,
-            topic: proposal.payload.topic,
-            stem: proposal.payload.stem,
-            options: proposal.payload.options,
-            answer: proposal.payload.answer,
-            answerLetter: optionLabel(proposal.payload.answer),
-            explanation: proposal.payload.explanation,
-            sourceReference: proposal.payload.sourceReference,
-            sourcePage:
-              proposal.payload.sourcePage ?? existing?.sourcePage ?? 0,
-            sourceFile:
-              proposal.payload.sourceFile ??
-              existing?.sourceFile ??
-              proposal.payload.sourceReference,
-            revision: (existing?.revision ?? 0) + 1,
-            isCustom: true,
-            images: proposal.payload.images ?? existing?.images ?? [],
-            writtenById:
-              proposal.type === 'new_question'
-                ? proposal.proposedById
-                : (existing?.writtenById ?? 'system'),
-            writtenByName:
-              proposal.type === 'new_question'
-                ? proposal.proposedByName
-                : (existing?.writtenByName ?? 'Qraft'),
-            reviewedById: user.uid,
-            reviewedByName: user.displayName,
-            reviewedAt,
-          };
-          approvedQuestions = [
-            ...approvedQuestions.filter((item) => item.id !== question.id),
-            question,
-          ];
-        }
-        return {
-          ...current,
-          approvedQuestions,
-          proposals: current.proposals.map((item) =>
-            item.id === proposal.id
-              ? {
-                  ...item,
-                  status,
-                  questionId:
-                    status === 'approved'
-                      ? assignedQuestionInternalId
-                      : item.questionId,
-                  reviewedById: user.uid,
-                  reviewedByName: user.displayName,
-                  reviewedAt,
-                }
-              : item,
-          ),
-          auditLog: [
-            {
-              id: crypto.randomUUID(),
-              action: `question_proposal_${status}`,
-              entityType: 'question',
-              entityId: proposal.id,
-              actorId: user.uid,
-              actorName: user.displayName,
-              createdAt: reviewedAt,
-              detail: `${proposal.editKinds.join(', ')} by ${proposal.proposedByName}.`,
-            },
-            ...current.auditLog,
-          ],
-        };
-      });
+      const result = await api<{ reviewed: number; awaitingSecondReview: number }>(
+        '/platform/bulk-review',
+        {
+          method: 'POST',
+          body: JSON.stringify({ proposalIds: [proposal.id], status }),
+        },
+      );
+      replaceFromServer(await loadCollaborationState(user));
+      setNotice(
+        result.awaitingSecondReview
+          ? 'First approval recorded. This high-risk medical change now requires a second independent reviewer.'
+          : `Question ${status} successfully.`,
+      );
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -719,6 +613,11 @@ export function ReviewWorkspace({
                         {kind.replaceAll('_', ' ')}
                       </span>
                     ))}
+                    {proposal.duplicateInfo && (
+                      <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800 dark:bg-amber-500/15 dark:text-amber-200">
+                        Possible duplicate · {proposal.duplicateInfo.similarity}%
+                      </span>
+                    )}
                     <span className="ml-auto text-sm text-muted-foreground">
                       {bank?.shortName} · {proposal.proposedByName} ·{' '}
                       {formatDate(proposal.proposedAt)}

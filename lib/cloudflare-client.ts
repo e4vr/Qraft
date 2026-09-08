@@ -1,15 +1,7 @@
 import type { AppState, AppUser, CollaborationState } from './medguard-types';
-
-const API = '/api/cloudflare';
-
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  if (!(init?.body instanceof FormData)) headers.set('content-type', 'application/json');
-  const response = await fetch(`${API}${path}`, { credentials: 'same-origin', ...init, headers });
-  const payload = await response.json().catch(() => ({})) as { error?: string } & T;
-  if (!response.ok) throw new Error(payload.error || `Cloudflare request failed (${response.status}).`);
-  return payload;
-}
+import { api } from './api-client';
+import type { PlanLimits } from './plan-config';
+export { api } from './api-client';
 
 export async function observeCloudflareUser(callback: (user?: AppUser) => void): Promise<() => void> {
   const { user } = await api<{ user: AppUser | null }>('/auth/session');
@@ -60,6 +52,30 @@ export async function loadCloudState(_uid: string): Promise<AppState | undefined
 
 export async function saveCloudState(_uid: string, state: AppState): Promise<void> {
   await api('/state', { method: 'PUT', body: JSON.stringify({ state }) });
+}
+
+export async function registerStartedExam(
+  testId: string,
+  questionCount: number,
+): Promise<{ started: boolean; startedAt: string; duplicate?: boolean }> {
+  return api('/platform/exam-start', {
+    method: 'POST',
+    body: JSON.stringify({ testId, questionCount }),
+  });
+}
+
+export async function loadPlanStatus(): Promise<{
+  plan: AppUser['tier'];
+  limits: PlanLimits;
+  usage: {
+    lifetimeStartedExams: number;
+    monthlyStartedExams: number;
+    dailyJsonImports: number;
+    pendingReviewQuestions: number;
+    activeImageStorageBytes: number;
+  };
+}> {
+  return api('/platform/plan-status');
 }
 
 async function upload(file: File, qbankId: string, questionId: string, kind: 'notes' | 'questions') {

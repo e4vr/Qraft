@@ -11,7 +11,8 @@ Qraft 1.0.0 is a private, installable medical QBank PWA. It supports collaborati
 - Lite and Pro subscriptions, discount codes, and Superadmin subscription management.
 - Registration approval, university-ID claiming, access blocking, and MFA-protected Superadmin actions.
 - Private support tickets optionally linked to stable question UUIDs.
-- IndexedDB offline cache, Cloudflare D1 persistence, ImageKit media storage, and an installable PWA shell.
+- IndexedDB local-first persistence, Cloudflare D1 data, Cloudflare R2 media storage, and an installable PWA shell. Existing ImageKit records remain compatible during migration.
+- Hard R2 guards stop site traffic before 3 GiB storage, 800k monthly Class A operations, or 8M monthly Class B operations.
 - Authorized real-time invalidation through a Durable Object worker; data is always re-fetched through the protected API.
 
 ## Architecture
@@ -20,6 +21,8 @@ Qraft 1.0.0 is a private, installable medical QBank PWA. It supports collaborati
 - `components/medguard-app.tsx` owns the main client state and screen navigation.
 - `app/api/cloudflare/[...path]/route.ts` routes authentication, collaboration, platform, contact, and media requests.
 - `lib/cloudflare-server.ts` enforces authentication and collaborative record permissions.
+- `lib/application-services.ts` and `lib/api-client.ts` keep UI components independent from the current provider implementation.
+- `lib/storage-service.ts` isolates object storage behind a small R2 adapter.
 - `lib/platform-server.ts` handles subscriptions, imports, question lifecycle, and reviewer management.
 - `lib/contact-server.ts` handles private support tickets.
 - Cloudflare D1 stores profiles, sessions, personal state, shared records, subscriptions, question identities, and tickets.
@@ -43,7 +46,7 @@ The 217 initial General Surgery questions are preserved in `data/questions.json`
 
 ## Deployment
 
-Configure `ROOT_ADMIN_EMAIL`, `ROOT_ADMIN_SETUP_TOKEN`, and the required ImageKit credentials as Worker secrets. Apply all D1 migrations before deploying the application.
+Create the `qraft-assets` R2 bucket, configure `ROOT_ADMIN_EMAIL` and `ROOT_ADMIN_SETUP_TOKEN` as Worker secrets, and apply all D1 migrations before deploying. `IMAGEKIT_PRIVATE_KEY` is optional and retained only for deleting legacy ImageKit assets. See `ARCHITECTURE.md` for the exact safe order.
 
 Deploy the real-time worker before the application worker:
 

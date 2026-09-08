@@ -2,7 +2,7 @@
 /* oxlint-disable next/no-img-element */
 import { useId, useRef, useState } from 'react';
 import { Check, ChevronDown, Copy, FileJson, GraduationCap, Upload, LoaderCircle } from 'lucide-react';
-import { api } from '@/lib/cloudflare-client';
+import { api } from '@/lib/api-client';
 import {
   parseQuestionImportReport,
   buildQuestionPrompt,
@@ -35,6 +35,7 @@ export function QuestionImportReview({
   const [sourceFile, setSourceFile] = useState('');
   const [skipped, setSkipped] = useState<SkippedImportedQuestion[]>([]);
   const [repaired, setRepaired] = useState(false);
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const operation = useRef(false);
   const panelId = useId();
   const [selectedSource, setSelectedSource] = useState<QuestionPromptSettings['source'] | null>(null);
@@ -81,6 +82,7 @@ export function QuestionImportReview({
       setFileHash(hash);
       setSourceFile(report.sourceFile);
       setRepaired(report.repaired);
+      setRightsConfirmed(false);
       setIndex(0);
       setOpen(true);
       setMessage('');
@@ -112,6 +114,8 @@ export function QuestionImportReview({
         failed: number;
         skipped: SkippedImportedQuestion[];
         repaired: boolean;
+        skippedDuplicates?: number;
+        pendingReview?: number;
       }>('/platform/import', {
         method: 'POST',
         body: JSON.stringify({
@@ -123,11 +127,14 @@ export function QuestionImportReview({
           fileHash,
           qbankId: bankId,
           requestId,
+          rightsConfirmed,
         }),
       });
       onImported(result.proposals);
       setSkipped(result.skipped);
-      setMessage(`تم استلام ${result.successful} سؤالًا بنجاح 🎉`);
+      setMessage(
+        `Imported: ${result.successful} · Skipped duplicates: ${result.skippedDuplicates ?? 0} · Invalid: ${result.failed - (result.skippedDuplicates ?? 0)} · Pending review: ${result.pendingReview ?? result.successful}`,
+      );
       setOpen(false);
       setDrafts([]);
     } catch (e) {
@@ -333,6 +340,15 @@ export function QuestionImportReview({
             Skip Review يتجاوز المراجعة فقط. سيتم رفع جميع الأسئلة دون تجاهل أي
             سؤال.
           </p>
+          <label className="flex items-start gap-3 rounded-xl border bg-muted/30 p-3 text-sm">
+            <input
+              type="checkbox"
+              checked={rightsConfirmed}
+              onChange={(event) => setRightsConfirmed(event.target.checked)}
+              className="mt-0.5 size-4"
+            />
+            <span>I confirm that I have the right to share this content.</span>
+          </label>
           <div className="grid grid-cols-2 gap-2 border-t pt-3">
             <button
               disabled={busy || index === 0}
@@ -351,7 +367,7 @@ export function QuestionImportReview({
               </button>
             ) : <span className="self-center text-center text-sm text-muted-foreground">Last question</span>}
             <button
-              disabled={busy}
+              disabled={busy || !rightsConfirmed}
               className="q-button col-span-2 min-h-11 whitespace-normal bg-primary text-primary-foreground"
               onClick={() => void submit()}
             >

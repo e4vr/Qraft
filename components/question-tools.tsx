@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import { Check, Copy, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { api } from '@/lib/cloudflare-client';
+import { api } from '@/lib/api-client';
 import { optionLabel, type Question } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 

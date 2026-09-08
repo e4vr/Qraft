@@ -2,14 +2,17 @@
 
 /* oxlint-disable next/no-img-element */
 
-import { ArrowLeft, Check, Clipboard, Copy, FileJson, ImagePlus, Link2, Pencil, Plus, RefreshCw, Save, Search, Settings, Trash2, Unlink, Users, X } from 'lucide-react';
+import { ArrowLeft, Check, Clipboard, Copy, FileJson, ImagePlus, Link2, LockKeyhole, Pencil, Plus, RefreshCw, Save, Search, Settings, Trash2, Unlink, Users, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { QuestionImportReview } from '@/components/question-import-review';
 import { QuestionId } from '@/components/question-tools';
 import { ReviewerSearch } from '@/components/reviewer-search';
-import { api, deleteQBankImages, uploadQuestionImage } from '@/lib/cloudflare-client';
+import { api } from '@/lib/api-client';
+import { deleteQBankImages, uploadQuestionImage } from '@/lib/application-services';
 import { canManageBank, optionLabel, type AppUser, type CollaborationState, type NoteImage, type QBank, type Question, type QBankVisibility } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
+import { hasFeature } from '@/lib/plan-config';
+import { openUpgrade } from '@/components/subscription-workspace';
 
 type Section = 'settings' | 'questions' | 'import';
 
@@ -75,6 +78,9 @@ export function QBankManagement({
   const [error, setError] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
   const members = collaboration.memberships.filter((item) => item.qbankId === bankId);
+  const plan = user.effectivePlan ?? user.tier;
+  const canAddQuestions = hasFeature(plan, 'addQuestions');
+  const canImport = hasFeature(plan, 'jsonImport');
   const filteredQuestions = useMemo(() => questions.filter((question) => `${question.questionId} ${question.stem} ${question.topic}`.toLowerCase().includes(search.trim().replace(/^#/, '').toLowerCase())), [questions, search]);
 
   if (!bank || !canManageBank(user, bank))
@@ -307,9 +313,10 @@ export function QBankManagement({
               ['import', FileJson, 'Import questions'],
             ] as const
           ).map(([id, Icon, label]) => (
-            <button key={id} aria-pressed={section === id} onClick={() => setSection(id)} className={cn('inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border px-4 text-sm font-bold', section === id && 'border-primary bg-primary text-primary-foreground')}>
+            <button key={id} aria-pressed={section === id} onClick={() => (id === 'import' && !canImport ? openUpgrade() : setSection(id))} className={cn('inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border px-4 text-sm font-bold', section === id && 'border-primary bg-primary text-primary-foreground')}>
               <Icon className="size-4" />
               {label}
+              {id === 'import' && !canImport && <LockKeyhole className="size-3" />}
             </button>
           ))}
         </nav>
@@ -445,9 +452,9 @@ export function QBankManagement({
                 <Search className="absolute left-3 top-3.5 size-4 text-muted-foreground" />
                 <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by Question ID, topic, or text" className="h-11 w-full rounded-xl border bg-card pl-10 pr-3 text-sm" />
               </label>
-              <button onClick={() => openQuestion()} className="q-button q-button-contribute">
-                <Plus className="size-4" />
-                Add question manually
+              <button onClick={() => (canAddQuestions ? openQuestion() : openUpgrade())} className={cn('q-button', canAddQuestions ? 'q-button-contribute' : 'border')}>
+                {canAddQuestions ? <Plus className="size-4" /> : <LockKeyhole className="size-4" />}
+                {canAddQuestions ? 'Add question manually' : 'Add questions · Pro'}
               </button>
             </div>
             <section className="overflow-x-auto rounded-2xl bg-card ring-1 ring-border">

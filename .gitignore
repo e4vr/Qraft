@@ -39,8 +39,10 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.deployment-backups/
 *.tsbuildinfo
 *-backup.sql
+/.deployment-backups/
 /check-db.sql
 
 # Isolated review artifacts

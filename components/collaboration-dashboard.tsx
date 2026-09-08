@@ -5,15 +5,16 @@ import { useMemo, useState } from 'react';
 import { canReviewBank, normalizeEmail, normalizePhone, normalizeUniversityId, type AccessBlocklist, type AccountStatus, type AppUser, type AuditEntry, type CollaborationState, type MemberProfile, type PlatformRole } from '@/lib/medguard-types';
 import { cn as cx, nowIso } from '@/lib/utils';
 import { SubscriptionAdmin } from '@/components/subscription-workspace';
+import { EconomyAdmin } from '@/components/economy-admin';
 import { ContactWorkspace } from '@/components/contact-workspace';
 import { QuestionPreview } from '@/components/question-tools';
 import { ReviewWorkspace } from '@/components/review-workspace';
 
-type Tab = 'discounts' | 'subscriptions' | 'contact' | 'question-preview' | 'overview' | 'registrations' | 'blocked' | 'roles' | 'qbanks' | 'proposals' | 'student-ids' | 'audit';
+type Tab = 'discounts' | 'subscriptions' | 'economy' | 'contact' | 'question-preview' | 'overview' | 'registrations' | 'blocked' | 'roles' | 'qbanks' | 'proposals' | 'student-ids' | 'audit';
 const adminGroups: Array<{ label: string; ids: Tab[] }> = [
   { label: 'WORKSPACE', ids: ['overview', 'contact', 'audit'] },
   { label: 'PEOPLE & ACCESS', ids: ['registrations', 'roles', 'student-ids', 'blocked'] },
-  { label: 'SUBSCRIPTIONS', ids: ['subscriptions', 'discounts'] },
+  { label: 'SUBSCRIPTIONS', ids: ['subscriptions', 'discounts', 'economy'] },
   { label: 'QUESTION BANKS', ids: ['qbanks', 'proposals', 'question-preview'] },
 ];
 type BlockKind = keyof AccessBlocklist;
@@ -64,7 +65,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
         ...(canAccess ? [['blocked', 'Blocked access']] : []),
         ...(isRoot
           ? [
-              ['discounts', 'Discount Codes'], ['subscriptions', 'Subscriptions'], ['contact', 'Contact Tickets'], ['question-preview', 'Question Preview'],
+              ['discounts', 'Discount Codes'], ['subscriptions', 'Subscriptions'], ['economy', 'Credits & rewards'], ['contact', 'Contact Tickets'], ['question-preview', 'Question Preview'],
               ['student-ids', 'Student IDs'],
               ['roles', 'Roles & promotion'],
             ]
@@ -104,10 +105,12 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
     const reviewer = (member: MemberProfile) => member.role === 'reviewer' || member.platformRoles.includes('reviewer');
     const access = (member: MemberProfile) => member.platformRoles.includes('access_manager');
     return [
+      { id: 'unlimited', label: 'Unlimited users', members: members.filter(member => member.tier === 'unlimited') },
       { id: 'pro', label: 'Pro users', members: members.filter(member => member.tier === 'pro') },
       { id: 'reviewer', label: 'Reviewers', members: members.filter(reviewer) },
       { id: 'access', label: 'Access managers', members: members.filter(access) },
-      { id: 'lite', label: 'Lite users', members: members.filter(member => member.tier !== 'pro' && !reviewer(member) && !access(member)) },
+      { id: 'lite', label: 'Lite users', members: members.filter(member => member.tier === 'lite' && !reviewer(member) && !access(member)) },
+      { id: 'free', label: 'Free users', members: members.filter(member => member.tier === 'free' && !reviewer(member) && !access(member)) },
     ];
   }, [collaboration.members, roleSearch]);
   const [roleDrafts, setRoleDrafts] = useState<Record<string, Pick<MemberProfile, 'tier' | 'platformRoles'>>>({});
@@ -329,6 +332,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
         </nav>
         <div className="min-w-0 space-y-5">
         {isRoot && (tab === 'discounts' || tab === 'subscriptions') && <SubscriptionAdmin section={tab} />}
+        {isRoot && tab === 'economy' && <EconomyAdmin members={collaboration.members} />}
         {isRoot && tab === 'contact' && <ContactWorkspace admin />}
         {isRoot && tab === 'question-preview' && <QuestionPreview />}
         {tab === 'overview' && (

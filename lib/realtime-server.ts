@@ -1,7 +1,16 @@
 import { env } from 'cloudflare:workers';
 import { currentUser, json, readJson } from './cloudflare-server';
-import { bankAccessState } from './platform-server';
+import { bankAccessState } from './qbank-access-repository';
 import { canAccessBank, canReviewBank } from './medguard-types';
+
+type RealtimeStub = DurableObjectStub & {
+  publish(topic: string): Promise<void>;
+};
+
+function realtimeStub(channel: string): RealtimeStub {
+  // Wrangler cannot infer RPC methods from a Durable Object in another Worker.
+  return env.REALTIME.getByName(channel) as RealtimeStub;
+}
 
 export async function connectRealtime(request: Request) {
   const url = new URL(request.url);
@@ -23,12 +32,12 @@ export async function connectRealtime(request: Request) {
   if (!allowed) return json({ error: 'Channel not available.' }, 403);
   if (!env.REALTIME) return json({ error: 'Live connection is temporarily unavailable.' }, 503);
   // Do not forward cookies or accept client-selected publishing actions.
-  return env.REALTIME.getByName(channel).fetch(new Request('https://channel/connect', { headers: { Upgrade: 'websocket' } }));
+  return realtimeStub(channel).fetch(new Request('https://channel/connect', { headers: { Upgrade: 'websocket' } }));
 }
 
 export async function publishChanges(channels: Iterable<string>, topic = 'collaboration') {
   if (!env.REALTIME) return;
-  const results = await Promise.allSettled([...new Set(channels)].map(channel => env.REALTIME.getByName(channel).publish(topic)));
+  const results = await Promise.allSettled([...new Set(channels)].map(channel => realtimeStub(channel).publish(topic)));
   if (results.some(result => result.status === 'rejected')) console.error(JSON.stringify({ event: 'realtime_publish_failed' }));
 }
 

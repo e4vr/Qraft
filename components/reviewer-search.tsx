@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { api } from '@/lib/cloudflare-client';
+import { api } from '@/lib/api-client';
 import type { QBankMembership } from '@/lib/medguard-types';
 export function ReviewerSearch({
   bankId,

@@ -103,7 +103,10 @@ void test('private banks, per-bank roles, and owner boundaries are enforced', as
     'utf8',
   );
   const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
-  assert.match(types, /type AccountTier = 'lite' \| 'pro'/);
+  assert.match(
+    types,
+    /type AccountTier = 'free' \| 'lite' \| 'pro' \| 'unlimited'/,
+  );
   assert.match(types, /type BankRole = 'owner' \| 'reviewer' \| 'viewer'/);
   assert.match(server, /canAccessBank\(user, existing/);
   assert.match(server, /value\.ownerId === user\.uid/);
@@ -287,16 +290,41 @@ void test('Question IDs are reserved atomically and released only by hard deleti
     new URL('lib/cloudflare-client.ts', root),
     'utf8',
   );
+  const allocator = await readFile(
+    new URL('lib/question-id-repository.ts', root),
+    'utf8',
+  );
   const migration = await readFile(
     new URL('drizzle/0004_subscriptions_support.sql', root),
     'utf8',
   );
+  const efficientMigration = await readFile(
+    new URL('drizzle/0009_efficient_d1_access.sql', root),
+    'utf8',
+  );
   assert.match(migration, /question_identity_delete/);
   assert.match(migration, /retired_questions/);
-  assert.match(server, /INSERT INTO question_ids/);
-  assert.match(server, /RETURNING question_id/);
+  assert.match(allocator, /INSERT INTO question_ids/);
+  assert.match(allocator, /RETURNING question_id/);
+  assert.match(efficientMigration, /question_id_release_to_pool/);
   assert.match(cloud, /reserveQuestionIds/);
-  assert.match(server, /99999/);
+  assert.match(allocator, /99999/);
+  assert.doesNotMatch(server, /WITH RECURSIVE numbers/);
+});
+
+void test('D1 hot paths use indexed lookups instead of correlated full scans', async () => {
+  const server = await readFile(
+    new URL('lib/cloudflare-server.ts', root),
+    'utf8',
+  );
+  const realtime = await readFile(
+    new URL('lib/realtime-client.ts', root),
+    'utf8',
+  );
+  assert.doesNotMatch(server, /SELECT \* FROM records/);
+  assert.doesNotMatch(server, /DELETE FROM records WHERE EXISTS/);
+  assert.match(server, /INDEXED BY idx_records_type_id/);
+  assert.doesNotMatch(realtime, /const fallback = setInterval/);
 });
 
 void test('review workspace, test deletion, question images, and Qraft JSON import are available', async () => {
@@ -324,6 +352,10 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
     new URL('lib/platform-server.ts', root),
     'utf8',
   );
+  const storage = await readFile(
+    new URL('lib/storage-service.ts', root),
+    'utf8',
+  );
   assert.match(app, />\s*Review\s*<\/span>/);
   assert.match(app, /Delete this test\?/);
   assert.match(app, /Question ID/);
@@ -337,7 +369,7 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
   assert.match(importReview, /QuestionImportReview/);
   assert.match(importReview, /One question per slide/);
   assert.match(manager, /QuestionImportReview/);
-  assert.match(review, /questionId:\s*status === 'approved'/);
+  assert.match(platform, /questionId:\s*status === 'approved'/);
   assert.match(review, /Bulk review/);
   assert.match(review, /Select latest/);
   assert.match(review, /Approve selected/);
@@ -346,10 +378,7 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
   assert.match(platform, /action === 'bulk-review'/);
   assert.match(platform, /rawProposalIds\.length > 200/);
   assert.match(server, /current\.status !== 'approved'/);
-  assert.match(
-    server,
-    /IMAGEKIT_STORAGE_LIMIT_BYTES = 3 \* 1024 \* 1024 \* 1024/,
-  );
+  assert.match(storage, /HARD_STORAGE_CAP_BYTES = 3 \* 1024 \* 1024 \* 1024/);
   assert.match(server, /upload\.imagekit\.io\/api\/v1\/files\/upload/);
 });
 
@@ -517,6 +546,10 @@ void test('every question change requires independent review with durable attrib
     new URL('components/review-workspace.tsx', root),
     'utf8',
   );
+  const platform = await readFile(
+    new URL('lib/platform-server.ts', root),
+    'utf8',
+  );
   assert.match(types, /writtenByName\?: string/);
   assert.match(types, /reviewedByName\?: string/);
   assert.match(types, /user\.role === 'reviewer'/);
@@ -525,7 +558,7 @@ void test('every question change requires independent review with durable attrib
   assert.match(manager, /QuestionImportReview/);
   assert.doesNotMatch(manager, /questions_json_imported/);
   assert.match(review, /proposal\.reviewedById === user\.uid/);
-  assert.match(review, /writtenByName:\s*proposal\.type === 'new_question'/);
+  assert.match(platform, /writtenByName:\s*proposal\.type === 'new_question'/);
   assert.match(app, /Written by/);
   assert.match(app, /Reviewed by/);
 });

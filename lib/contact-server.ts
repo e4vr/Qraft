@@ -5,7 +5,9 @@ import {
   json,
   readJson,
 } from './cloudflare-server';
-import { auditStatement, bankAccessState } from './platform-server';
+import { auditStatement } from './platform-server';
+import { CONTRIBUTION_CREDITS } from './plan-config';
+import { bankAccessState } from './qbank-access-repository';
 import { canAccessBank, canReviewBank } from './medguard-types';
 
 export async function contactApi(request: Request) {
@@ -26,7 +28,7 @@ export async function contactApi(request: Request) {
   const ticket = id
     ? await env.DB.prepare('SELECT * FROM tickets WHERE id=?')
         .bind(id)
-        .first<{ id: string; user_id: string; status: string }>()
+        .first<{ id: string; user_id: string; status: string; question_linked: number }>()
     : null;
   if (id && (!ticket || (!root && ticket.user_id !== user.uid)))
     return json({ error: 'Ticket not found.' }, 404);
@@ -75,7 +77,7 @@ export async function contactApi(request: Request) {
     if (!root || !ticket) return json({ error: 'Superadmin required.' }, 403);
     if (!['open', 'in_progress', 'resolved', 'closed'].includes(text('status')))
       return json({ error: 'Invalid status.' }, 400);
-    await env.DB.batch([
+    const statements = [
       env.DB.prepare(
         'UPDATE tickets SET status=?,updated_at=? WHERE id=?',
       ).bind(text('status'), now, id),
@@ -86,7 +88,32 @@ export async function contactApi(request: Request) {
         ticket.status,
         text('status'),
       ),
-    ]);
+    ];
+    if (
+      text('status') === 'resolved' &&
+      ticket.status !== 'resolved' &&
+      ticket.question_linked === 1
+    )
+      statements.push(
+        env.DB.prepare(
+          `INSERT OR IGNORE INTO credit_transactions
+            (id,user_id,amount,lifetime_delta,type,reason,reference_type,reference_id,created_by,created_at,metadata)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+        ).bind(
+          `valid-report-${ticket.id}`,
+          ticket.user_id,
+          CONTRIBUTION_CREDITS.validReport,
+          CONTRIBUTION_CREDITS.validReport,
+          'approved_contribution',
+          'Valid question report',
+          'ticket',
+          ticket.id,
+          user.uid,
+          now,
+          '{}',
+        ),
+      );
+    await env.DB.batch(statements);
     return json({ ok: true });
   }
   const body = text('body'),

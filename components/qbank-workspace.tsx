@@ -1,11 +1,12 @@
 'use client';
 
 import { ReviewerSearch } from '@/components/reviewer-search';
-import { UpgradeButton } from '@/components/subscription-workspace';
+import { openUpgrade, UpgradeButton } from '@/components/subscription-workspace';
 import { ArrowRight, Check, Crown, Menu, Search, FolderPlus, Globe2, Heart, ListChecks, LockKeyhole, Pin, Plus, Settings2, UserPlus, Users, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { bankRoleFor, canAccessBank, canManageBank, type AppUser, type BankRole, type CollaborationState, type QBank, type QBankVisibility } from '@/lib/medguard-types';
 import { cn as cx, nowIso } from '@/lib/utils';
+import { hasFeature, PLAN_LIMITS } from '@/lib/plan-config';
 
 function slug(value: string) {
   return value
@@ -51,7 +52,7 @@ export function QBankWorkspace({
   const [activeCategory, setActiveCategory] = useState('all');
   const accessible = useMemo(() => collaboration.qbanks.filter((bank) => !bank.archived && canAccessBank(user, bank, collaboration.memberships)), [collaboration, user]);
   const receivedInvites = collaboration.invitations.filter((item) => item.email === user.email.toLowerCase() && item.status === 'pending');
-  const canCreate = user.tier === 'pro' || user.role === 'super_admin' || user.platformRoles.includes('access_manager');
+  const canCreate = hasFeature(user.effectivePlan ?? user.tier, 'createQBank') || user.role === 'super_admin' || user.platformRoles.includes('access_manager');
   const categoryNames = ['Uncategorized', ...organization.categories];
   const categoryTabs = [
     { id: 'all', label: 'All', count: accessible.length },
@@ -207,12 +208,13 @@ export function QBankWorkspace({
           <h1 className="text-lg font-bold">My QBanks</h1>
           <p className="text-xs text-muted-foreground">Your questions, organized around you.</p>
         </div></div>
-        {canCreate && (
-          <button onClick={() => setCreating(true)} className="q-button q-button-contribute">
-            <Plus className="size-4" />
-            New QBank
-          </button>
-        )}
+        <button
+          onClick={() => (canCreate ? setCreating(true) : openUpgrade())}
+          className={cx('q-button', canCreate ? 'q-button-contribute' : 'border')}
+        >
+          {canCreate ? <Plus className="size-4" /> : <LockKeyhole className="size-4" />}
+          {canCreate ? 'New QBank' : 'Create QBank · Pro'}
+        </button>
       </header>
       <div className="q-page space-y-6">
         {receivedInvites.length > 0 && (
@@ -241,8 +243,8 @@ export function QBankWorkspace({
               <Crown className="size-5" />
             </div>
             <div className="flex-1">
-              <h2 className="font-bold">Lite account</h2><div className="mt-3"><UpgradeButton /></div>
-              <p className="mt-1 text-sm text-muted-foreground">You can study public and shared banks. Request Pro access from Contributions to create your own.</p>
+              <h2 className="font-bold">{PLAN_LIMITS[user.effectivePlan ?? user.tier].name} account</h2><div className="mt-3"><UpgradeButton /></div>
+              <p className="mt-1 text-sm text-muted-foreground">You can study public and shared banks. Upgrade to Pro to create your own.</p>
             </div>
           </section>
         )}

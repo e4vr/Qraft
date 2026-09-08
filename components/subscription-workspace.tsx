@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react';
 import { subscribeLive } from '@/lib/realtime-client';
 import { Crown } from 'lucide-react';
-import { api, observeCloudflareUser } from '@/lib/cloudflare-client';
+import { api } from '@/lib/api-client';
+import { observeCloudflareUser } from '@/lib/application-services';
 import type { AppUser } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { PLAN_LIMITS, PLAN_ORDER, type PlanId } from '@/lib/plan-config';
 
 export const openUpgrade = () =>
   window.dispatchEvent(new Event('qraft-upgrade'));
@@ -17,7 +19,7 @@ export function UpgradeButton() {
       className="q-button inline-flex items-center gap-2 border border-amber-400/60 bg-amber-500/10 text-amber-800 dark:text-amber-200"
     >
       <Crown className="size-4" />
-      Upgrade to Pro
+      View plans
     </button>
   );
 }
@@ -27,6 +29,7 @@ type Quote = {
   final: number;
   code: string;
   percent: number | null;
+  plan: PlanId;
 };
 const localDateTime = (value: string | null) => {
   if (!value) return '';
@@ -49,22 +52,23 @@ export function Subscribe({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [success, setSuccess] = useState('');
+  const [selectedPlan, setSelectedPlan] = useState<Exclude<PlanId, 'free'>>('pro');
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   useEffect(() => {
     let active = true;
     const stop = subscribeLive(() => {
       if (busy) return;
-      void api<Quote>('/platform/quote', { method: 'POST', body: JSON.stringify({ code: price?.code || '' }) })
+      void api<Quote>('/platform/quote', { method: 'POST', body: JSON.stringify({ code: price?.code || '', plan: selectedPlan }) })
         .then(quote => { if (active) setPrice(quote); })
         .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Unable to refresh price.'); });
     }, ['pricing']);
     return () => { active = false; stop(); };
-  }, [price?.code, busy]);
+  }, [price?.code, busy, selectedPlan]);
   useEffect(() => {
     let live = true;
     api<Quote>('/platform/quote', {
       method: 'POST',
-      body: JSON.stringify({ code: '' }),
+      body: JSON.stringify({ code: '', plan: selectedPlan }),
     })
       .then((q) => {
         if (live) setPrice(q);
@@ -75,7 +79,7 @@ export function Subscribe({
     return () => {
       live = false;
     };
-  }, []);
+  }, [selectedPlan]);
   async function apply() {
     setBusy(true);
     setError('');
@@ -83,7 +87,7 @@ export function Subscribe({
       setPrice(
         await api<Quote>('/platform/quote', {
           method: 'POST',
-          body: JSON.stringify({ code }),
+          body: JSON.stringify({ code, plan: selectedPlan }),
         }),
       );
       setRequestId(crypto.randomUUID());
@@ -101,14 +105,14 @@ export function Subscribe({
         '/platform/checkout',
         {
           method: 'POST',
-          body: JSON.stringify({ code: price?.code || '', requestId }),
+          body: JSON.stringify({ code: price?.code || '', requestId, plan: selectedPlan }),
         },
       );
       if (result.upgraded) {
         await observeCloudflareUser((u) => {
           if (u) onUser(u);
         });
-        setSuccess('تمت الترقية إلى Pro لمدة سنة كاملة');
+        setSuccess(`تم تفعيل ${PLAN_LIMITS[selectedPlan].name} لمدة سنة كاملة`);
       } else if (result.url) window.location.assign(result.url);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to subscribe.');
@@ -122,49 +126,44 @@ export function Subscribe({
       <div>
         <Crown className="mb-3 size-9 text-amber-500" />
         <h1 className="text-2xl font-bold sm:text-3xl">
-          More room to learn with Pro
+          Choose the plan that fits your study
         </h1>
         <p className="mt-2 text-muted-foreground">
           ارتقِ بتجربتك الدراسية — اشتراك لمدة سنة كاملة.
         </p>
       </div>
-      <ul className="grid gap-3 sm:grid-cols-2">
-        <li className="rounded-xl bg-muted p-4">Create and own your QBanks</li>
-        <li className="rounded-xl bg-muted p-4">
-          Build public or private banks
-        </li>
-        <li className="rounded-xl bg-muted p-4">Create more study tests</li>
-        <li className="rounded-xl bg-muted p-4">
-          Choose more than 30 questions per test
-        </li>
-      </ul>
-      <div className="overflow-x-auto rounded-xl border">
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr>
-              <th className="p-3">Feature</th>
-              <th>Lite</th>
-              <th>Pro</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="p-3">Tests</td>
-              <td>3</td>
-              <td>No Lite limit</td>
-            </tr>
-            <tr>
-              <td className="p-3">Questions per test</td>
-              <td>30</td>
-              <td>No Lite limit</td>
-            </tr>
-            <tr>
-              <td className="p-3">Create QBanks</td>
-              <td>—</td>
-              <td>Included</td>
-            </tr>
-          </tbody>
-        </table>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {PLAN_ORDER.map((plan) => {
+          const limits = PLAN_LIMITS[plan];
+          const selectable = plan !== 'free';
+          const descriptions: Record<PlanId, string> = {
+            free: 'Try the platform',
+            lite: 'For university study',
+            pro: 'For serious study and contribution',
+            unlimited: 'For major exam preparation and heavy usage',
+          };
+          return (
+            <button
+              type="button"
+              key={plan}
+              disabled={!selectable}
+              onClick={() => plan !== 'free' && setSelectedPlan(plan)}
+              className={`relative rounded-2xl border p-4 text-left transition ${selectedPlan === plan ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : 'bg-card'} disabled:cursor-default`}
+            >
+              {plan === 'pro' && <span className="absolute right-3 top-3 rounded-full bg-primary px-2 py-1 text-[10px] font-bold text-primary-foreground">MOST POPULAR</span>}
+              <strong className="text-lg">{limits.name}</strong>
+              <p className="mt-1 text-2xl font-black">{limits.priceSarYear ? `${limits.priceSarYear} SAR/year` : 'Free'}</p>
+              <p className="mt-2 text-sm text-muted-foreground">{descriptions[plan]}</p>
+              <p className="mt-3 text-xs text-muted-foreground">
+                {limits.lifetimeExamLimit
+                  ? `${limits.lifetimeExamLimit} exams for account lifetime`
+                  : `${limits.monthlyExamLimit} exams/month`}{' '}
+                · {limits.maxQuestionsPerExam} questions/exam
+                {limits.fairUse ? ' · Fair Use applies' : ''}
+              </p>
+            </button>
+          );
+        })}
       </div>
       <div className="rounded-2xl border border-amber-400/40 bg-card p-5">
         {price ? (
@@ -224,18 +223,18 @@ export function Subscribe({
         )}
         <button
           className="q-button mt-4 w-full bg-primary text-primary-foreground"
-          disabled={busy || !price || user.tier === 'pro'}
+          disabled={busy || !price || (user.effectivePlan ?? user.tier) === selectedPlan}
           onClick={() => void subscribe()}
         >
           {busy
             ? 'Processing…'
-            : user.tier === 'pro'
-              ? 'Pro active'
+            : (user.effectivePlan ?? user.tier) === selectedPlan
+              ? `${PLAN_LIMITS[selectedPlan].name} active`
               : 'اشترك الآن'}
         </button>
         <p className="mt-3 text-xs text-muted-foreground">
           {price?.final === 0
-            ? 'يتم تفعيل Pro مباشرة بعد تأكيد الاشتراك.'
+            ? `يتم تفعيل ${PLAN_LIMITS[selectedPlan].name} مباشرة بعد تأكيد الاشتراك.`
             : 'Subscription requests open EduStack WhatsApp. Paid activation is confirmed by the administrator.'}
         </p>
       </div>
@@ -276,6 +275,7 @@ type Code = {
   max_uses: number | null;
   per_user: number | null;
   uses: number;
+  allowed_plans: string;
 };
 type Subscription = {
   uid: string;
@@ -288,6 +288,7 @@ type Subscription = {
   method: string | null;
   discount_code: string | null;
   paid: number | null;
+  plan: PlanId | null;
 };
 type Usage = {
   id: string;
@@ -315,6 +316,7 @@ const emptyCode: Code = {
   max_uses: null,
   per_user: 1,
   uses: 0,
+  allowed_plans: '["lite","pro","unlimited"]',
 };
 export function SubscriptionAdmin({
   section,
@@ -331,6 +333,7 @@ export function SubscriptionAdmin({
     [end, setEnd] = useState(''),
     [paid, setPaid] = useState('0'),
     [manualCode, setManualCode] = useState(''),
+    [manualPlan, setManualPlan] = useState<Exclude<PlanId, 'free'>>('pro'),
     [price, setPrice] = useState('15'),
     [search, setSearch] = useState(''),
     [status, setStatus] = useState(''),
@@ -395,8 +398,10 @@ export function SubscriptionAdmin({
               userId: body.userId,
               tier:
                 'operation' in body && body.operation === 'cancel'
-                  ? 'lite'
-                  : 'pro',
+                  ? 'free'
+                  : 'plan' in body && typeof body.plan === 'string'
+                    ? body.plan
+                    : 'pro',
             },
           }),
         );
@@ -596,6 +601,9 @@ export function SubscriptionAdmin({
                       ).slice(0, 10),
                     );
                     setPaid(String((s.paid ?? 0) / 100));
+                    setManualPlan(
+                      s.plan && s.plan !== 'free' ? s.plan : 'pro',
+                    );
                     setManualCode('');
                   }}
                 >
@@ -664,7 +672,10 @@ export function SubscriptionAdmin({
             className="grid gap-3 sm:grid-cols-2"
             onSubmit={(e) => {
               e.preventDefault();
-              void save(draft);
+              void save({
+                ...draft,
+                allowedPlans: JSON.parse(draft.allowed_plans || '[]'),
+              });
             }}
           >
             <label>
@@ -748,6 +759,29 @@ export function SubscriptionAdmin({
                 />
               </label>
             ))}
+            <fieldset className="sm:col-span-2">
+              <legend className="text-sm font-semibold">Allowed paid plans</legend>
+              <div className="mt-2 flex flex-wrap gap-3">
+                {(['lite', 'pro', 'unlimited'] as const).map((plan) => {
+                  const selected = (JSON.parse(draft.allowed_plans || '[]') as string[]).includes(plan);
+                  return (
+                    <label key={plan} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm capitalize">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={(event) => {
+                          const current = new Set(JSON.parse(draft.allowed_plans || '[]') as string[]);
+                          if (event.target.checked) current.add(plan);
+                          else current.delete(plan);
+                          setDraft({ ...draft, allowed_plans: JSON.stringify([...current]) });
+                        }}
+                      />
+                      {plan}
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
             <label className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -781,6 +815,18 @@ export function SubscriptionAdmin({
         <DialogContent>
           <DialogTitle>Manage subscription</DialogTitle>
           <p className="break-all">{selected?.email}</p>
+          <label>
+            Plan
+            <select
+              className={field}
+              value={manualPlan}
+              onChange={(event) => setManualPlan(event.target.value as typeof manualPlan)}
+            >
+              <option value="lite">Lite</option>
+              <option value="pro">Pro</option>
+              <option value="unlimited">Unlimited</option>
+            </select>
+          </label>
           <label>
             Expiration date
             <input
@@ -835,10 +881,11 @@ export function SubscriptionAdmin({
                 expires_at: new Date(`${end}T23:59:59Z`).toISOString(),
                 paid: Math.round(Number(paid) * 100),
                 code: manualCode,
+                plan: manualPlan,
               })
             }
           >
-            Activate / save Pro
+            Activate / save {PLAN_LIMITS[manualPlan].name}
           </button>
           <button
             disabled={busy}
@@ -847,7 +894,7 @@ export function SubscriptionAdmin({
               void save({ userId: selected?.uid, operation: 'cancel' })
             }
           >
-            Cancel Pro and return to Lite
+            Cancel paid subscription
           </button>
         </DialogContent>
       </Dialog>

@@ -1,6 +1,7 @@
 import { platformApi } from '@/lib/platform-server';
 import { contactApi } from '@/lib/contact-server';
 import { connectRealtime, notifyMutation } from '@/lib/realtime-server';
+import { env } from 'cloudflare:workers';
 import {
   beginMfa,
   completeMfa,
@@ -25,8 +26,43 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+function clientKey(request: Request) {
+  return request.headers.get('cf-connecting-ip') ?? 'local-or-unknown';
+}
+
+async function enforceRateLimits(request: Request) {
+  const key = clientKey(request);
+  const general = await env.API_RATE_LIMITER?.limit({ key });
+  if (general && !general.success)
+    throw Response.json(
+      { error: 'Too many requests. Try again shortly.' },
+      { status: 429, headers: { 'retry-after': '60', 'cache-control': 'no-store' } },
+    );
+  if (request.method !== 'GET') {
+    const mutation = await env.MUTATION_RATE_LIMITER?.limit({ key });
+    if (mutation && !mutation.success)
+      throw Response.json(
+        { error: 'Too many changes. Try again shortly.' },
+        { status: 429, headers: { 'retry-after': '60', 'cache-control': 'no-store' } },
+      );
+  }
+  const [scope, action] = pathParts(request);
+  if (
+    scope === 'auth' &&
+    ['register', 'login', 'mfa', 'mfa-begin', 'mfa-complete'].includes(action ?? '')
+  ) {
+    const auth = await env.AUTH_RATE_LIMITER?.limit({ key });
+    if (auth && !auth.success)
+      throw Response.json(
+        { error: 'Too many authentication attempts. Try again in one minute.' },
+        { status: 429, headers: { 'retry-after': '60', 'cache-control': 'no-store' } },
+      );
+  }
+}
+
 async function safely(request: Request, run: () => Promise<Response>) {
   try {
+    await enforceRateLimits(request);
     const notification = request.method === 'GET' ? undefined : request.clone();
     const response = await run();
     if (notification && response.ok) {

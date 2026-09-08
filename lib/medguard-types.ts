@@ -11,12 +11,12 @@ export type UserRole =
   | 'reviewer'
   | 'access_manager'
   | 'student';
-export type AccountTier = 'lite' | 'pro';
+export type AccountTier = 'free' | 'lite' | 'pro' | 'unlimited';
 export type PlatformRole = 'reviewer' | 'access_manager';
 export type BankRole = 'owner' | 'reviewer' | 'viewer';
 export type QBankVisibility = 'public' | 'private';
 export type AccountStatus = 'pending' | 'approved' | 'rejected';
-export type ProposalStatus = 'pending' | 'approved' | 'rejected';
+export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'needs_changes';
 export type ProposalEditKind =
   | 'question_text'
   | 'options'
@@ -229,6 +229,11 @@ export interface AppUser {
   phone?: string;
   createdAt?: string;
   tier: AccountTier;
+  effectivePlan?: AccountTier;
+  subscriptionPlan?: AccountTier | null;
+  rewardPlan?: AccountTier | null;
+  adminPlan?: AccountTier | null;
+  reviewerBenefit?: boolean;
   platformRoles: PlatformRole[];
   suspended?: boolean;
   mfaEnrolled?: boolean;
@@ -350,6 +355,11 @@ export interface QuestionProposal {
   rationale: string;
   submissionMethod?: 'manual' | 'json';
   importBatchId?: string;
+  duplicateInfo?: {
+    type: 'possible';
+    similarity: number;
+    matchedQuestionId?: string;
+  };
   status: ProposalStatus;
   proposedById: string;
   proposedByName: string;

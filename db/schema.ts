@@ -74,6 +74,16 @@ export const questionIds = sqliteTable('question_ids', {
   createdAt: text('created_at').notNull(),
 });
 
+export const questionIdAllocator = sqliteTable('question_id_allocator', {
+  scope: text('scope').primaryKey(),
+  nextValue: integer('next_value').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const questionIdFreePool = sqliteTable('question_id_free_pool', {
+  numericId: integer('numeric_id').primaryKey(),
+});
+
 export const counters = sqliteTable('counters', {
   id: text('id').primaryKey(),
   value: integer('value').notNull(),
@@ -86,7 +96,90 @@ export const media = sqliteTable('media', {
   ownerId: text('owner_id').notNull(),
   contentType: text('content_type').notNull(),
   size: integer('size').notNull(),
+  provider: text('provider').notNull().default('imagekit'),
+  storageKey: text('storage_key'),
+  fileHash: text('file_hash'),
+  originalName: text('original_name'),
+  purpose: text('purpose').notNull().default('question'),
+  status: text('status').notNull().default('ready'),
+  expiresAt: text('expires_at'),
   createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at'),
+});
+
+export const syncOperations = sqliteTable(
+  'sync_operations',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    scope: text('scope').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [index('idx_sync_operations_user_created').on(table.userId, table.createdAt)],
+);
+
+export const userStats = sqliteTable('user_stats', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => profiles.uid, { onDelete: 'cascade' }),
+  questionsAnswered: integer('questions_answered').notNull().default(0),
+  correctAnswers: integer('correct_answers').notNull().default(0),
+  incorrectAnswers: integer('incorrect_answers').notNull().default(0),
+  examsCompleted: integer('exams_completed').notNull().default(0),
+  flashcardsReviewed: integer('flashcards_reviewed').notNull().default(0),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const userTopicStats = sqliteTable(
+  'user_topic_stats',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    qbankId: text('qbank_id').notNull(),
+    topicId: text('topic_id').notNull(),
+    answered: integer('answered').notNull().default(0),
+    correct: integer('correct').notNull().default(0),
+    incorrect: integer('incorrect').notNull().default(0),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.qbankId, table.topicId] }),
+    index('idx_user_topic_stats_dashboard').on(table.userId, table.qbankId, table.updatedAt),
+  ],
+);
+
+export const qbankStats = sqliteTable('qbank_stats', {
+  qbankId: text('qbank_id').primaryKey(),
+  totalQuestions: integer('total_questions').notNull().default(0),
+  pendingQuestions: integer('pending_questions').notNull().default(0),
+  approvedQuestions: integer('approved_questions').notNull().default(0),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const syncChanges = sqliteTable(
+  'sync_changes',
+  {
+    sequence: integer('sequence').primaryKey({ autoIncrement: true }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    entityType: text('entity_type').notNull(),
+    entityId: text('entity_id').notNull(),
+    operation: text('operation').notNull(),
+    version: integer('version').notNull().default(1),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('idx_sync_changes_user_sequence').on(table.userId, table.sequence)],
+);
+
+export const r2UsagePeriods = sqliteTable('r2_usage_periods', {
+  periodStart: text('period_start').primaryKey(),
+  classAOperations: integer('class_a_operations').notNull().default(0),
+  classBOperations: integer('class_b_operations').notNull().default(0),
+  updatedAt: text('updated_at').notNull(),
 });
 
 export const subscriptionSettings = sqliteTable('subscription_settings', {
@@ -107,6 +200,7 @@ export const discountCodes = sqliteTable(
     maxUses: integer('max_uses'),
     perUser: integer('per_user'),
     uses: integer('uses').notNull().default(0),
+    allowedPlans: text('allowed_plans').notNull().default('["lite","pro","unlimited"]'),
     updatedAt: text('updated_at').notNull(),
   },
   (table) => [uniqueIndex('idx_discount_codes_code').on(table.code)],
@@ -119,6 +213,7 @@ export const subscriptions = sqliteTable(
       .primaryKey()
       .references(() => profiles.uid),
     status: text('status').notNull(),
+    plan: text('plan').notNull().default('pro'),
     startsAt: text('starts_at'),
     expiresAt: text('expires_at'),
     method: text('method').notNull(),
@@ -142,6 +237,7 @@ export const subscriptionEvents = sqliteTable(
     codeId: text('code_id'),
     code: text('code'),
     action: text('action').notNull(),
+    plan: text('plan').notNull().default('pro'),
     original: integer('original').notNull(),
     discount: integer('discount').notNull(),
     final: integer('final').notNull(),
@@ -169,6 +265,7 @@ export const testRegistry = sqliteTable(
       .references(() => profiles.uid),
     testId: text('test_id').notNull(),
     questionCount: integer('question_count').notNull(),
+    startedAt: text('started_at'),
   },
   (table) => [primaryKey({ columns: [table.userId, table.testId] })],
 );
@@ -262,10 +359,169 @@ export const importedFiles = sqliteTable(
     skippedCount: integer('skipped_count').notNull(),
     reportJson: text('report_json').notNull(),
     uploadedAt: text('uploaded_at').notNull(),
+    dailyLimit: integer('daily_limit').notNull().default(1_000_000),
+    pendingLimit: integer('pending_limit').notNull().default(1_000_000),
   },
   (table) => [
     uniqueIndex('idx_imported_files_user_name').on(table.userId, table.normalizedName),
     uniqueIndex('idx_imported_files_user_hash').on(table.userId, table.fileHash),
     uniqueIndex('idx_imported_files_batch').on(table.batchId),
+  ],
+);
+
+export const planPrices = sqliteTable('plan_prices', {
+  plan: text('plan').primaryKey(),
+  priceSarYear: integer('price_sar_year').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const contributionAccounts = sqliteTable('contribution_accounts', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => profiles.uid, { onDelete: 'cascade' }),
+  creditsBalance: integer('credits_balance').notNull().default(0),
+  lifetimeScore: integer('lifetime_score').notNull().default(0),
+  trustScore: integer('trust_score').notNull().default(100),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const creditTransactions = sqliteTable(
+  'credit_transactions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    amount: integer('amount').notNull(),
+    lifetimeDelta: integer('lifetime_delta').notNull().default(0),
+    type: text('type').notNull(),
+    reason: text('reason').notNull(),
+    referenceType: text('reference_type'),
+    referenceId: text('reference_id'),
+    createdBy: text('created_by').notNull(),
+    createdAt: text('created_at').notNull(),
+    metadata: text('metadata').notNull().default('{}'),
+  },
+  (table) => [
+    index('idx_credit_transactions_user_created').on(
+      table.userId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const rewardPasses = sqliteTable(
+  'reward_passes',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    plan: text('plan').notNull(),
+    duration: integer('duration').notNull(),
+    durationUnit: text('duration_unit').notNull(),
+    status: text('status').notNull(),
+    createdAt: text('created_at').notNull(),
+    activatedAt: text('activated_at'),
+    expiresAt: text('expires_at'),
+    source: text('source').notNull(),
+    creditTransactionId: text('credit_transaction_id'),
+    metadata: text('metadata').notNull().default('{}'),
+  },
+  (table) => [
+    index('idx_reward_passes_user_status').on(
+      table.userId,
+      table.status,
+      table.expiresAt,
+    ),
+  ],
+);
+
+export const adminPlanEntitlements = sqliteTable(
+  'admin_plan_entitlements',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    plan: text('plan').notNull(),
+    active: integer('active').notNull().default(1),
+    reason: text('reason').notNull(),
+    grantedBy: text('granted_by').notNull(),
+    createdAt: text('created_at').notNull(),
+    expiresAt: text('expires_at'),
+  },
+  (table) => [
+    index('idx_admin_plan_entitlements_user').on(
+      table.userId,
+      table.active,
+      table.expiresAt,
+    ),
+  ],
+);
+
+export const jsonImportSuspensions = sqliteTable(
+  'json_import_suspensions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(),
+    startsAt: text('starts_at').notNull(),
+    endsAt: text('ends_at').notNull(),
+    createdBy: text('created_by').notNull(),
+    removedAt: text('removed_at'),
+    removedBy: text('removed_by'),
+  },
+  (table) => [
+    index('idx_json_import_suspensions_user').on(
+      table.userId,
+      table.startsAt,
+      table.endsAt,
+    ),
+  ],
+);
+
+export const duplicateAttempts = sqliteTable(
+  'duplicate_attempts',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    contentHash: text('content_hash').notNull(),
+    referenceId: text('reference_id'),
+    confirmed: integer('confirmed').notNull().default(0),
+    createdAt: text('created_at').notNull(),
+    metadata: text('metadata').notNull().default('{}'),
+  },
+  (table) => [
+    index('idx_duplicate_attempts_user_created').on(
+      table.userId,
+      table.confirmed,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const contributionReviews = sqliteTable(
+  'contribution_reviews',
+  {
+    id: text('id').primaryKey(),
+    proposalId: text('proposal_id').notNull(),
+    authorId: text('author_id').notNull(),
+    reviewerId: text('reviewer_id').notNull(),
+    decision: text('decision').notNull(),
+    highRisk: integer('high_risk').notNull().default(0),
+    createdAt: text('created_at').notNull(),
+    metadata: text('metadata').notNull().default('{}'),
+  },
+  (table) => [
+    index('idx_contribution_reviews_reviewer_created').on(
+      table.reviewerId,
+      table.createdAt,
+    ),
   ],
 );

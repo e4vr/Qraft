@@ -1,5 +1,15 @@
 import { auditStatement, expireSubscriptions } from './platform-server';
+import {
+  bankAccessState,
+  bankAccessStates,
+} from './qbank-access-repository';
+import { allocateQuestionIds } from './question-id-repository';
 import { env } from 'cloudflare:workers';
+import {
+  hasR2Storage,
+  R2QuotaExceededError,
+  r2StorageService,
+} from './storage-service';
 import {
   canAccessBank,
   canManageBank,
@@ -14,12 +24,14 @@ import {
   type CollaborationState,
   type MemberProfile,
   type QBank,
+  type QuestionProposal,
 } from './medguard-types';
+import { applyEffectiveEntitlement } from './entitlement-server';
+import { getPlanLimits, utcMonthStart } from './plan-config';
 
 const SESSION_COOKIE = '__Host-qraft_session';
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
 const PBKDF2_ITERATIONS = 100_000;
-const IMAGEKIT_STORAGE_LIMIT_BYTES = 3 * 1024 * 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -65,11 +77,11 @@ async function deleteImageKitFile(fileId: string) {
   return response.ok || response.status === 404;
 }
 
-async function readLimitedText(request: Request, maximumBytes: number) {
+async function readLimitedBytes(request: Request, maximumBytes: number) {
   const declaredLength = Number(request.headers.get('content-length') ?? 0);
   if (declaredLength > maximumBytes)
     throw new Response('Request payload is too large.', { status: 413 });
-  if (!request.body) return '';
+  if (!request.body) return new ArrayBuffer(0);
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -89,7 +101,11 @@ async function readLimitedText(request: Request, maximumBytes: number) {
     body.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return decoder.decode(body);
+  return body.buffer;
+}
+
+async function readLimitedText(request: Request, maximumBytes: number) {
+  return decoder.decode(await readLimitedBytes(request, maximumBytes));
 }
 
 export async function readJson<T>(
@@ -135,6 +151,27 @@ async function sha256(value: string) {
   return bytesToHex(
     await crypto.subtle.digest('SHA-256', encoder.encode(value)),
   );
+}
+
+async function sha256Bytes(value: ArrayBuffer) {
+  return bytesToHex(await crypto.subtle.digest('SHA-256', value));
+}
+
+function detectedImageMime(bytes: ArrayBuffer): string | undefined {
+  const value = new Uint8Array(bytes);
+  if (value.length >= 3 && value[0] === 0xff && value[1] === 0xd8 && value[2] === 0xff)
+    return 'image/jpeg';
+  if (
+    value.length >= 8 &&
+    [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every(
+      (byte, index) => value[index] === byte,
+    )
+  )
+    return 'image/png';
+  const header = decoder.decode(value.slice(0, 12));
+  if (header.startsWith('GIF87a') || header.startsWith('GIF89a')) return 'image/gif';
+  if (header.startsWith('RIFF') && header.slice(8, 12) === 'WEBP') return 'image/webp';
+  return undefined;
 }
 
 async function hashPassword(
@@ -186,20 +223,20 @@ export function assertSameOrigin(request: Request) {
     throw new Response('Cross-origin request rejected.', { status: 403 });
 }
 
-function safeProfile(
+async function safeProfile(
   profile: MemberProfile,
   mfaEnrolled: boolean,
   mfaVerified = true,
-): AppUser {
+): Promise<AppUser> {
   const isAdmin =
     profile.role === 'super_admin' || profile.platformRoles.length > 0;
-  return {
+  return applyEffectiveEntitlement({
     ...profile,
     isAdmin,
     provider: 'cloudflare',
     mfaEnrolled,
     mfaVerified,
-  };
+  });
 }
 
 function enrolledTotpSecret(secret: string | null) {
@@ -240,8 +277,11 @@ export async function currentUser(
   if (!token) return undefined;
   const tokenHash = await sha256(token);
   const row =
-    await env.DB.prepare(`SELECT p.uid, p.profile_json, p.totp_secret, s.verified
+    await env.DB.prepare(`SELECT p.uid,p.profile_json,p.totp_secret,s.verified,subscription.expires_at
     FROM sessions s JOIN profiles p ON p.uid = s.user_id
+    LEFT JOIN subscriptions AS subscription
+      ON subscription.user_id=p.uid
+      AND subscription.status IN ('active','manually_activated')
     WHERE s.token_hash = ? AND s.expires_at > ? LIMIT 1`)
       .bind(tokenHash, Math.floor(Date.now() / 1000))
       .first<{
@@ -249,23 +289,17 @@ export async function currentUser(
         profile_json: string;
         totp_secret: string | null;
         verified: number;
+        expires_at: string | null;
       }>();
   if (!row || (requireVerified && row.verified !== 1)) return undefined;
-  let profile = JSON.parse(row.profile_json) as MemberProfile;
+  const profile = JSON.parse(row.profile_json) as MemberProfile;
   if (profile.suspended) return undefined;
-  const subscription = await env.DB.prepare(
-    "SELECT expires_at FROM subscriptions WHERE user_id=? AND status IN ('active','manually_activated')",
-  )
-    .bind(profile.uid)
-    .first<{ expires_at: string | null }>();
-  if (
-    subscription?.expires_at &&
-    subscription.expires_at <= new Date().toISOString()
-  ) {
+  if (row.expires_at && row.expires_at <= new Date().toISOString())
     await expireSubscriptions();
-    profile = { ...profile, tier: 'lite' };
-  }
-  return safeProfile(profile, Boolean(enrolledTotpSecret(row.totp_secret)));
+  return await safeProfile(
+    profile,
+    Boolean(enrolledTotpSecret(row.totp_secret)),
+  );
 }
 
 async function createSession(
@@ -461,7 +495,7 @@ export async function register(request: Request) {
     role: isRoot ? 'super_admin' : 'student',
     status: isRoot ? 'approved' : 'pending',
     createdAt: now,
-    tier: isRoot ? 'pro' : 'lite',
+    tier: isRoot ? 'unlimited' : 'free',
     platformRoles: [],
     universityIdRegistered: isRoot ? true : universityIdRegistered,
   };
@@ -519,7 +553,7 @@ export async function register(request: Request) {
     throw error;
   }
   const token = await createSession(uid, true);
-  return json({ user: safeProfile(profile, false) }, 201, {
+  return json({ user: await safeProfile(profile, false) }, 201, {
     'set-cookie': sessionCookie(token),
   });
 }
@@ -549,7 +583,7 @@ export async function login(request: Request) {
     return json({ error: 'MFA_REQUIRED' }, 428, {
       'set-cookie': sessionCookie(token, 300),
     });
-  return json({ user: safeProfile(profile, Boolean(mfaSecret)) }, 200, {
+  return json({ user: await safeProfile(profile, Boolean(mfaSecret)) }, 200, {
     'set-cookie': sessionCookie(token),
   });
 }
@@ -574,7 +608,12 @@ export async function verifyMfa(request: Request) {
     .bind(Math.floor(Date.now() / 1000) + SESSION_SECONDS, tokenHash)
     .run();
   return json(
-    { user: safeProfile(JSON.parse(row.profile_json) as MemberProfile, true) },
+    {
+      user: await safeProfile(
+        JSON.parse(row.profile_json) as MemberProfile,
+        true,
+      ),
+    },
     200,
     { 'set-cookie': sessionCookie(token) },
   );
@@ -687,6 +726,16 @@ export async function saveState(request: Request) {
   const input = await readJson<{ state?: AppState }>(request, 2_000_000);
   if (!input.state || input.state.version !== 1)
     return json({ error: 'Invalid state payload.' }, 400);
+  const effectivePlan = user.effectivePlan ?? user.tier;
+  const planLimits = getPlanLimits(effectivePlan);
+  const storedStateRow = await env.DB.prepare(
+    'SELECT payload FROM app_states WHERE user_id=?',
+  )
+    .bind(user.uid)
+    .first<{ payload: string }>();
+  const storedState = storedStateRow
+    ? (JSON.parse(storedStateRow.payload) as AppState)
+    : undefined;
   if (
     !Array.isArray(input.state.tests) ||
     input.state.tests.some(
@@ -803,6 +852,35 @@ export async function saveState(request: Request) {
       { error: 'Duplicate imported flashcards are not allowed.' },
       409,
     );
+  const oldDeckCount = storedState?.flashcardDecks?.length ?? 0;
+  const oldCardCount = storedState?.flashcards?.length ?? 0;
+  if (
+    flashcardDecks.length > Math.max(oldDeckCount, planLimits.maxFlashcardDecks) ||
+    flashcards.length > Math.max(oldCardCount, planLimits.maxFlashcards)
+  )
+    return json(
+      {
+        error: planLimits.canUseFlashcards
+          ? `Your ${planLimits.name} plan allows ${planLimits.maxFlashcardDecks} decks and ${planLimits.maxFlashcards} cards.`
+          : 'Flashcards are available with Pro.',
+      },
+      403,
+    );
+  if (
+    !planLimits.canUsePrivateNotes &&
+    storedState &&
+    Object.entries(input.state.progress).some(
+      ([questionId, progress]) => {
+        const previous = storedState.progress?.[questionId];
+        return (
+          (progress.note ?? '') !== (previous?.note ?? '') ||
+          JSON.stringify(progress.noteImages ?? []) !==
+            JSON.stringify(previous?.noteImages ?? [])
+        );
+      },
+    )
+  )
+    return json({ error: 'Private Notes are available with Pro.' }, 403);
   const normalizedTestTitles = input.state.tests.map((test) =>
     typeof test.title === 'string'
       ? test.title.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US')
@@ -815,45 +893,90 @@ export async function saveState(request: Request) {
       409,
     );
   const oldTests = await env.DB.prepare(
-    'SELECT test_id,question_count FROM test_registry WHERE user_id=?',
+    'SELECT test_id,question_count,started_at FROM test_registry WHERE user_id=?',
   )
     .bind(user.uid)
-    .all<{ test_id: string; question_count: number }>();
+    .all<{ test_id: string; question_count: number; started_at: string | null }>();
   const known = new Map(
     oldTests.results.map((t) => [t.test_id, t.question_count]),
   );
   if (
-    user.tier === 'lite' &&
     input.state.tests.some(
-      (t) => t.questionIds.length > Math.max(30, known.get(t.id) ?? 0),
+      (test) =>
+        test.questionIds.length >
+        Math.max(planLimits.maxQuestionsPerExam, known.get(test.id) ?? 0),
     )
   )
     return json(
-      { error: 'Lite allows 30 questions per test. Upgrade to Pro.' },
+      {
+        error: `${planLimits.name} allows ${planLimits.maxQuestionsPerExam} questions per exam.`,
+      },
+      403,
+    );
+  const newTests = input.state.tests.filter((test) => !known.has(test.id));
+  const lifetimeStarted = oldTests.results.length;
+  if (
+    planLimits.lifetimeExamLimit !== null &&
+    lifetimeStarted + newTests.length > planLimits.lifetimeExamLimit
+  )
+    return json(
+      { error: "You've reached your lifetime exam limit." },
+      403,
+    );
+  const monthStart = utcMonthStart();
+  const monthlyStarted = oldTests.results.filter(
+    (test) => (test.started_at ?? '') >= monthStart,
+  ).length;
+  if (
+    planLimits.monthlyExamLimit !== null &&
+    monthlyStarted + newTests.length > planLimits.monthlyExamLimit
+  )
+    return json(
+      { error: "You've reached your monthly exam limit." },
       403,
     );
   const now = new Date().toISOString();
   input.state = await cleanDeletedState(input.state);
-  try {
-    await env.DB.batch([
+  const answeredProgress = Object.values(input.state.progress).filter(
+    (item) => item.attempts > 0,
+  );
+  const aggregate = {
+    questionsAnswered: answeredProgress.reduce(
+      (total, item) => total + item.attempts,
+      0,
+    ),
+    correctAnswers: answeredProgress.reduce(
+      (total, item) => total + item.correctAttempts,
+      0,
+    ),
+    incorrectAnswers: answeredProgress.reduce(
+      (total, item) => total + item.incorrectAttempts,
+      0,
+    ),
+    examsCompleted: input.state.tests.filter(
+      (test) => test.status === 'completed',
+    ).length,
+    flashcardsReviewed: flashcardReviewLog.length,
+  };
+  await env.DB.batch([
       env.DB.prepare(
-        "INSERT OR IGNORE INTO test_registry(user_id,test_id,question_count) SELECT ?,json_extract(value,'$.id'),json_array_length(value,'$.questionIds') FROM json_each(?)",
-      ).bind(user.uid, JSON.stringify(input.state.tests)),
+        "INSERT OR IGNORE INTO test_registry(user_id,test_id,question_count,started_at) SELECT ?,json_extract(value,'$.id'),json_array_length(value,'$.questionIds'),coalesce(json_extract(value,'$.startedAt'),?) FROM json_each(?)",
+      ).bind(user.uid, now, JSON.stringify(input.state.tests)),
       env.DB.prepare(
         'INSERT INTO app_states (user_id, payload, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at',
       ).bind(user.uid, JSON.stringify(input.state), now),
-    ]);
-  } catch (error) {
-    if (error instanceof Error && /LITE_/.test(error.message))
-      return json(
-        {
-          error:
-            'Lite allows 3 tests and 30 questions per test. Upgrade to Pro.',
-        },
-        403,
-      );
-    throw error;
-  }
+      env.DB.prepare(
+        'INSERT INTO user_stats(user_id,questions_answered,correct_answers,incorrect_answers,exams_completed,flashcards_reviewed,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET questions_answered=excluded.questions_answered,correct_answers=excluded.correct_answers,incorrect_answers=excluded.incorrect_answers,exams_completed=excluded.exams_completed,flashcards_reviewed=excluded.flashcards_reviewed,updated_at=excluded.updated_at',
+      ).bind(
+        user.uid,
+        aggregate.questionsAnswered,
+        aggregate.correctAnswers,
+        aggregate.incorrectAnswers,
+        aggregate.examsCompleted,
+        aggregate.flashcardsReviewed,
+        now,
+      ),
+  ]);
   return json({ ok: true });
 }
 
@@ -865,7 +988,9 @@ function recordData(value: Record<string, unknown>) {
         ? value.ownerId
         : typeof value.createdById === 'string'
           ? value.createdById
-          : undefined,
+          : typeof value.proposedById === 'string'
+            ? value.proposedById
+            : undefined,
     email:
       typeof value.email === 'string' ? normalizeEmail(value.email) : undefined,
   };
@@ -874,7 +999,7 @@ function recordData(value: Record<string, unknown>) {
 async function recordsByTypes(types: string[]) {
   const placeholders = types.map(() => '?').join(',');
   const result = await env.DB.prepare(
-    `SELECT * FROM records WHERE type IN (${placeholders})`,
+    `SELECT type,id,payload FROM records WHERE type IN (${placeholders})`,
   )
     .bind(...types)
     .all<StoredRecord>();
@@ -885,21 +1010,13 @@ async function recordsByTypes(types: string[]) {
   }));
 }
 
-async function allRecords(qbankIds?: Iterable<string>) {
-  if (qbankIds === undefined) {
-    const result = await env.DB.prepare('SELECT * FROM records').all<StoredRecord>();
-    return result.results.map((row) => ({
-      collection: row.type,
-      id: row.id,
-      value: JSON.parse(row.payload) as unknown,
-    }));
-  }
+async function allRecords(qbankIds: Iterable<string>) {
   const ids = [...new Set([...qbankIds].filter(Boolean))];
   const where = ids.length
     ? `qbank_id IS NULL OR qbank_id IN (${ids.map(() => '?').join(',')})`
     : 'qbank_id IS NULL';
   const result = await env.DB.prepare(
-    `SELECT * FROM records WHERE ${where}`,
+    `SELECT type,id,payload FROM records WHERE ${where}`,
   )
     .bind(...ids)
     .all<StoredRecord>();
@@ -972,6 +1089,136 @@ function recordsToState(
   return normalizeCollaborationState(state);
 }
 
+type StateRecord = {
+  collection: string;
+  id: string;
+  value: unknown;
+};
+
+async function recordsByKeys(
+  keys: Array<{ collection: string; id: string }>,
+): Promise<StateRecord[]> {
+  const unique = [
+    ...new Map(
+      keys
+        .filter((key) => key.collection && key.id)
+        .map((key) => [`${key.collection}\u0000${key.id}`, key]),
+    ).values(),
+  ];
+  if (!unique.length) return [];
+  const result = await env.DB.prepare(
+    `SELECT record.type,record.id,record.payload
+      FROM json_each(?) AS requested
+      CROSS JOIN records AS record INDEXED BY idx_records_type_id
+      WHERE record.type=json_extract(requested.value,'$.collection')
+        AND record.id=json_extract(requested.value,'$.id')`,
+  )
+    .bind(JSON.stringify(unique))
+    .all<{ type: string; id: string; payload: string }>();
+  return result.results.map((row) => ({
+    collection: row.type,
+    id: row.id,
+    value: JSON.parse(row.payload) as unknown,
+  }));
+}
+
+async function collaborationStateForOperations(
+  user: AppUser,
+  operations: RecordOperation[],
+) {
+  const requested = operations
+    .filter((operation) => operation.collection !== 'profiles')
+    .map((operation) => ({
+      collection: operation.collection,
+      id: operation.id,
+    }));
+  for (const operation of operations) {
+    if (operation.type !== 'set' || !isRecord(operation.value)) continue;
+    if (
+      operation.collection === 'qbankMemberships' &&
+      typeof operation.value.inviteId === 'string'
+    )
+      requested.push({
+        collection: 'qbankInvitations',
+        id: operation.value.inviteId,
+      });
+    if (
+      operation.collection === 'answerStats' &&
+      typeof operation.value.questionId === 'string'
+    )
+      requested.push({
+        collection: 'sharedQuestions',
+        id: operation.value.questionId,
+      });
+  }
+  if (operations.some((operation) => operation.collection === 'roleApplications'))
+    requested.push({ collection: 'system', id: 'security' });
+
+  const directRows = await recordsByKeys(requested);
+  const qbankIds = new Set<string>();
+  for (const operation of operations) {
+    if (operation.collection === 'qbanks') qbankIds.add(operation.id);
+    if (
+      operation.type === 'set' &&
+      isRecord(operation.value) &&
+      typeof operation.value.qbankId === 'string'
+    )
+      qbankIds.add(operation.value.qbankId);
+  }
+  for (const row of directRows) {
+    if (isRecord(row.value) && typeof row.value.qbankId === 'string')
+      qbankIds.add(row.value.qbankId);
+  }
+
+  const access = await bankAccessStates(qbankIds);
+  const accessRows: StateRecord[] = [
+    ...access.qbanks.map((value) => ({
+      collection: 'qbanks',
+      id: value.id,
+      value,
+    })),
+    ...access.memberships.map((value) => ({
+      collection: 'qbankMemberships',
+      id: value.id,
+      value,
+    })),
+  ];
+
+  const needsAllProfiles =
+    user.role === 'super_admin' ||
+    user.platformRoles.includes('access_manager') ||
+    operations.some((operation) => operation.collection === 'system');
+  const profileIds = operations
+    .filter((operation) => operation.collection === 'profiles')
+    .map((operation) => operation.id);
+  const profilesResult = needsAllProfiles
+    ? await env.DB.prepare('SELECT profile_json FROM profiles').all<{
+        profile_json: string;
+      }>()
+    : profileIds.length
+      ? await env.DB.prepare(
+          `SELECT profile_json FROM profiles WHERE uid IN (${profileIds.map(() => '?').join(',')})`,
+        )
+          .bind(...profileIds)
+          .all<{ profile_json: string }>()
+      : { results: [] as Array<{ profile_json: string }> };
+  const profiles = profilesResult.results.map(
+    (row) => JSON.parse(row.profile_json) as MemberProfile,
+  );
+  const profileContextRows = profiles.length
+    ? await recordsByTypes(['universityIds'])
+    : [];
+  const rows = [
+    ...new Map(
+      [...directRows, ...accessRows, ...profileContextRows].map((row) => [
+        `${row.collection}\u0000${row.id}`,
+        row,
+      ]),
+    ).values(),
+  ];
+  return recordsToState(rows, profiles);
+}
+
 const protectedSubscriptionsSql =
   "SELECT user_id FROM subscriptions WHERE method != 'manual' OR paid > 0 OR discount_code IS NOT NULL UNION SELECT user_id FROM subscription_events WHERE status='success' AND (final > 0 OR code IS NOT NULL)";
 async function protectedSubscriptionUsers() {
@@ -1028,7 +1275,7 @@ export async function updateOwnProfile(request: Request) {
     ),
   ]);
   return json({
-    user: safeProfile(
+    user: await safeProfile(
       next,
       Boolean(enrolledTotpSecret(row.totp_secret)),
       user.mfaVerified,
@@ -1211,22 +1458,6 @@ export async function loadCollaboration(request: Request) {
   return json({ collaboration: state });
 }
 
-export async function storedState() {
-  const rows = await allRecords();
-  const profilesResult = await env.DB.prepare(
-    'SELECT profile_json FROM profiles',
-  ).all<{ profile_json: string }>();
-  return {
-    rows,
-    state: recordsToState(
-      rows,
-      profilesResult.results.map(
-        (row) => JSON.parse(row.profile_json) as MemberProfile,
-      ),
-    ),
-  };
-}
-
 function bankIdForOperation(
   operation: RecordOperation,
   value: Record<string, unknown>,
@@ -1362,6 +1593,16 @@ function proposalPayloadIsComplete(proposal: Record<string, unknown>) {
   );
 }
 
+function proposalRequiresTwoReviewers(proposal: QuestionProposal) {
+  return (
+    proposal.type === 'question_edit' &&
+    (proposal.editKinds.includes('correct_answer') ||
+      (!proposal.editKinds.includes('typo_formatting') &&
+        (proposal.editKinds.includes('question_text') ||
+          proposal.editKinds.includes('options'))))
+  );
+}
+
 function proposalChangeAllowed(
   user: AppUser,
   operation: RecordOperation,
@@ -1377,6 +1618,11 @@ function proposalChangeAllowed(
   if (!current)
     return value.proposedById === user.uid && value.status === 'pending';
   if (canReview) {
+    if (
+      proposalRequiresTwoReviewers(current) &&
+      value.status === 'approved'
+    )
+      return false;
     const immutable = [
       'id',
       'qbankId',
@@ -1387,6 +1633,7 @@ function proposalChangeAllowed(
       'rationale',
       'submissionMethod',
       'importBatchId',
+      'duplicateInfo',
       'proposedById',
       'proposedByName',
       'proposedAt',
@@ -1552,6 +1799,7 @@ function recordAllowed(
   );
   const isRoot = user.role === 'super_admin';
   const accessManager = isRoot || user.platformRoles.includes('access_manager');
+  const limits = getPlanLimits(user.effectivePlan ?? user.tier);
   const canManage = existing ? canManageBank(user, existing) : false;
   const canReview = existing
     ? canReviewBank(user, existing, state.memberships)
@@ -1563,7 +1811,10 @@ function recordAllowed(
     if (operation.type === 'set' && !existing)
       return (
         value.id === operation.id &&
-        (user.tier === 'pro' || accessManager) &&
+        (limits.canCreateQBank || accessManager) &&
+        (value.visibility !== 'private' ||
+          limits.canCreatePrivateQBank ||
+          accessManager) &&
         value.ownerId === user.uid &&
         (value.essential !== true || isRoot)
       );
@@ -1585,6 +1836,10 @@ function recordAllowed(
   if (operation.collection === 'questionProposals')
     return (
       (canAccess || canReview) &&
+      (state.proposals.some((item) => item.id === operation.id) ||
+        (value.type === 'new_question'
+          ? limits.canAddQuestions
+          : limits.canSuggestCorrections)) &&
       proposalChangeAllowed(user, operation, value, state, canReview)
     );
   if (operation.collection === 'sharedQuestions')
@@ -1661,7 +1916,7 @@ export async function saveCollaboration(request: Request) {
   );
   if (!Array.isArray(input.operations) || input.operations.length > 500)
     return json({ error: 'Invalid collaboration change set.' }, 400);
-  const { state } = await storedState();
+  const state = await collaborationStateForOperations(user, input.operations);
   if (
     user.role !== 'super_admin' &&
     user.platformRoles.includes('access_manager')
@@ -1915,10 +2170,13 @@ export async function saveCollaboration(request: Request) {
   }
   if (recordDeletes.length)
     statements.push(
-      env.DB.prepare(`DELETE FROM records WHERE EXISTS (
-    SELECT 1 FROM json_each(?) AS change
-    WHERE json_extract(change.value, '$.collection') = records.type AND json_extract(change.value, '$.id') = records.id
-  )`).bind(JSON.stringify(recordDeletes)),
+      env.DB.prepare(`DELETE FROM records WHERE rowid IN (
+        SELECT record.rowid
+        FROM json_each(?) AS change
+        CROSS JOIN records AS record INDEXED BY idx_records_type_id
+        WHERE record.type=json_extract(change.value, '$.collection')
+          AND record.id=json_extract(change.value, '$.id')
+      )`).bind(JSON.stringify(recordDeletes)),
     );
   for (const op of input.operations.filter(
     (o) => o.collection === 'profiles' && o.type === 'set',
@@ -1975,6 +2233,37 @@ export async function saveCollaboration(request: Request) {
         JSON.stringify(recordSets),
       ),
     );
+  const affectedQbanks = [
+    ...new Set(
+      input.operations
+        .filter((operation) =>
+          [
+            'qbanks',
+            'questionProposals',
+            'sharedQuestions',
+          ].includes(operation.collection),
+        )
+        .map((operation) =>
+          bankIdForOperation(
+            operation,
+            isRecord(operation.value) ? operation.value : {},
+            state,
+          ),
+        )
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (affectedQbanks.length)
+    statements.push(
+      env.DB.prepare(`INSERT INTO qbank_stats(qbank_id,total_questions,pending_questions,approved_questions,updated_at)
+        SELECT value,
+          (SELECT count(*) FROM records WHERE qbank_id=value AND type='sharedQuestions'),
+          (SELECT count(*) FROM records WHERE qbank_id=value AND type='questionProposals' AND json_extract(payload,'$.status')='pending'),
+          (SELECT count(*) FROM records WHERE qbank_id=value AND type='sharedQuestions'), ?
+        FROM json_each(?) WHERE 1
+        ON CONFLICT(qbank_id) DO UPDATE SET total_questions=excluded.total_questions,pending_questions=excluded.pending_questions,approved_questions=excluded.approved_questions,updated_at=excluded.updated_at`)
+        .bind(now, JSON.stringify(affectedQbanks)),
+    );
   for (const operation of input.operations.filter(
     (o) => o.collection !== 'auditLog',
   ))
@@ -2016,18 +2305,11 @@ export async function reserveIds(request: Request) {
         input.highestKnown > 99_999))
   )
     return json({ error: 'Invalid ID reservation.' }, 400);
-  const state = (await storedState()).state;
+  const state = await bankAccessState(input.qbankId);
   const bank = state.qbanks.find((item) => item.id === input.qbankId);
   if (!bank || !canReviewBank(user, bank, state.memberships))
     return json({ error: 'Reviewer access required.' }, 403);
-  const now = new Date().toISOString();
-  const allocated =
-    await env.DB.prepare(`WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM numbers WHERE n<99999)
-    INSERT INTO question_ids(question_id,qbank_id,created_by_id,created_at)
-    SELECT printf('%05d',n),?,?,? FROM numbers WHERE NOT EXISTS(SELECT 1 FROM question_ids WHERE question_id=printf('%05d',n)) AND NOT EXISTS(SELECT 1 FROM question_registry WHERE question_id=printf('%05d',n)) ORDER BY n LIMIT ? RETURNING question_id`)
-      .bind(input.qbankId, user.uid, now, count)
-      .all<{ question_id: string }>();
-  const ids = allocated.results.map((x) => x.question_id);
+  const ids = await allocateQuestionIds(count, input.qbankId, user.uid);
   if (ids.length !== count)
     return json({ error: 'Question ID capacity reached.' }, 409);
   return json({ ids });
@@ -2143,18 +2425,41 @@ export async function uploadMedia(
 ) {
   assertSameOrigin(request);
   const authorization = imageKitAuthorization();
-  if (!authorization)
+  if (!hasR2Storage() && !authorization)
     return json(
-      { error: 'ImageKit storage is not configured on this deployment.' },
+      { error: 'Asset storage is not configured on this deployment.' },
       503,
     );
   const user = await currentUser(request);
   if (!user || user.status !== 'approved')
     return json({ error: 'Approved account required.' }, 403);
-  const declaredLength = Number(request.headers.get('content-length') ?? 0);
-  if (declaredLength > 11 * 1024 * 1024)
-    return json({ error: 'Upload a valid image smaller than 10 MB.' }, 413);
-  const form = await request.formData();
+  const limits = getPlanLimits(user.effectivePlan ?? user.tier);
+  if (!limits.canUploadImages || (kind === 'notes' && !limits.canUsePrivateNotes))
+    return json(
+      {
+        error:
+          kind === 'notes'
+            ? 'Private Notes are available with Pro.'
+            : 'Image Upload is available with Pro.',
+      },
+      403,
+    );
+  const contentType = request.headers.get('content-type') ?? '';
+  if (!contentType.toLowerCase().startsWith('multipart/form-data'))
+    return json({ error: 'Upload a valid multipart image request.' }, 400);
+  let uploadBody: ArrayBuffer;
+  try {
+    uploadBody = await readLimitedBytes(request, 11 * 1024 * 1024);
+  } catch (error) {
+    if (error instanceof Response)
+      return json({ error: 'Upload a valid image smaller than 10 MB.' }, 413);
+    throw error;
+  }
+  const form = await new Request('https://qraft.internal/upload', {
+    method: 'POST',
+    headers: { 'content-type': contentType },
+    body: uploadBody,
+  }).formData();
   const file = form.get('file');
   const qbankValue = form.get('qbankId');
   const questionValue = form.get('questionId');
@@ -2176,7 +2481,7 @@ export async function uploadMedia(
       { error: 'Upload a JPEG, PNG, WebP, or GIF image smaller than 10 MB.' },
       400,
     );
-  const state = (await storedState()).state;
+  const state = await bankAccessState(qbankId);
   const bank = state.qbanks.find((item) => item.id === qbankId);
   const permitted =
     bank &&
@@ -2193,24 +2498,110 @@ export async function uploadMedia(
       },
       403,
     );
+  const bytes = await file.arrayBuffer();
+  if (detectedImageMime(bytes) !== file.type)
+    return json(
+      { error: 'The file content does not match its declared image type.' },
+      400,
+    );
   const usage = await env.DB.prepare(
-    'SELECT COALESCE(SUM(size), 0) AS total FROM media',
-  ).first<{ total: number }>();
-  const currentBytes = Number(usage?.total ?? 0);
-  if (!Number.isFinite(currentBytes) || currentBytes < 0)
-    return json({ error: 'Image storage usage could not be verified.' }, 503);
-  if (currentBytes + file.size > IMAGEKIT_STORAGE_LIMIT_BYTES) {
+    "SELECT coalesce(sum(size),0) AS bytes FROM media WHERE owner_id=? AND status='ready'",
+  )
+    .bind(user.uid)
+    .first<{ bytes: number }>();
+  if (Number(usage?.bytes ?? 0) + file.size > limits.maxImageStorageBytes)
     return json(
       {
-        error:
-          'The 3 GB image storage safety limit has been reached. Delete unused images before uploading more.',
+        error: `Your ${limits.name} image storage allowance has been reached. Delete unused images before uploading more.`,
       },
       413,
     );
-  }
+  const fileHash = await sha256Bytes(bytes);
+  const duplicate = await env.DB.prepare(
+    "SELECT key,provider FROM media WHERE owner_id=? AND qbank_id=? AND file_hash=? AND provider='r2' AND status='ready' LIMIT 1",
+  )
+    .bind(user.uid, qbankId, fileHash)
+    .first<{ key: string; provider: string }>();
+  if (duplicate)
+    return json({
+      url:
+        duplicate.provider === 'r2'
+          ? `/api/cloudflare/media/${duplicate.key
+              .split('/')
+              .map(encodeURIComponent)
+              .join('/')}`
+          : duplicate.key,
+      duplicate: true,
+    });
+
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const now = new Date().toISOString();
+  if (hasR2Storage()) {
+    const extension =
+      file.type === 'image/jpeg'
+        ? 'jpg'
+        : file.type === 'image/png'
+          ? 'png'
+          : file.type === 'image/gif'
+            ? 'gif'
+            : 'webp';
+    const safeQbank = qbankId.replace(/[^a-zA-Z0-9_-]/g, '-');
+    const safeQuestion = questionId.replace(/[^a-zA-Z0-9_-]/g, '-');
+    const key = `${kind}/${safeQbank}/${safeQuestion}/${fileHash.slice(0, 16)}-${crypto.randomUUID()}.${extension}`;
+    let stored;
+    try {
+      stored = await r2StorageService.upload(key, bytes, {
+        contentType: file.type,
+        cacheControl: 'private, max-age=31536000, immutable',
+        ownerId: user.uid,
+        qbankId,
+        size: file.size,
+      });
+    } catch (error) {
+      if (error instanceof R2QuotaExceededError)
+        return json({ error: error.message }, 429);
+      if (
+        error instanceof Error &&
+        error.message.startsWith('The 3 GB image storage safety limit')
+      )
+        return json({ error: error.message }, 413);
+      throw error;
+    }
+    try {
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO media (key,qbank_id,owner_id,content_type,size,provider,storage_key,file_hash,original_name,purpose,status,created_at,updated_at) VALUES (?,?,?,?,?,'r2',?,?,?,?, 'ready',?,?)",
+        ).bind(
+          stored.key,
+          qbankId,
+          user.uid,
+          file.type,
+          stored.size,
+          stored.key,
+          fileHash,
+          safeName,
+          kind,
+          now,
+          now,
+        ),
+      ]);
+    } catch (error) {
+      await r2StorageService.delete(stored.key, stored.size);
+      throw error;
+    }
+    return json(
+      {
+        url: `/api/cloudflare/media/${stored.key
+          .split('/')
+          .map(encodeURIComponent)
+          .join('/')}`,
+      },
+      201,
+    );
+  }
+
   const upload = new FormData();
-  upload.append('file', file, safeName);
+  upload.append('file', new File([bytes], safeName, { type: file.type }), safeName);
   upload.append('fileName', `${Date.now()}-${crypto.randomUUID()}-${safeName}`);
   upload.append('folder', `/qraft/qbanks/${qbankId}/${kind}/${questionId}`);
   upload.append('useUniqueFileName', 'true');
@@ -2219,7 +2610,7 @@ export async function uploadMedia(
     'https://upload.imagekit.io/api/v1/files/upload',
     {
       method: 'POST',
-      headers: { authorization, accept: 'application/json' },
+      headers: { authorization: authorization!, accept: 'application/json' },
       body: upload,
     },
   );
@@ -2234,13 +2625,15 @@ export async function uploadMedia(
       502,
     );
   }
-  const now = new Date().toISOString();
   try {
-    await env.DB.prepare(
-      'INSERT INTO media (key, qbank_id, owner_id, content_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    )
-      .bind(result.fileId, qbankId, user.uid, file.type, file.size, now)
-      .run();
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO media (key,qbank_id,owner_id,content_type,size,provider,storage_key,file_hash,original_name,purpose,status,created_at,updated_at) VALUES (?,?,?,?,?,'imagekit',?,?,?,?, 'ready',?,?)",
+      ).bind(result.fileId, qbankId, user.uid, file.type, file.size, result.fileId, fileHash, safeName, kind, now, now),
+      env.DB.prepare(
+        "INSERT INTO counters(id,value,updated_at) VALUES('media-bytes',?,?) ON CONFLICT(id) DO UPDATE SET value=value+excluded.value,updated_at=excluded.updated_at",
+      ).bind(file.size, now),
+    ]);
   } catch (error) {
     await deleteImageKitFile(result.fileId);
     throw error;
@@ -2252,46 +2645,90 @@ export async function serveMedia(request: Request, key: string) {
   const user = await currentUser(request);
   if (!user) return new Response('Authentication required.', { status: 401 });
   const metadata = await env.DB.prepare(
-    'SELECT qbank_id FROM media WHERE key = ?',
+    'SELECT qbank_id,provider,storage_key FROM media WHERE key = ?',
   )
     .bind(key)
-    .first<{ qbank_id: string }>();
+    .first<{ qbank_id: string; provider: string; storage_key: string | null }>();
   if (!metadata) return new Response('Not found.', { status: 404 });
-  const state = (await storedState()).state;
+  const state = await bankAccessState(metadata.qbank_id);
   const bank = state.qbanks.find((item) => item.id === metadata.qbank_id);
   if (!bank || !canAccessBank(user, bank, state.memberships))
     return new Response('Forbidden.', { status: 403 });
-  return new Response(
-    'This legacy media URL is no longer available. Re-upload the image to ImageKit.',
-    { status: 410 },
-  );
+  if (metadata.provider !== 'r2' || !metadata.storage_key)
+    return new Response('This legacy asset is served by its original URL.', {
+      status: 410,
+    });
+  let object;
+  try {
+    object = await r2StorageService.get(metadata.storage_key);
+  } catch (error) {
+    if (error instanceof R2QuotaExceededError)
+      return new Response(error.message, {
+        status: 429,
+        headers: { 'cache-control': 'no-store' },
+      });
+    throw error;
+  }
+  if (!object) return new Response('Not found.', { status: 404 });
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('etag', object.httpEtag);
+  headers.set('cache-control', 'private, max-age=31536000, immutable');
+  headers.set('x-content-type-options', 'nosniff');
+  return new Response(object.body, { headers });
 }
 
 export async function deleteBankMedia(request: Request, qbankId: string) {
   assertSameOrigin(request);
   const user = await currentUser(request);
-  const state = (await storedState()).state;
+  const state = await bankAccessState(qbankId);
   const bank = state.qbanks.find((item) => item.id === qbankId);
   if (!user || !bank || !canManageBank(user, bank))
     return json({ error: 'QBank management access required.' }, 403);
-  if (!imageKitAuthorization())
+  const rows = await env.DB.prepare(
+    'SELECT key,provider,storage_key,size FROM media WHERE qbank_id = ?',
+  )
+    .bind(qbankId)
+    .all<{
+      key: string;
+      provider: string;
+      storage_key: string | null;
+      size: number;
+    }>();
+  if (rows.results.some((row) => row.provider === 'r2') && !hasR2Storage())
+    return json({ error: 'R2 storage is not configured.' }, 503);
+  if (
+    rows.results.some((row) => row.provider !== 'r2') &&
+    !imageKitAuthorization()
+  )
     return json(
-      { error: 'ImageKit storage is not configured on this deployment.' },
+      { error: 'Legacy ImageKit storage is not configured.' },
       503,
     );
-  const rows = await env.DB.prepare('SELECT key FROM media WHERE qbank_id = ?')
-    .bind(qbankId)
-    .all<{ key: string }>();
   const deletions = await Promise.all(
-    rows.results.map((row) => deleteImageKitFile(row.key)),
+    rows.results.map(async (row) => {
+      if (row.provider === 'r2' && row.storage_key && hasR2Storage()) {
+        await r2StorageService.delete(row.storage_key, Number(row.size || 0));
+        return true;
+      }
+      return deleteImageKitFile(row.key);
+    }),
   );
   if (deletions.some((deleted) => !deleted))
     return json(
       { error: 'Some images could not be deleted from ImageKit. Try again.' },
       502,
     );
-  await env.DB.prepare('DELETE FROM media WHERE qbank_id = ?')
-    .bind(qbankId)
-    .run();
+  const removedLegacyBytes = rows.results.reduce(
+    (total, row) =>
+      row.provider === 'r2' ? total : total + Number(row.size || 0),
+    0,
+  );
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM media WHERE qbank_id = ?').bind(qbankId),
+    env.DB.prepare(
+      "UPDATE counters SET value=max(0,value-?),updated_at=? WHERE id='media-bytes'",
+    ).bind(removedLegacyBytes, new Date().toISOString()),
+  ]);
   return json({ ok: true });
 }
