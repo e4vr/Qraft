@@ -35,7 +35,9 @@ export type PlanLimits = {
   fairUse: boolean;
 };
 
-const GIB = 1024 ** 3;
+// Image uploads are part of contributions and are available to every plan.
+// The storage service still enforces its deployment-wide safety cap.
+const UNLIMITED_IMAGE_STORAGE = Number.MAX_SAFE_INTEGER;
 
 export const PLAN_LIMITS: Record<PlanId, PlanLimits> = {
   free: {
@@ -46,18 +48,18 @@ export const PLAN_LIMITS: Record<PlanId, PlanLimits> = {
     maxQuestionsPerExam: 15,
     canCreateQBank: false,
     canCreatePrivateQBank: false,
-    canAddQuestions: false,
+    canAddQuestions: true,
     canUseJsonImport: false,
     jsonImportDailyLimit: 0,
     jsonQuestionsPerImport: 0,
     maxPendingReviewQuestions: 0,
-    canUploadImages: false,
-    maxImageStorageBytes: 0,
+    canUploadImages: true,
+    maxImageStorageBytes: UNLIMITED_IMAGE_STORAGE,
     canUsePrivateNotes: false,
     canUseFlashcards: false,
     maxFlashcardDecks: 0,
     maxFlashcards: 0,
-    canContribute: false,
+    canContribute: true,
     canSuggestCorrections: true,
     fairUse: false,
   },
@@ -69,18 +71,18 @@ export const PLAN_LIMITS: Record<PlanId, PlanLimits> = {
     maxQuestionsPerExam: 50,
     canCreateQBank: false,
     canCreatePrivateQBank: false,
-    canAddQuestions: false,
+    canAddQuestions: true,
     canUseJsonImport: false,
     jsonImportDailyLimit: 0,
     jsonQuestionsPerImport: 0,
     maxPendingReviewQuestions: 0,
-    canUploadImages: false,
-    maxImageStorageBytes: 0,
+    canUploadImages: true,
+    maxImageStorageBytes: UNLIMITED_IMAGE_STORAGE,
     canUsePrivateNotes: false,
     canUseFlashcards: false,
     maxFlashcardDecks: 0,
     maxFlashcards: 0,
-    canContribute: false,
+    canContribute: true,
     canSuggestCorrections: true,
     fairUse: false,
   },
@@ -98,7 +100,7 @@ export const PLAN_LIMITS: Record<PlanId, PlanLimits> = {
     jsonQuestionsPerImport: 75,
     maxPendingReviewQuestions: 300,
     canUploadImages: true,
-    maxImageStorageBytes: GIB,
+    maxImageStorageBytes: UNLIMITED_IMAGE_STORAGE,
     canUsePrivateNotes: true,
     canUseFlashcards: true,
     maxFlashcardDecks: 3,
@@ -121,7 +123,7 @@ export const PLAN_LIMITS: Record<PlanId, PlanLimits> = {
     jsonQuestionsPerImport: 150,
     maxPendingReviewQuestions: 1_000,
     canUploadImages: true,
-    maxImageStorageBytes: 5 * GIB,
+    maxImageStorageBytes: UNLIMITED_IMAGE_STORAGE,
     canUsePrivateNotes: true,
     canUseFlashcards: true,
     maxFlashcardDecks: 25,

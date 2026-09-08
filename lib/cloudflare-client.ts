@@ -1,6 +1,5 @@
 import type { AppState, AppUser, CollaborationState } from './medguard-types';
 import { api } from './api-client';
-import type { PlanLimits } from './plan-config';
 export { api } from './api-client';
 
 export async function observeCloudflareUser(callback: (user?: AppUser) => void): Promise<() => void> {
@@ -64,20 +63,6 @@ export async function registerStartedExam(
   });
 }
 
-export async function loadPlanStatus(): Promise<{
-  plan: AppUser['tier'];
-  limits: PlanLimits;
-  usage: {
-    lifetimeStartedExams: number;
-    monthlyStartedExams: number;
-    dailyJsonImports: number;
-    pendingReviewQuestions: number;
-    activeImageStorageBytes: number;
-  };
-}> {
-  return api('/platform/plan-status');
-}
-
 async function upload(file: File, qbankId: string, questionId: string, kind: 'notes' | 'questions') {
   const form = new FormData();
   form.append('file', file);
@@ -116,6 +101,32 @@ export interface QBankLinkInvitation {
   role: 'viewer';
 }
 
+type CollaborationResponse = {
+  collaboration: CollaborationState;
+  user?: AppUser;
+};
+
+const collaborationRequests = new Map<
+  string,
+  Promise<CollaborationResponse>
+>();
+
+function collaborationRequest(user: AppUser, includeUser: boolean) {
+  const key = `${user.uid}:${includeUser}`;
+  const existing = collaborationRequests.get(key);
+  if (existing) return existing;
+  const request = api<CollaborationResponse>(
+    `/collaboration${includeUser ? '?includeUser=1' : ''}`,
+  );
+  collaborationRequests.set(key, request);
+  const cleanup = () => {
+    if (collaborationRequests.get(key) === request)
+      collaborationRequests.delete(key);
+  };
+  void request.then(cleanup, cleanup);
+  return request;
+}
+
 export async function previewCloudflareQBankInvitation(qbankId: string, token: string): Promise<QBankLinkInvitation> {
   return (await api<{ invitation: QBankLinkInvitation }>('/qbanks/invite-preview', {
     method: 'POST',
@@ -128,8 +139,15 @@ function changed<T>(next: T[], previous: T[], key: (item: T) => string) {
   return next.filter((item) => old.get(key(item)) !== JSON.stringify(item));
 }
 
-export async function loadCollaborationState(_user: AppUser): Promise<CollaborationState> {
-  return (await api<{ collaboration: CollaborationState }>('/collaboration')).collaboration;
+export async function loadCollaborationState(user: AppUser): Promise<CollaborationState> {
+  return (await collaborationRequest(user, false)).collaboration;
+}
+
+export async function loadCollaborationSnapshot(
+  user: AppUser,
+): Promise<{ collaboration: CollaborationState; user: AppUser }> {
+  const result = await collaborationRequest(user, true);
+  return { collaboration: result.collaboration, user: result.user! };
 }
 
 export async function saveCollaborationState(next: CollaborationState, previous: CollaborationState): Promise<void> {

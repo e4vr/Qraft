@@ -1,4 +1,5 @@
 import { platformApi } from '@/lib/platform-server';
+import { deleteOwnAccount } from '@/lib/account-deletion-server';
 import { contactApi } from '@/lib/contact-server';
 import { connectRealtime, notifyMutation } from '@/lib/realtime-server';
 import { env } from 'cloudflare:workers';
@@ -19,6 +20,7 @@ import {
   saveCollaboration,
   saveState,
   serveMedia,
+  shareCurrentUserRequest,
   uploadMedia,
   updateOwnProfile,
   verifyMfa,
@@ -66,7 +68,10 @@ async function safely(request: Request, run: () => Promise<Response>) {
     const notification = request.method === 'GET' ? undefined : request.clone();
     const response = await run();
     if (notification && response.ok) {
-      try { await notifyMutation(notification as Request); }
+      try {
+        shareCurrentUserRequest(request, notification);
+        await notifyMutation(notification as Request);
+      }
       catch { console.error(JSON.stringify({ event: 'realtime_notification_failed' })); }
     }
     return response;
@@ -134,6 +139,7 @@ export async function PUT(request: Request) {
 export async function DELETE(request: Request) {
   return safely(request, async () => {
   const [scope, action] = pathParts(request);
+  if (scope === 'auth' && action === 'account') return deleteOwnAccount(request);
   if (scope === 'contact') return contactApi(request);
   if (scope === 'platform' && action) return platformApi(request, action);
   if (scope === 'media' && action) return deleteBankMedia(request, action);

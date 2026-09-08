@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { subscribeLive } from '@/lib/realtime-client';
-import { Crown } from 'lucide-react';
+import { Check, Crown, Eye, X } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { observeCloudflareUser } from '@/lib/application-services';
 import type { AppUser } from '@/lib/medguard-types';
@@ -52,6 +52,7 @@ export function Subscribe({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [success, setSuccess] = useState('');
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<Exclude<PlanId, 'free'>>('pro');
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   useEffect(() => {
@@ -165,6 +166,69 @@ export function Subscribe({
           );
         })}
       </div>
+      <button
+        type="button"
+        onClick={() => setDetailsOpen(true)}
+        className="q-button mx-auto inline-flex items-center gap-2 border"
+      >
+        <Eye className="size-4" />
+        استعرض تفاصيل الخطط
+      </button>
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent className="max-h-[88dvh] overflow-y-auto border-0 bg-[#f7fbfc] p-0 shadow-2xl dark:bg-slate-950 sm:max-w-5xl">
+          <div className="border-b bg-gradient-to-br from-[#e8f8f7] via-background to-background px-5 py-7 text-center dark:from-[#0d2c36] sm:px-8">
+            <DialogTitle className="text-2xl font-black tracking-tight text-[#07233d] dark:text-white sm:text-3xl">
+              خطط اشتراك QBank
+            </DialogTitle>
+            <p className="mt-2 text-sm text-muted-foreground sm:text-base">
+              اختر الخطة المناسبة لطريقتك في الدراسة والمساهمة
+            </p>
+          </div>
+          <div className="px-3 pb-5 pt-4 sm:px-6 sm:pb-7">
+          <div className="overflow-x-auto rounded-3xl border border-[#d6e8e8] bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+            <table className="w-full min-w-[700px] border-collapse text-sm">
+              <thead className="text-left">
+                <tr>
+                  <th className="w-[25%] p-4 align-bottom font-semibold text-muted-foreground">المميزات</th>
+                  {PLAN_ORDER.map((plan) => (
+                    <th key={plan} className={`relative p-4 text-center align-bottom ${plan === 'pro' ? 'border-x-2 border-t-2 border-[#18b39f] bg-[#effcf9] dark:bg-[#123b3b]' : ''}`}>
+                      {plan === 'pro' && <span className="absolute -top-0.5 left-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-[#18b39f] px-3 py-1 text-[10px] font-bold text-white shadow-sm">الأكثر شيوعًا</span>}
+                      <span className="block text-lg font-black text-[#07233d] dark:text-white">{PLAN_LIMITS[plan].name}</span>
+                      <span className="mt-1 block text-xs font-normal text-muted-foreground">{PLAN_LIMITS[plan].priceSarYear ? `${PLAN_LIMITS[plan].priceSarYear} SAR / سنة` : 'ابدأ مجانًا'}</span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ['السعر السنوي', (plan: PlanId) => PLAN_LIMITS[plan].priceSarYear ? `${PLAN_LIMITS[plan].priceSarYear} SAR` : 'مجاني'],
+                  ['الاختبارات', (plan: PlanId) => PLAN_LIMITS[plan].lifetimeExamLimit ? `${PLAN_LIMITS[plan].lifetimeExamLimit} مدى الحياة` : `${PLAN_LIMITS[plan].monthlyExamLimit} شهريًا`],
+                  ['الأسئلة لكل اختبار', (plan: PlanId) => String(PLAN_LIMITS[plan].maxQuestionsPerExam)],
+                  ['إنشاء QBank', (plan: PlanId) => PLAN_LIMITS[plan].canCreateQBank],
+                  ['إضافة الأسئلة والمساهمات', (plan: PlanId) => PLAN_LIMITS[plan].canAddQuestions && PLAN_LIMITS[plan].canContribute],
+                  ['رفع صور المساهمات', (plan: PlanId) => PLAN_LIMITS[plan].canUploadImages],
+                  ['استيراد JSON / AI', (plan: PlanId) => PLAN_LIMITS[plan].canUseJsonImport],
+                  ['الملاحظات الخاصة', (plan: PlanId) => PLAN_LIMITS[plan].canUsePrivateNotes],
+                  ['Flashcards', (plan: PlanId) => PLAN_LIMITS[plan].canUseFlashcards],
+                ].map(([label, value]) => (
+                  <tr key={String(label)} className="border-t">
+                    <td className="border-t p-3 font-medium text-[#344b63] dark:text-slate-200">{String(label)}</td>
+                    {PLAN_ORDER.map((plan) => {
+                      const result = (value as (plan: PlanId) => string | boolean)(plan);
+                      return (
+                        <td key={plan} className={`border-t p-3 text-center text-muted-foreground ${plan === 'pro' ? 'border-x-2 border-x-[#18b39f] bg-[#effcf9] dark:bg-[#123b3b]' : ''}`}>
+                          {typeof result === 'boolean' ? (result ? <span className="mx-auto grid size-6 place-items-center rounded-full bg-[#18b39f] text-white"><Check className="size-4" /></span> : <span className="mx-auto grid size-6 place-items-center rounded-full bg-red-100 text-red-500 dark:bg-red-950"><X className="size-4" /></span>) : <span className="font-semibold text-[#07233d] dark:text-slate-100">{result}</span>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       <div className="rounded-2xl border border-amber-400/40 bg-card p-5">
         {price ? (
           <div aria-live="polite">
@@ -344,7 +408,14 @@ export function SubscriptionAdmin({
     [message, setMessage] = useState(''),
     [busy, setBusy] = useState(false),
     [revision, setRevision] = useState(0);
-  useEffect(() => subscribeLive(() => setRevision(r => r + 1)), []);
+  useEffect(
+    () =>
+      subscribeLive(
+        () => setRevision((revision) => revision + 1),
+        [section === 'discounts' ? 'pricing' : 'account'],
+      ),
+    [section],
+  );
   useEffect(() => {
     let live = true;
     const timer = setTimeout(() => {

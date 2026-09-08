@@ -14,7 +14,10 @@ import {
   canAccessBank,
   canManageBank,
   canReviewBank,
+  hasAccessManagerRole,
+  hasModeratorRole,
   initialCollaborationState,
+  isPlatformRole,
   normalizeCollaborationState,
   normalizeEmail,
   normalizePhone,
@@ -228,8 +231,7 @@ async function safeProfile(
   mfaEnrolled: boolean,
   mfaVerified = true,
 ): Promise<AppUser> {
-  const isAdmin =
-    profile.role === 'super_admin' || profile.platformRoles.length > 0;
+  const isAdmin = hasAccessManagerRole(profile);
   return applyEffectiveEntitlement({
     ...profile,
     isAdmin,
@@ -269,7 +271,20 @@ export async function profileById(uid: string) {
     }>();
 }
 
-export async function currentUser(
+const currentUserRequests = new WeakMap<
+  object,
+  Map<boolean, Promise<AppUser | undefined>>
+>();
+
+export function shareCurrentUserRequest(
+  source: object,
+  target: object,
+) {
+  const cached = currentUserRequests.get(source);
+  if (cached) currentUserRequests.set(target, cached);
+}
+
+async function resolveCurrentUser(
   request: Request,
   requireVerified = true,
 ): Promise<AppUser | undefined> {
@@ -300,6 +315,23 @@ export async function currentUser(
     profile,
     Boolean(enrolledTotpSecret(row.totp_secret)),
   );
+}
+
+export function currentUser(
+  request: Request,
+  requireVerified = true,
+): Promise<AppUser | undefined> {
+  let requests = currentUserRequests.get(request);
+  if (!requests) {
+    requests = new Map();
+    currentUserRequests.set(request, requests);
+  }
+  let user = requests.get(requireVerified);
+  if (!user) {
+    user = resolveCurrentUser(request, requireVerified);
+    requests.set(requireVerified, user);
+  }
+  return user;
 }
 
 async function createSession(
@@ -495,7 +527,7 @@ export async function register(request: Request) {
     role: isRoot ? 'super_admin' : 'student',
     status: isRoot ? 'approved' : 'pending',
     createdAt: now,
-    tier: isRoot ? 'unlimited' : 'free',
+    tier: 'free',
     platformRoles: [],
     universityIdRegistered: isRoot ? true : universityIdRegistered,
   };
@@ -1010,15 +1042,21 @@ async function recordsByTypes(types: string[]) {
   }));
 }
 
-async function allRecords(qbankIds: Iterable<string>) {
+async function allRecords(
+  qbankIds: Iterable<string>,
+  excludedTypes: string[] = [],
+) {
   const ids = [...new Set([...qbankIds].filter(Boolean))];
-  const where = ids.length
+  const scope = ids.length
     ? `qbank_id IS NULL OR qbank_id IN (${ids.map(() => '?').join(',')})`
     : 'qbank_id IS NULL';
+  const exclusions = excludedTypes.length
+    ? ` AND type NOT IN (${excludedTypes.map(() => '?').join(',')})`
+    : '';
   const result = await env.DB.prepare(
-    `SELECT type,id,payload FROM records WHERE ${where}`,
+    `SELECT type,id,payload FROM records WHERE (${scope})${exclusions}`,
   )
-    .bind(...ids)
+    .bind(...ids, ...excludedTypes)
     .all<StoredRecord>();
   return result.results.map((row) => ({
     collection: row.type,
@@ -1032,10 +1070,16 @@ function recordsToState(
   profilesRows: MemberProfile[] = [],
 ) {
   const state = initialCollaborationState();
+  const recordsByType = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const records = recordsByType.get(row.collection);
+    if (records) records.push(row);
+    else recordsByType.set(row.collection, [row]);
+  }
   const values = <T>(type: string) =>
-    rows.filter((row) => row.collection === type).map((row) => row.value as T);
+    (recordsByType.get(type) ?? []).map((row) => row.value as T);
   const one = <T>(type: string, id: string) =>
-    rows.find((row) => row.collection === type && row.id === id)?.value as
+    recordsByType.get(type)?.find((row) => row.id === id)?.value as
       | T
       | undefined;
   const qbanks = values<QBank>('qbanks');
@@ -1185,8 +1229,7 @@ async function collaborationStateForOperations(
   ];
 
   const needsAllProfiles =
-    user.role === 'super_admin' ||
-    user.platformRoles.includes('access_manager') ||
+    hasAccessManagerRole(user) ||
     operations.some((operation) => operation.collection === 'system');
   const profileIds = operations
     .filter((operation) => operation.collection === 'profiles')
@@ -1217,15 +1260,6 @@ async function collaborationStateForOperations(
     ).values(),
   ];
   return recordsToState(rows, profiles);
-}
-
-const protectedSubscriptionsSql =
-  "SELECT user_id FROM subscriptions WHERE method != 'manual' OR paid > 0 OR discount_code IS NOT NULL UNION SELECT user_id FROM subscription_events WHERE status='success' AND (final > 0 OR code IS NOT NULL)";
-async function protectedSubscriptionUsers() {
-  const result = await env.DB.prepare(protectedSubscriptionsSql).all<{
-    user_id: string;
-  }>();
-  return new Set(result.results.map((row) => row.user_id));
 }
 
 export async function updateOwnProfile(request: Request) {
@@ -1333,7 +1367,6 @@ export async function changeOwnPassword(request: Request) {
 
 function accessManagerProfile(
   member: MemberProfile,
-  protectedAccount: boolean,
 ): MemberProfile {
   return {
     uid: member.uid,
@@ -1347,7 +1380,6 @@ function accessManagerProfile(
     suspended: member.suspended,
     universityIdRegistered: member.universityIdRegistered,
     universityIdVerifiedManually: member.universityIdVerifiedManually,
-    subscriptionProtected: protectedAccount,
   } as MemberProfile;
 }
 
@@ -1358,7 +1390,6 @@ export async function loadCollaboration(request: Request) {
   const catalogRows = await recordsByTypes([
     'qbanks',
     'qbankMemberships',
-    'qbankInvitations',
   ]);
   const catalog = recordsToState(catalogRows);
   const allowedBankIds = new Set(
@@ -1372,9 +1403,12 @@ export async function loadCollaboration(request: Request) {
       .map((bank) => bank.id),
   );
   allowedBankIds.add('smle-gs');
-  const rows = await allRecords(allowedBankIds);
+  const rows = [
+    ...catalogRows.filter((row) => row.collection === 'qbanks'),
+    ...(await allRecords(allowedBankIds, ['qbanks', 'auditLog'])),
+  ];
   const profileResult =
-    user.role === 'super_admin' || user.platformRoles.includes('access_manager')
+    hasAccessManagerRole(user)
       ? await env.DB.prepare('SELECT profile_json FROM profiles').all<{
           profile_json: string;
         }>()
@@ -1431,31 +1465,28 @@ export async function loadCollaboration(request: Request) {
     ),
   );
   state.roleApplications = state.roleApplications.filter(
-    (item) => item.userId === user.uid || user.role === 'super_admin',
+    (item) => item.userId === user.uid || hasModeratorRole(user),
   );
   if (user.role !== 'super_admin') {
     state.allowedUniversityIds = [];
     state.adminInvites = [];
     state.auditLog = [];
   }
-  if (
-    user.role !== 'super_admin' &&
-    !user.platformRoles.includes('access_manager')
-  ) {
+  if (!hasAccessManagerRole(user)) {
     state.members = [];
     state.blockedAccess = { emails: [], phones: [], universityIds: [] };
   }
-  if (
-    user.role !== 'super_admin' &&
-    user.platformRoles.includes('access_manager')
-  ) {
-    const protectedUsers = await protectedSubscriptionUsers();
+  if (user.role !== 'super_admin' && hasAccessManagerRole(user)) {
     state.members = state.members.map((member) =>
-      accessManagerProfile(member, protectedUsers.has(member.uid)),
+      accessManagerProfile(member),
     );
     state.blockedAccess.phones = [];
   }
-  return json({ collaboration: state });
+  return json(
+    new URL(request.url).searchParams.get('includeUser') === '1'
+      ? { collaboration: state, user }
+      : { collaboration: state },
+  );
 }
 
 function bankIdForOperation(
@@ -1491,31 +1522,28 @@ function profileUpdateAllowed(
 ) {
   if (operation.type !== 'set' || value.uid !== operation.id) return false;
   const existing = state.members.find((member) => member.uid === operation.id);
-  if (!existing) return false;
-  if (user.role === 'super_admin') {
-    if (existing.role === 'super_admin')
-      return (
-        value.uid === user.uid &&
-        value.role === 'super_admin' &&
-        value.email === existing.email &&
-        value.createdAt === existing.createdAt
-      );
-    return (
-      value.role !== 'super_admin' &&
-      value.email === existing.email &&
-      value.uid === existing.uid &&
-      value.createdAt === existing.createdAt
-    );
+  if (!existing || existing.role === 'super_admin') return false;
+  const mutable = new Set<string>();
+  if (hasAccessManagerRole(user)) {
+    [
+      'status',
+      'suspended',
+      'approvedAt',
+      'approvedById',
+      'approvedByName',
+      'universityIdVerifiedManually',
+    ].forEach((key) => mutable.add(key));
   }
-  if (!user.platformRoles.includes('access_manager')) return false;
-  const mutable = new Set([
-    'status',
-    'suspended',
-    'approvedAt',
-    'approvedById',
-    'approvedByName',
-    'universityIdVerifiedManually',
-  ]);
+  if (hasModeratorRole(user)) mutable.add('platformRoles');
+  if (!mutable.size) return false;
+  if (
+    'platformRoles' in value &&
+    (!Array.isArray(value.platformRoles) ||
+      value.platformRoles.length > 3 ||
+      new Set(value.platformRoles).size !== value.platformRoles.length ||
+      !value.platformRoles.every(isPlatformRole))
+  )
+    return false;
   const keys = new Set([...Object.keys(existing), ...Object.keys(value)]);
   return [...keys].every(
     (key) =>
@@ -1733,14 +1761,15 @@ function roleApplicationChangeAllowed(
   operation: RecordOperation,
   value: Record<string, unknown>,
   state: CollaborationState,
-  isRoot: boolean,
+  canManageRoles: boolean,
 ) {
   const current = state.roleApplications.find(
     (item) => item.id === operation.id,
   );
-  if (operation.type === 'delete') return isRoot;
+  if (current && !isPlatformRole(current.requestedRole)) return false;
+  if (operation.type === 'delete') return canManageRoles;
   if (value.id !== operation.id) return false;
-  if (isRoot) {
+  if (canManageRoles) {
     if (!current) return false;
     const immutable = [
       'id',
@@ -1765,6 +1794,7 @@ function roleApplicationChangeAllowed(
   if (
     value.userId !== user.uid ||
     value.status !== 'pending' ||
+    !isPlatformRole(value.requestedRole) ||
     value.superAdminUid !== state.security.superAdminUid ||
     typeof value.reason !== 'string' ||
     !value.reason.trim()
@@ -1798,7 +1828,8 @@ function recordAllowed(
     (bank) => bank.id === bankIdForOperation(operation, value, state),
   );
   const isRoot = user.role === 'super_admin';
-  const accessManager = isRoot || user.platformRoles.includes('access_manager');
+  const accessManager = hasAccessManagerRole(user);
+  const canManageRoles = hasModeratorRole(user);
   const limits = getPlanLimits(user.effectivePlan ?? user.tier);
   const canManage = existing ? canManageBank(user, existing) : false;
   const canReview = existing
@@ -1811,10 +1842,8 @@ function recordAllowed(
     if (operation.type === 'set' && !existing)
       return (
         value.id === operation.id &&
-        (limits.canCreateQBank || accessManager) &&
-        (value.visibility !== 'private' ||
-          limits.canCreatePrivateQBank ||
-          accessManager) &&
+        limits.canCreateQBank &&
+        (value.visibility !== 'private' || limits.canCreatePrivateQBank) &&
         value.ownerId === user.uid &&
         (value.essential !== true || isRoot)
       );
@@ -1854,7 +1883,13 @@ function recordAllowed(
       sharedNoteChangeAllowed(user, operation, value, state, canManage)
     );
   if (operation.collection === 'roleApplications')
-    return roleApplicationChangeAllowed(user, operation, value, state, isRoot);
+    return roleApplicationChangeAllowed(
+      user,
+      operation,
+      value,
+      state,
+      canManageRoles,
+    );
   if (operation.collection === 'profiles')
     return accessManager && profileUpdateAllowed(user, operation, value, state);
   if (
@@ -1917,12 +1952,8 @@ export async function saveCollaboration(request: Request) {
   if (!Array.isArray(input.operations) || input.operations.length > 500)
     return json({ error: 'Invalid collaboration change set.' }, 400);
   const state = await collaborationStateForOperations(user, input.operations);
-  if (
-    user.role !== 'super_admin' &&
-    user.platformRoles.includes('access_manager')
-  ) {
-    const protectedUsers = await protectedSubscriptionUsers();
-    const mutable = new Set([
+  if (user.role !== 'super_admin' && hasAccessManagerRole(user)) {
+    const mutable = new Set<string>([
       'status',
       'suspended',
       'approvedAt',
@@ -1930,28 +1961,18 @@ export async function saveCollaboration(request: Request) {
       'approvedByName',
       'universityIdVerifiedManually',
     ]);
+    if (hasModeratorRole(user)) mutable.add('platformRoles');
     for (const operation of input.operations) {
       if (operation.collection === 'profiles') {
         const existing = state.members.find(
           (member) => member.uid === operation.id,
         );
-        if (
-          !existing ||
-          protectedUsers.has(operation.id) ||
-          existing.role === 'super_admin'
-        )
-          return json(
-            {
-              error:
-                'Only Superadmin can modify this account or its official subscription.',
-            },
-            403,
-          );
+        if (!existing || existing.role === 'super_admin')
+          return json({ error: 'This account cannot be modified.' }, 403);
         if (operation.type !== 'set' || !isRecord(operation.value))
           return json({ error: 'Invalid account update.' }, 403);
         const visible = accessManagerProfile(
           existing,
-          false,
         ) as unknown as Record<string, unknown>;
         if (
           Object.entries(operation.value).some(
@@ -1982,41 +2003,6 @@ export async function saveCollaboration(request: Request) {
         )
           return json(
             { error: 'Access Managers cannot manage phone blocks.' },
-            403,
-          );
-        const protectedMembers = state.members.filter(
-          (member) =>
-            protectedUsers.has(member.uid) || member.role === 'super_admin',
-        );
-        const changedProtected = protectedMembers.some(
-          (member) =>
-            (value.emails as unknown[]).some(
-              (email) =>
-                typeof email === 'string' &&
-                normalizeEmail(email) === normalizeEmail(member.email),
-            ) !==
-              state.blockedAccess.emails.some(
-                (email) =>
-                  normalizeEmail(email) === normalizeEmail(member.email),
-              ) ||
-            (value.universityIds as unknown[]).some(
-              (id) =>
-                typeof id === 'string' &&
-                normalizeUniversityId(id) ===
-                  normalizeUniversityId(member.universityId),
-            ) !==
-              state.blockedAccess.universityIds.some(
-                (id) =>
-                  normalizeUniversityId(id) ===
-                  normalizeUniversityId(member.universityId),
-              ),
-        );
-        if (changedProtected)
-          return json(
-            {
-              error:
-                'Only Superadmin can change blocks for official subscribers.',
-            },
             403,
           );
         operation.value = {
@@ -2125,49 +2111,6 @@ export async function saveCollaboration(request: Request) {
       };
     });
   const statements: D1PreparedStatement[] = [];
-  if (
-    user.role !== 'super_admin' &&
-    user.platformRoles.includes('access_manager')
-  ) {
-    // Recheck inside the atomic batch in case a subscription was purchased after authorization.
-    const affected = new Set(
-      input.operations
-        .filter((op) => op.collection === 'profiles')
-        .map((op) => op.id),
-    );
-    for (const op of input.operations.filter(
-      (op) => op.collection === 'system' && op.id === 'accessControl',
-    )) {
-      const next = op.value as CollaborationState['blockedAccess'];
-      for (const member of state.members) {
-        if (
-          next.emails.some(
-            (email) => normalizeEmail(email) === normalizeEmail(member.email),
-          ) !==
-            state.blockedAccess.emails.some(
-              (email) => normalizeEmail(email) === normalizeEmail(member.email),
-            ) ||
-          next.universityIds.some(
-            (id) =>
-              normalizeUniversityId(id) ===
-              normalizeUniversityId(member.universityId),
-          ) !==
-            state.blockedAccess.universityIds.some(
-              (id) =>
-                normalizeUniversityId(id) ===
-                normalizeUniversityId(member.universityId),
-            )
-        )
-          affected.add(member.uid);
-      }
-    }
-    if (affected.size)
-      statements.push(
-        env.DB.prepare(
-          `SELECT CASE WHEN EXISTS(SELECT 1 FROM (${protectedSubscriptionsSql}) WHERE user_id IN (SELECT value FROM json_each(?))) THEN json('Official subscription changed; Superadmin required') ELSE 1 END`,
-        ).bind(JSON.stringify([...affected])),
-      );
-  }
   if (recordDeletes.length)
     statements.push(
       env.DB.prepare(`DELETE FROM records WHERE rowid IN (
@@ -2178,39 +2121,6 @@ export async function saveCollaboration(request: Request) {
           AND record.id=json_extract(change.value, '$.id')
       )`).bind(JSON.stringify(recordDeletes)),
     );
-  for (const op of input.operations.filter(
-    (o) => o.collection === 'profiles' && o.type === 'set',
-  )) {
-    const before = state.members.find((m) => m.uid === op.id),
-      after = op.value as MemberProfile;
-    if (before && before.tier !== after.tier) {
-      const expiry = new Date(now);
-      expiry.setUTCFullYear(expiry.getUTCFullYear() + 1);
-      statements.push(
-        env.DB.prepare(
-          'INSERT INTO subscriptions(user_id,status,starts_at,expires_at,method,paid,updated_at) VALUES(?,?,?,?,?,0,?) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status,starts_at=excluded.starts_at,expires_at=excluded.expires_at,method=excluded.method,updated_at=excluded.updated_at',
-        ).bind(
-          op.id,
-          after.tier === 'pro' ? 'manually_activated' : 'cancelled',
-          now,
-          after.tier === 'pro' ? expiry.toISOString() : now,
-          'manual',
-          now,
-        ),
-      );
-      statements.push(
-        auditStatement(
-          user,
-          after.tier === 'pro'
-            ? 'subscription_manually_activated'
-            : 'subscription_cancelled',
-          op.id,
-          { tier: before.tier },
-          { tier: after.tier, expiresAt: expiry.toISOString() },
-        ),
-      );
-    }
-  }
   if (profileSets.length)
     statements.push(
       env.DB.prepare(`UPDATE profiles SET
@@ -2645,11 +2555,11 @@ export async function serveMedia(request: Request, key: string) {
   const user = await currentUser(request);
   if (!user) return new Response('Authentication required.', { status: 401 });
   const metadata = await env.DB.prepare(
-    'SELECT qbank_id,provider,storage_key FROM media WHERE key = ?',
+    'SELECT qbank_id,provider,storage_key,status FROM media WHERE key = ?',
   )
     .bind(key)
-    .first<{ qbank_id: string; provider: string; storage_key: string | null }>();
-  if (!metadata) return new Response('Not found.', { status: 404 });
+    .first<{ qbank_id: string; provider: string; storage_key: string | null; status: string }>();
+  if (!metadata || metadata.status === 'account_deleted') return new Response('Not found.', { status: 404 });
   const state = await bankAccessState(metadata.qbank_id);
   const bank = state.qbanks.find((item) => item.id === metadata.qbank_id);
   if (!bank || !canAccessBank(user, bank, state.memberships))

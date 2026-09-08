@@ -160,7 +160,7 @@ export function ReviewWorkspace({
       }
     };
     void load();
-    const unsubscribe = subscribeLive(() => void load());
+    const unsubscribe = subscribeLive(() => void load(), ['review-history']);
     return () => {
       active = false;
       unsubscribe();
@@ -203,29 +203,47 @@ export function ReviewWorkspace({
     () => new Set(reviewableBanks.map((bank) => bank.id)),
     [reviewableBanks],
   );
-  const pending = collaboration.proposals
-    .filter(
-      (proposal) =>
-        proposal.status === 'pending' &&
-        proposal.proposedById !== user.uid &&
-        bankIds.has(proposal.qbankId),
-    )
-    .sort((a, b) => b.proposedAt.localeCompare(a.proposedAt));
+  const pending = useMemo(
+    () =>
+      collaboration.proposals
+        .filter(
+          (proposal) =>
+            proposal.status === 'pending' &&
+            proposal.proposedById !== user.uid &&
+            bankIds.has(proposal.qbankId),
+        )
+        .sort((a, b) => b.proposedAt.localeCompare(a.proposedAt)),
+    [bankIds, collaboration.proposals, user.uid],
+  );
   const historyReady = historyPreference?.userId === user.uid;
-  const reviewed = collaboration.proposals
-    .filter(
-      (proposal) =>
-        historyReady &&
-        proposal.status !== 'pending' &&
-        proposal.reviewedById === user.uid &&
-        bankIds.has(proposal.qbankId) &&
-        (!historyPreference.clearedAt ||
-          (proposal.reviewedAt ?? '') > historyPreference.clearedAt),
-    )
-    .sort((a, b) => (b.reviewedAt ?? '').localeCompare(a.reviewedAt ?? ''));
+  const clearedAt = historyPreference?.clearedAt ?? '';
+  const reviewed = useMemo(
+    () =>
+      collaboration.proposals
+        .filter(
+          (proposal) =>
+            historyReady &&
+            proposal.status !== 'pending' &&
+            proposal.reviewedById === user.uid &&
+            bankIds.has(proposal.qbankId) &&
+            (!clearedAt || (proposal.reviewedAt ?? '') > clearedAt),
+        )
+        .sort((a, b) =>
+          (b.reviewedAt ?? '').localeCompare(a.reviewedAt ?? ''),
+        ),
+    [
+      bankIds,
+      collaboration.proposals,
+      clearedAt,
+      historyReady,
+      user.uid,
+    ],
+  );
   const visible = section === 'pending' ? pending : reviewed;
-  const selectedProposals = pending.filter((proposal) =>
-    selectedProposalIds.includes(proposal.id),
+  const selectedProposals = useMemo(
+    () =>
+      pending.filter((proposal) => selectedProposalIds.includes(proposal.id)),
+    [pending, selectedProposalIds],
   );
   const submitters = [
     ...new Map(

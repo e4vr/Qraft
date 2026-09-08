@@ -11,7 +11,7 @@ void test('collaborative governance is enforced by the Cloudflare API', async ()
   );
   assert.match(server, /user\.status !== 'approved'/);
   assert.match(server, /user\.role === 'super_admin'/);
-  assert.match(server, /platformRoles\.includes\('access_manager'\)/);
+  assert.match(server, /hasAccessManagerRole\(user\)/);
   assert.match(server, /canReviewBank\(user, existing, state\.memberships\)/);
   assert.match(server, /proposalChangeAllowed/);
   assert.match(server, /value\.version === current\.version \+ 1/);
@@ -56,7 +56,7 @@ void test('the registration dashboard highlights IDs that need manual verificati
   assert.match(dashboard, /MANUALLY VERIFIED/);
 });
 
-void test('role requests are available from contributions and promotion is simple for the Superadmin', async () => {
+void test('platform roles are managed independently from subscriptions', async () => {
   const app = await readFile(
     new URL('components/medguard-app.tsx', root),
     'utf8',
@@ -69,19 +69,29 @@ void test('role requests are available from contributions and promotion is simpl
     new URL('lib/cloudflare-server.ts', root),
     'utf8',
   );
+  const entitlements = await readFile(
+    new URL('lib/entitlement-server.ts', root),
+    'utf8',
+  );
   assert.match(app, /Request role/);
+  assert.match(app, /option value="moderator">Moderator/);
   assert.match(app, /superAdminUid: current\.security\.superAdminUid/);
-  assert.match(dashboard, /Quick account promotion/);
-  assert.match(dashboard, /toggleAccountAccess/);
-  assert.match(dashboard, /saveAccountAccess/);
+  assert.match(dashboard, /Role management/);
+  assert.match(dashboard, /toggleAccountRole/);
+  assert.match(dashboard, /saveAccountRoles/);
+  assert.match(dashboard, /Moderator includes Reviewer and Access Manager permissions/);
+  assert.doesNotMatch(dashboard, /toggleAccountRole\(member, 'pro'\)/);
   assert.match(dashboard, /disabled={!unsaved}/);
   assert.match(dashboard, /account_roles_saved/);
   assert.match(dashboard, /Manage roles/);
   assert.match(server, /profileUpdateAllowed/);
+  assert.match(server, /isPlatformRole\(value\.requestedRole\)/);
   assert.match(
     server,
     /value\.superAdminUid !== state\.security\.superAdminUid/,
   );
+  assert.doesNotMatch(entitlements, /reviewerBenefit/);
+  assert.doesNotMatch(entitlements, /profile\.role/);
 });
 
 void test('separate QBanks and attributed shared notes are present', async () => {
@@ -247,7 +257,7 @@ void test('the singleton Superadmin is gated by authenticator-app MFA', async ()
   assert.match(server, /ROOT_ADMIN_SETUP_TOKEN/);
   assert.match(server, /MFA_REQUIRED/);
   assert.match(server, /enrolledTotpSecret/);
-  assert.match(server, /value\.role !== 'super_admin'/);
+  assert.match(server, /existing\.role === 'super_admin'/);
 });
 
 void test('password hashing stays within the Cloudflare Workers PBKDF2 limit', async () => {
@@ -495,6 +505,24 @@ void test('Essential QBanks are managed only by Superadmin while other users sub
   assert.match(server, /value\.essential === existing\.essential/);
 });
 
+void test('Every subscription can contribute questions and redeem earned rewards', async () => {
+  const plans = await readFile(new URL('lib/plan-config.ts', root), 'utf8');
+  for (const plan of ['free', 'lite', 'pro', 'unlimited']) {
+    const block = plans.match(
+      new RegExp(`${plan}: \\{([\\s\\S]*?)\\n  \\},`),
+    )?.[1];
+    assert.ok(block, `${plan} plan configuration is present`);
+    assert.match(block, /canAddQuestions: true/);
+    assert.match(block, /canContribute: true/);
+  }
+  const lite = plans.match(/lite: \{([\s\S]*?)\n  \},/)?.[1];
+  assert.ok(lite, 'Lite plan configuration is present');
+  assert.match(lite, /canCreateQBank: false/);
+  assert.match(lite, /canCreatePrivateQBank: false/);
+  assert.match(lite, /canAddQuestions: true/);
+  assert.match(plans, /REWARD_CATALOG/);
+});
+
 void test('QBank library uses a categorized list with favorites and pins', async () => {
   const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
   const workspace = await readFile(
@@ -526,6 +554,8 @@ void test('shared QBank links require an explicit accept or decline decision', a
   assert.match(app, /'Joining…' : 'Accept'/);
   assert.match(app, /await joinCloudflareQBankByLink/);
   assert.match(app, /url\.searchParams\.delete\('join_qbank'\)/);
+  assert.match(app, /handledInvitationLink\.current = linkKey;\s*clearInvitationLink\(\);/);
+  assert.match(app, /collaboration\.memberships\.some/);
 });
 
 void test('every question change requires independent review with durable attribution', async () => {
@@ -552,7 +582,7 @@ void test('every question change requires independent review with durable attrib
   );
   assert.match(types, /writtenByName\?: string/);
   assert.match(types, /reviewedByName\?: string/);
-  assert.match(types, /user\.role === 'reviewer'/);
+  assert.match(types, /hasReviewerRole\(user\)/);
   assert.match(server, /current\.proposedById !== user\.uid/);
   assert.match(server, /reviewedQuestionWriteAllowed/);
   assert.match(manager, /QuestionImportReview/);

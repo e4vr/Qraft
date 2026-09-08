@@ -6,6 +6,7 @@ import { mkdir } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { improvementsApiTests } from './improvements-api.mjs';
 
 void test('platform API authorization, import, subscription and ticket workflows', async (t) => {
   await mkdir('.ui-review', { recursive: true });
@@ -109,6 +110,7 @@ print(json.dumps(out))`,
     'pro-limit',
     'pro-pending',
     'unlimited',
+    'moderator',
     'reviewer',
     'reviewer2',
     'access',
@@ -132,11 +134,11 @@ print(json.dumps(out))`,
       role:
         uid === 'admin'
           ? 'super_admin'
-          : uid === 'reviewer' || uid === 'reviewer2'
-            ? 'reviewer'
-            : 'student',
+          : 'student',
       platformRoles:
-        uid === 'reviewer' || uid === 'reviewer2'
+        uid === 'moderator'
+          ? ['moderator']
+          : uid === 'reviewer' || uid === 'reviewer2'
           ? ['reviewer']
           : uid === 'access'
             ? ['access_manager']
@@ -361,7 +363,7 @@ print(json.dumps(out))`,
     },
   );
   await t.test(
-    'Access managers receive limited profiles and cannot modify official subscribers or their blocks',
+    'Access managers manage registration and access independently from subscriptions',
     async () => {
       const now = new Date().toISOString();
       for (const [uid, method, paid, code] of [
@@ -417,12 +419,16 @@ print(json.dumps(out))`,
       for (const uid of ['paid-member', 'discount-member']) {
         assert.equal(
           (await save([profileOp(uid, { suspended: true })])).status,
-          403,
+          200,
+        );
+        assert.equal(
+          (await save([profileOp(uid, { suspended: false })])).status,
+          200,
         );
         assert.equal(
           (
             await save([
-              profileOp(uid, { tier: 'lite', subscriptionProtected: false }),
+              profileOp(uid, { tier: 'pro' }),
             ])
           ).status,
           403,
@@ -444,7 +450,7 @@ print(json.dumps(out))`,
                 },
               ])
             ).status,
-            403,
+            200,
           );
         }
         assert.equal(
@@ -790,6 +796,70 @@ print(json.dumps(out))`,
     },
   );
   await t.test(
+    'Moderator, Reviewer, and Access Manager permissions do not change subscriptions',
+    async () => {
+      const moderator = (await call('moderator', '/auth/session')).data.user;
+      const reviewer = (await call('reviewer', '/auth/session')).data.user;
+      const accessManager = (await call('access', '/auth/session')).data.user;
+      assert.equal(moderator.effectivePlan, 'lite');
+      assert.equal(reviewer.effectivePlan, 'lite');
+      assert.equal(accessManager.effectivePlan, 'lite');
+      assert.equal(moderator.isAdmin, true);
+      assert.equal(reviewer.isAdmin, false);
+      assert.equal(accessManager.isAdmin, true);
+      const moderatorState = (await call('moderator', '/collaboration')).data
+        .collaboration;
+      assert.ok(moderatorState.members.length > 0);
+      assert.equal(
+        (await call('reviewer', '/collaboration')).data.collaboration.members
+          .length,
+        0,
+      );
+      const member = moderatorState.members.find(
+        (item) => item.uid === 'manual-member',
+      );
+      const updateProfile = (value) =>
+        call(
+          'moderator',
+          '/collaboration',
+          {
+            operations: [
+              {
+                collection: 'profiles',
+                type: 'set',
+                id: member.uid,
+                value,
+              },
+            ],
+          },
+          'PUT',
+        );
+      assert.equal(
+        (await updateProfile({ ...member, tier: 'pro' })).status,
+        403,
+      );
+      assert.equal(
+        (
+          await updateProfile({
+            ...member,
+            platformRoles: ['reviewer'],
+          })
+        ).status,
+        200,
+      );
+      const savedMember = JSON.parse(
+        (
+          await db
+            .prepare('SELECT profile_json FROM profiles WHERE uid=?')
+            .bind(member.uid)
+            .first()
+        ).profile_json,
+      );
+      assert.equal(savedMember.tier, 'lite');
+      assert.deepEqual(savedMember.platformRoles, ['reviewer']);
+    },
+  );
+  await t.test(
     'Flashcards remain private and malformed decks or review data are rejected',
     async () => {
       const now = new Date().toISOString();
@@ -834,10 +904,18 @@ print(json.dumps(out))`,
       };
       assert.equal(
         (await call('reviewer', '/state', { state }, 'PUT')).status,
+        403,
+      );
+      assert.equal(
+        (await call('reviewer', '/auth/session')).data.user.effectivePlan,
+        'lite',
+      );
+      assert.equal(
+        (await call('pro', '/state', { state }, 'PUT')).status,
         200,
       );
       assert.equal(
-        (await call('reviewer', '/state')).data.state.flashcards.length,
+        (await call('pro', '/state')).data.state.flashcards.length,
         1,
       );
       assert.equal(
@@ -847,7 +925,7 @@ print(json.dumps(out))`,
       assert.equal(
         (
           await call(
-            'reviewer',
+            'pro',
             '/state',
             {
               state: {
@@ -1582,4 +1660,5 @@ print(json.dumps(out))`,
       1,
     );
   });
+  await improvementsApiTests(t, db, call);
 });

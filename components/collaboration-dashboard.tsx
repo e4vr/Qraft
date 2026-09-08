@@ -1,21 +1,26 @@
 'use client';
 
-import { ArrowRight, BookOpen, Clock3, Fingerprint, Menu, Save, Search, ShieldCheck, UserCheck, UserRoundX } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { canReviewBank, normalizeEmail, normalizePhone, normalizeUniversityId, type AccessBlocklist, type AccountStatus, type AppUser, type AuditEntry, type CollaborationState, type MemberProfile, type PlatformRole } from '@/lib/medguard-types';
+import { ArrowLeft, ArrowRight, BookOpen, ChevronDown, Clock3, Command, Database, Download, Fingerprint, Inbox, LogOut, Megaphone, Menu, MessageSquareText, Save, Search, ShieldCheck, Upload, UserCheck, UserRoundX } from 'lucide-react';
+import Link from 'next/link';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { administrativeRoleLabels, canReviewBank, hasAccessManagerRole, hasModeratorRole, hasReviewerRole, isPlatformRole, normalizeEmail, normalizePhone, normalizeUniversityId, type AccessBlocklist, type AccountStatus, type AppUser, type AuditEntry, type CollaborationState, type MemberProfile, type PlatformRole } from '@/lib/medguard-types';
 import { cn as cx, nowIso } from '@/lib/utils';
 import { SubscriptionAdmin } from '@/components/subscription-workspace';
+import { ReviewerPerformance } from '@/components/reviewer-performance';
 import { EconomyAdmin } from '@/components/economy-admin';
 import { ContactWorkspace } from '@/components/contact-workspace';
 import { QuestionPreview } from '@/components/question-tools';
 import { ReviewWorkspace } from '@/components/review-workspace';
+import { api } from '@/lib/api-client';
 
-type Tab = 'discounts' | 'subscriptions' | 'economy' | 'contact' | 'question-preview' | 'overview' | 'registrations' | 'blocked' | 'roles' | 'qbanks' | 'proposals' | 'student-ids' | 'audit';
+type Tab = 'reviewer-performance' | 'discounts' | 'subscriptions' | 'economy' | 'contact' | 'question-preview' | 'overview' | 'registrations' | 'blocked' | 'roles' | 'qbanks' | 'proposals' | 'student-ids' | 'announcement' | 'backups' | 'legal' | 'audit';
 const adminGroups: Array<{ label: string; ids: Tab[] }> = [
-  { label: 'WORKSPACE', ids: ['overview', 'contact', 'audit'] },
-  { label: 'PEOPLE & ACCESS', ids: ['registrations', 'roles', 'student-ids', 'blocked'] },
-  { label: 'SUBSCRIPTIONS', ids: ['subscriptions', 'discounts', 'economy'] },
-  { label: 'QUESTION BANKS', ids: ['qbanks', 'proposals', 'question-preview'] },
+  { label: 'OVERVIEW', ids: ['overview', 'reviewer-performance'] },
+  { label: 'OPERATIONS', ids: ['proposals', 'contact', 'registrations'] },
+  { label: 'USERS & ACCESS', ids: ['student-ids', 'roles', 'blocked'] },
+  { label: 'BILLING', ids: ['subscriptions', 'discounts', 'economy'] },
+  { label: 'QBANK', ids: ['qbanks', 'question-preview'] },
+  { label: 'SYSTEM', ids: ['announcement', 'backups', 'legal', 'audit'] },
 ];
 type BlockKind = keyof AccessBlocklist;
 function formatDate(value?: string) {
@@ -25,6 +30,52 @@ function formatDate(value?: string) {
         timeStyle: 'short',
       }).format(new Date(value))
     : '—';
+}
+
+function relativeAge(value: string | undefined, now: number) {
+  if (!value) return '—';
+  const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000));
+  if (seconds < 60) return 'now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return days < 30 ? `${days}d` : formatDate(value);
+}
+
+function isoDay(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function mondayOf(date: Date) {
+  const result = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  result.setUTCDate(result.getUTCDate() - ((result.getUTCDay() + 6) % 7));
+  return result;
+}
+
+function weeksForMonth(year: number, month: number) {
+  const first = new Date(Date.UTC(year, month, 1));
+  const last = new Date(Date.UTC(year, month + 1, 0));
+  const weeks: string[] = [];
+  for (let cursor = mondayOf(first); cursor <= last; cursor = new Date(cursor.getTime() + 7 * 86_400_000))
+    weeks.push(isoDay(cursor));
+  return weeks;
+}
+
+function activityLabel(entry: AuditEntry) {
+  const actions: Record<string, string> = {
+    registration_approved: 'approved a registration',
+    registration_rejected: 'rejected a registration',
+    account_blocked: 'blocked an account',
+    account_restored: 'restored an account',
+    account_roles_saved: 'updated participant permissions',
+    role_request_approved: 'approved a role request',
+    role_request_rejected: 'rejected a role request',
+    reward_activated: 'activated a reward plan',
+    subscription_expired: 'had a subscription expire',
+  };
+  return `${entry.actorName} ${actions[entry.action] ?? entry.action.replaceAll('_', ' ')}`;
 }
 function audit(user: AppUser, action: string, entityType: AuditEntry['entityType'], entityId: string, detail: string): AuditEntry {
   return {
@@ -53,35 +104,212 @@ function memberMatchesBlocklist(member: MemberProfile, blockedAccess: AccessBloc
   );
 }
 
-export function AdminDashboard({ user, collaboration, update, replaceFromServer }: { user: AppUser; collaboration: CollaborationState; update: (updater: (current: CollaborationState) => CollaborationState) => void; replaceFromServer: (next: CollaborationState) => void }) {
-  const canAccess = user.role === 'super_admin' || user.platformRoles.includes('access_manager') || user.role === 'admin' || user.role === 'access_manager';
+function LegalLinksAdmin() {
+  const [links, setLinks] = useState({ termsUrl: '', privacyUrl: '' });
+  const [busy, setBusy] = useState(true);
+  const [message, setMessage] = useState('');
+  useEffect(() => {
+    let active = true;
+    void api<typeof links>('/platform/legal-links')
+      .then((value) => {
+        if (active) setLinks(value);
+      })
+      .catch((error) => {
+        if (active) setMessage(error instanceof Error ? error.message : 'Unable to load links.');
+      })
+      .finally(() => {
+        if (active) setBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  const save = async () => {
+    setBusy(true);
+    setMessage('');
+    try {
+      const saved = await api<typeof links>('/platform/legal-links', {
+        method: 'PUT',
+        body: JSON.stringify(links),
+      });
+      setLinks(saved);
+      setMessage('Legal links saved.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to save links.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
+      <h2 className="font-bold">Terms & privacy links</h2>
+      <p className="mt-1 text-sm leading-6 text-muted-foreground">These links appear in Settings for every approved user. Use HTTPS links or internal paths beginning with /.</p>
+      <div className="mt-5 grid gap-4">
+        <label className="grid gap-2 text-sm font-semibold">
+          Terms of use URL
+          <input type="url" value={links.termsUrl} onChange={(event) => setLinks((current) => ({ ...current, termsUrl: event.target.value }))} placeholder="https://example.com/terms" className="h-11 rounded-xl border bg-background px-3 font-normal" />
+        </label>
+        <label className="grid gap-2 text-sm font-semibold">
+          Privacy policy URL
+          <input type="url" value={links.privacyUrl} onChange={(event) => setLinks((current) => ({ ...current, privacyUrl: event.target.value }))} placeholder="https://example.com/privacy" className="h-11 rounded-xl border bg-background px-3 font-normal" />
+        </label>
+      </div>
+      <div className="mt-5 flex flex-wrap items-center gap-3">
+        <button onClick={() => void save()} disabled={busy} className="q-button q-button-primary">
+          <Save className="size-4" />
+          {busy ? 'Saving…' : 'Save links'}
+        </button>
+        {message && <output className="text-sm text-muted-foreground">{message}</output>}
+      </div>
+    </section>
+  );
+}
+
+function AnnouncementAdmin() {
+  const [value, setValue] = useState({ enabled: false, content: '', href: '' });
+  const [busy, setBusy] = useState(true);
+  const [message, setMessage] = useState('');
+  useEffect(() => {
+    let active = true;
+    void api<typeof value>('/platform/announcement').then((next) => {
+      if (active) setValue(next);
+    }).catch((error) => {
+      if (active) setMessage(error instanceof Error ? error.message : 'Unable to load announcement.');
+    }).finally(() => {
+      if (active) setBusy(false);
+    });
+    return () => { active = false; };
+  }, []);
+  const save = async () => {
+    setBusy(true); setMessage('');
+    try {
+      const saved = await api<typeof value>('/platform/announcement', { method: 'PUT', body: JSON.stringify(value) });
+      setValue(saved); setMessage('Announcement saved and published.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to save announcement.');
+    } finally { setBusy(false); }
+  };
+  return (
+    <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
+      <div className="flex items-start gap-3"><span className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Megaphone className="size-5" /></span><div><h2 className="font-bold">Site announcement bar</h2><p className="mt-1 text-sm text-muted-foreground">Publish one compact announcement across the main application.</p></div></div>
+      <label className="mt-5 grid gap-2 text-sm font-semibold">Announcement content<textarea maxLength={280} value={value.content} onChange={(event) => setValue((current) => ({ ...current, content: event.target.value }))} className="min-h-28 rounded-xl border bg-background p-3 font-normal" placeholder="Write a short announcement…" /></label>
+      <div className="mt-1 text-right text-xs text-muted-foreground">{value.content.length}/280</div>
+      <label className="mt-4 grid gap-2 text-sm font-semibold">Optional action link<input value={value.href} onChange={(event) => setValue((current) => ({ ...current, href: event.target.value }))} className="h-11 rounded-xl border bg-background px-3 font-normal" placeholder="https://… or /internal-page" /></label>
+      <label className="mt-5 flex items-center gap-3 rounded-xl border bg-muted/25 p-3 text-sm font-semibold"><input type="checkbox" checked={value.enabled} onChange={(event) => setValue((current) => ({ ...current, enabled: event.target.checked }))} className="size-4 accent-primary" />Show announcement on the site</label>
+      {value.content && <div className="mt-5 rounded-xl bg-gradient-to-r from-primary via-cyan-600 to-teal-600 px-4 py-3 text-center text-sm font-bold text-white">{value.content}</div>}
+      <div className="mt-5 flex flex-wrap items-center gap-3"><button onClick={() => void save()} disabled={busy} className="q-button q-button-primary"><Save className="size-4" />{busy ? 'Saving…' : 'Save announcement'}</button>{message && <output className="text-sm text-muted-foreground">{message}</output>}</div>
+    </section>
+  );
+}
+
+function BackupAdmin() {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const download = async () => {
+    setBusy(true); setMessage('');
+    try {
+      const backup = await api<Record<string, unknown>>('/platform/content-backup');
+      const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = `qraft-content-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(url);
+      setMessage('Backup downloaded. Keep it in a secure location.');
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to create backup.'); }
+    finally { setBusy(false); }
+  };
+  const restore = async (file?: File) => {
+    if (!file) return;
+    setBusy(true); setMessage('');
+    try {
+      const raw = await file.text();
+      if (raw.length > 50_000_000) throw new Error('Backup exceeds the 50 MB restore limit.');
+      const result = await api<{ restored: number }>('/platform/content-backup', { method: 'PUT', body: raw });
+      setMessage(`${result.restored.toLocaleString()} records restored successfully.`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Unable to restore backup.'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
+      <div className="flex items-start gap-3"><span className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Database className="size-5" /></span><div><h2 className="font-bold">Content backup & restore</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">Includes public and private QBanks, questions, answers, explanations, sources, proposals and memberships. Private ownership remains unchanged.</p></div></div>
+      <div className="mt-5 flex flex-wrap gap-3"><button onClick={() => void download()} disabled={busy} className="q-button q-button-primary"><Download className="size-4" />Download readable backup</button><label className="q-button q-button-secondary cursor-pointer"><Upload className="size-4" />Restore backup<input type="file" accept="application/json,.json" className="sr-only" disabled={busy} onChange={(event) => { void restore(event.target.files?.[0]); event.target.value = ''; }} /></label></div>
+      <p className="mt-4 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">Restoration updates matching content records. Accounts, passwords, subscriptions and payment records are intentionally excluded.</p>
+      {message && <output className="mt-3 block text-sm text-muted-foreground">{message}</output>}
+    </section>
+  );
+}
+
+export function AdminDashboard({ user, collaboration, update, replaceFromServer, scope = 'access', onSignOut }: { user: AppUser; collaboration: CollaborationState; update: (updater: (current: CollaborationState) => CollaborationState) => void; replaceFromServer: (next: CollaborationState) => void; scope?: 'access' | 'superadmin'; onSignOut?: () => void }) {
+  const canAccess = hasAccessManagerRole(user);
+  const isModerator = hasModeratorRole(user);
   const isRoot = user.role === 'super_admin';
-  const isReviewer = isRoot || user.platformRoles.includes('reviewer') || user.role === 'reviewer';
+  const isSuperadminWorkspace = scope === 'superadmin' && isRoot;
   const tabs = useMemo(
     () =>
-      [
-        ['overview', 'Overview'],
-        ...(canAccess ? [['registrations', 'Registrations']] : []),
-        ...(canAccess ? [['blocked', 'Blocked access']] : []),
-        ...(isRoot
-          ? [
-              ['discounts', 'Discount Codes'], ['subscriptions', 'Subscriptions'], ['economy', 'Credits & rewards'], ['contact', 'Contact Tickets'], ['question-preview', 'Question Preview'],
-              ['student-ids', 'Student IDs'],
-              ['roles', 'Roles & promotion'],
-            ]
-          : []),
-        ...(isRoot || isReviewer ? [['qbanks', isRoot ? 'All QBanks' : 'QBanks']] : []),
-        ...(isReviewer || collaboration.qbanks.some((bank) => canReviewBank(user, bank, collaboration.memberships)) ? [['proposals', 'Edit review']] : []),
-        ...(isRoot ? [['audit', 'Audit log']] : []),
-      ] as Array<[Tab, string]>,
-    [canAccess, collaboration, isReviewer, isRoot, user],
+      isSuperadminWorkspace
+        ? ([
+            ['overview', 'Overview'],
+            ['reviewer-performance', 'Reviewer Performance'],
+            ['registrations', 'Registrations'],
+            ['blocked', 'Blocked users'],
+            ['roles', 'Roles & permissions'],
+            ['student-ids', 'Student IDs'],
+            ['subscriptions', 'Subscriptions'],
+            ['discounts', 'Discount codes'],
+            ['economy', 'Credits & rewards'],
+            ['contact', 'Contact tickets'],
+            ['qbanks', 'All QBanks'],
+            ['proposals', 'Review queue'],
+            ['question-preview', 'Question preview'],
+            ['announcement', 'Announcement bar'],
+            ['backups', 'Backup & restore'],
+            ['legal', 'Terms & privacy'],
+            ['audit', 'Audit log'],
+          ] as Array<[Tab, string]>)
+        : ([
+            ['overview', 'Overview'],
+            ['reviewer-performance', 'Reviewer Performance'],
+            ...(canAccess ? [['registrations', 'Registrations'] as [Tab, string]] : []),
+            ...(canAccess ? [['blocked', 'Blocked users'] as [Tab, string]] : []),
+            ...(isModerator ? [['roles', 'Roles & permissions'] as [Tab, string]] : []),
+          ] as Array<[Tab, string]>),
+    [
+      canAccess,
+      isModerator,
+      isSuperadminWorkspace,
+    ],
   );
   const [tab, setTab] = useState<Tab>('overview');
+  const [dashboardNow] = useState(() => Date.now());
+  const [qbankScope, setQbankScope] = useState('all');
+  const [adminSearchOpen, setAdminSearchOpen] = useState(false);
+  const [adminSearch, setAdminSearch] = useState('');
+  const adminSearchRef = useRef<HTMLInputElement>(null);
   const [memberSearch, setMemberSearch] = useState('');
   const [memberStatus, setMemberStatus] = useState('all');
   const [memberPage, setMemberPage] = useState(0);
   const [auditSearch, setAuditSearch] = useState('');
   const [auditPage, setAuditPage] = useState(0);
+  const [auditYear, setAuditYear] = useState(() => new Date().getUTCFullYear());
+  const [auditMonth, setAuditMonth] = useState(() => new Date().getUTCMonth());
+  const [auditWeek, setAuditWeek] = useState(() => isoDay(mondayOf(new Date())));
+  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
+  const [auditBusy, setAuditBusy] = useState(false);
+  const [auditLimited, setAuditLimited] = useState(false);
+  const auditWeeks = useMemo(() => weeksForMonth(auditYear, auditMonth), [auditYear, auditMonth]);
+  useEffect(() => {
+    if (!isRoot || (tab !== 'audit' && tab !== 'overview') || !auditWeek) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setAuditBusy(true);
+      void api<{ entries: AuditEntry[]; limited: boolean }>(`/platform/audit-week?start=${encodeURIComponent(auditWeek)}`)
+        .then((result) => {
+          if (active) { setAuditEntries(result.entries); setAuditLimited(result.limited); }
+        })
+        .catch(() => {
+          if (active) { setAuditEntries([]); setAuditLimited(false); }
+        })
+        .finally(() => { if (active) setAuditBusy(false); });
+    }, 0);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [auditWeek, isRoot, tab]);
   const filteredMembers = useMemo(() => {
     const query = memberSearch.trim().toLowerCase();
     return collaboration.members.filter(m =>
@@ -91,9 +319,9 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
   }, [collaboration.members, memberSearch, memberStatus]);
   const filteredAudit = useMemo(() => {
     const query = auditSearch.trim().toLowerCase();
-    return collaboration.auditLog.filter(entry => [entry.actorName, entry.actorId, entry.action, entry.entityId, entry.detail].some(value => String(value ?? '').toLowerCase().includes(query)))
+    return auditEntries.filter(entry => [entry.actorName, entry.actorId, entry.action, entry.entityId, entry.detail].some(value => String(value ?? '').toLowerCase().includes(query)))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [collaboration.auditLog, auditSearch]);
+  }, [auditEntries, auditSearch]);
   const membersPage = Math.min(memberPage, Math.max(0, Math.ceil(filteredMembers.length / 20) - 1));
   const logsPage = Math.min(auditPage, Math.max(0, Math.ceil(filteredAudit.length / 25) - 1));
   const [idText, setIdText] = useState('');
@@ -102,23 +330,180 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
   const roleGroups = useMemo(() => {
     const query = roleSearch.trim().toLowerCase();
     const members = collaboration.members.filter(member => member.role !== 'super_admin' && member.status === 'approved' && `${member.displayName} ${member.email} ${member.universityId}`.toLowerCase().includes(query));
-    const reviewer = (member: MemberProfile) => member.role === 'reviewer' || member.platformRoles.includes('reviewer');
-    const access = (member: MemberProfile) => member.platformRoles.includes('access_manager');
+    const moderator = (member: MemberProfile) => hasModeratorRole(member);
+    const reviewer = (member: MemberProfile) => !moderator(member) && hasReviewerRole(member);
+    const access = (member: MemberProfile) => !moderator(member) && hasAccessManagerRole(member);
     return [
-      { id: 'unlimited', label: 'Unlimited users', members: members.filter(member => member.tier === 'unlimited') },
-      { id: 'pro', label: 'Pro users', members: members.filter(member => member.tier === 'pro') },
+      { id: 'moderator', label: 'Moderators', members: members.filter(moderator) },
       { id: 'reviewer', label: 'Reviewers', members: members.filter(reviewer) },
       { id: 'access', label: 'Access managers', members: members.filter(access) },
-      { id: 'lite', label: 'Lite users', members: members.filter(member => member.tier === 'lite' && !reviewer(member) && !access(member)) },
-      { id: 'free', label: 'Free users', members: members.filter(member => member.tier === 'free' && !reviewer(member) && !access(member)) },
+      { id: 'member', label: 'No assigned role', members: members.filter(member => !administrativeRoleLabels(member).length) },
     ];
   }, [collaboration.members, roleSearch]);
-  const [roleDrafts, setRoleDrafts] = useState<Record<string, Pick<MemberProfile, 'tier' | 'platformRoles'>>>({});
+  const [roleDrafts, setRoleDrafts] = useState<Record<string, PlatformRole[]>>({});
   const [blockText, setBlockText] = useState<Record<BlockKind, string>>({ phones: '', universityIds: '', emails: '' });
-  const pendingMembers = collaboration.members.filter((item) => item.status === 'pending');
-  const pendingManualIdChecks = pendingMembers.filter((item) => item.role !== 'super_admin' && !item.universityIdRegistered);
-  const reviewable = collaboration.proposals.filter((proposal) => proposal.status === 'pending' && collaboration.qbanks.some((bank) => bank.id === proposal.qbankId && canReviewBank(user, bank, collaboration.memberships)));
-  const roleRequests = collaboration.roleApplications.filter((item) => item.status === 'pending');
+  const pendingMembers = useMemo(
+    () => collaboration.members.filter((item) => item.status === 'pending'),
+    [collaboration.members],
+  );
+  const pendingManualIdChecks = useMemo(
+    () =>
+      pendingMembers.filter(
+        (item) =>
+          item.role !== 'super_admin' && !item.universityIdRegistered,
+      ),
+    [pendingMembers],
+  );
+  const reviewable = useMemo(
+    () =>
+      collaboration.proposals.filter(
+        (proposal) =>
+          proposal.status === 'pending' &&
+          (qbankScope === 'all' || proposal.qbankId === qbankScope) &&
+          collaboration.qbanks.some(
+            (bank) =>
+              bank.id === proposal.qbankId &&
+              canReviewBank(user, bank, collaboration.memberships),
+          ),
+      ),
+    [
+      collaboration.memberships,
+      collaboration.proposals,
+      collaboration.qbanks,
+      qbankScope,
+      user,
+    ],
+  );
+  const roleRequests = useMemo(
+    () =>
+      collaboration.roleApplications.filter(
+        (item) => item.status === 'pending' && isPlatformRole(item.requestedRole),
+      ),
+    [collaboration.roleApplications],
+  );
+  const scopedQuestions = useMemo(
+    () =>
+      collaboration.approvedQuestions.filter(
+        (question) => qbankScope === 'all' || question.qbankId === qbankScope,
+      ),
+    [collaboration.approvedQuestions, qbankScope],
+  );
+  const qbankHealth = useMemo(() => {
+    const weekAgo = dashboardNow - 7 * 24 * 60 * 60 * 1000;
+    return {
+      published: scopedQuestions.length,
+      awaiting: reviewable.length,
+      addedThisWeek: scopedQuestions.filter(
+        (question) =>
+          question.reviewedAt && new Date(question.reviewedAt).getTime() >= weekAgo,
+      ).length,
+      visibleBanks:
+        qbankScope === 'all'
+          ? collaboration.qbanks.filter((bank) => !bank.archived).length
+          : 1,
+    };
+  }, [collaboration.qbanks, dashboardNow, qbankScope, reviewable.length, scopedQuestions]);
+  const subscriptionSnapshot = useMemo(() => {
+    const active = collaboration.members.filter(
+      (member) => member.status === 'approved' && !member.suspended,
+    );
+    return {
+      lite: active.filter((member) => member.tier === 'lite').length,
+      pro: active.filter((member) => member.tier === 'pro').length,
+      unlimited: active.filter((member) => member.tier === 'unlimited').length,
+    };
+  }, [collaboration.members]);
+  const attentionQueue = useMemo(
+    () =>
+      [
+        ...reviewable.map((proposal) => ({
+          id: proposal.id,
+          type: 'Edit review',
+          item:
+            proposal.questionId && proposal.questionId !== '#deleted'
+              ? `Question #${proposal.questionId.replace(/^#/, '')}`
+              : proposal.payload.stem,
+          context:
+            collaboration.qbanks.find((bank) => bank.id === proposal.qbankId)
+              ?.name ?? 'QBank',
+          createdAt: proposal.proposedAt,
+          destination: 'proposals' as Tab,
+        })),
+        ...pendingMembers.map((member) => ({
+          id: member.uid,
+          type: 'Registration',
+          item: member.displayName,
+          context: member.universityId || member.email,
+          createdAt: member.createdAt,
+          destination: 'registrations' as Tab,
+        })),
+        ...roleRequests.map((request) => ({
+          id: request.id,
+          type: 'Role request',
+          item: request.userName,
+          context: request.requestedRole.replaceAll('_', ' '),
+          createdAt: request.createdAt,
+          destination: 'roles' as Tab,
+        })),
+      ]
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+        .slice(0, 8),
+    [collaboration.qbanks, pendingMembers, reviewable, roleRequests],
+  );
+  const oldestReview = reviewable.reduce<string | undefined>(
+    (oldest, item) =>
+      !oldest || item.proposedAt < oldest ? item.proposedAt : oldest,
+    undefined,
+  );
+  const oldestRegistration = pendingMembers.reduce<string | undefined>(
+    (oldest, item) =>
+      !oldest || item.createdAt < oldest ? item.createdAt : oldest,
+    undefined,
+  );
+  const oldestRoleRequest = roleRequests.reduce<string | undefined>(
+    (oldest, item) =>
+      !oldest || item.createdAt < oldest ? item.createdAt : oldest,
+    undefined,
+  );
+  const searchResults = useMemo(() => {
+    const query = adminSearch.trim().replace(/^#/, '').toLowerCase();
+    if (!query) return [];
+    return [
+      ...collaboration.members
+        .filter((member) =>
+          [member.displayName, member.email, member.universityId, member.uid].some(
+            (value) => value.toLowerCase().includes(query),
+          ),
+        )
+        .slice(0, 5)
+        .map((member) => ({ id: `member:${member.uid}`, label: member.displayName, detail: `${member.email} · ${member.universityId}`, destination: 'registrations' as Tab, filter: member.email })),
+      ...collaboration.qbanks
+        .filter((bank) => `${bank.name} ${bank.id}`.toLowerCase().includes(query))
+        .slice(0, 4)
+        .map((bank) => ({ id: `bank:${bank.id}`, label: bank.name, detail: 'QBank', destination: 'qbanks' as Tab, filter: '' })),
+      ...collaboration.approvedQuestions
+        .filter((question) => `${question.questionId} ${question.stem}`.toLowerCase().includes(query))
+        .slice(0, 4)
+        .map((question) => ({ id: `question:${question.id}`, label: `Question #${question.questionId}`, detail: question.stem, destination: 'question-preview' as Tab, filter: '' })),
+    ].slice(0, 10);
+  }, [adminSearch, collaboration.approvedQuestions, collaboration.members, collaboration.qbanks]);
+
+  useEffect(() => {
+    if (!isSuperadminWorkspace) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setAdminSearchOpen(true);
+      }
+      if (event.key === 'Escape') setAdminSearchOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isSuperadminWorkspace]);
+
+  useEffect(() => {
+    if (adminSearchOpen) window.setTimeout(() => adminSearchRef.current?.focus(), 0);
+  }, [adminSearchOpen]);
 
   function reviewMember(uid: string, status: AccountStatus) {
     const reviewedAt = nowIso();
@@ -141,7 +526,6 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
   }
 
   function toggleSuspended(member: MemberProfile) {
-    if (!isRoot && member.subscriptionProtected) return;
     update((current) => ({
       ...current,
       members: current.members.map((item) => (item.uid === member.uid ? { ...item, suspended: !item.suspended } : item)),
@@ -210,7 +594,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
 
   function reviewRole(applicationId: string, approved: boolean) {
     const application = collaboration.roleApplications.find((item) => item.id === applicationId);
-    if (!application || !isRoot) return;
+    if (!application || !isModerator) return;
     const reviewedAt = nowIso();
     update((current) => ({
       ...current,
@@ -230,8 +614,19 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
             member.uid === application.userId
               ? {
                   ...member,
-                  tier: application.requestedRole === 'pro' || application.requestedRole === 'access_manager' ? 'pro' : member.tier,
-                  platformRoles: application.requestedRole === 'pro' ? member.platformRoles : [...new Set([...member.platformRoles, application.requestedRole as PlatformRole])],
+                  platformRoles:
+                    application.requestedRole === 'moderator'
+                      ? ['moderator']
+                      : member.platformRoles.includes('moderator')
+                        ? member.platformRoles
+                      : [
+                          ...new Set([
+                            ...member.platformRoles.filter(
+                              (role) => role !== 'moderator',
+                            ),
+                            application.requestedRole,
+                          ]),
+                        ],
                 }
               : member,
           )
@@ -240,41 +635,44 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
     }));
   }
 
-  function toggleAccountAccess(member: MemberProfile, access: 'pro' | PlatformRole) {
-    if (!isRoot || member.role === 'super_admin') return;
+  function toggleAccountRole(member: MemberProfile, role: PlatformRole) {
+    if (!isModerator || member.role === 'super_admin') return;
     setRoleDrafts((current) => {
-      const draft = current[member.uid] ?? { tier: member.tier, platformRoles: [...member.platformRoles] };
-      const enabling = access === 'pro' ? draft.tier !== 'pro' : !draft.platformRoles.includes(access);
+      const draft = current[member.uid] ?? [...member.platformRoles];
+      const enabling = !draft.includes(role);
+      if (role !== 'moderator' && draft.includes('moderator')) return current;
       return {
         ...current,
-        [member.uid]: access === 'pro'
-          ? { ...draft, tier: enabling ? 'pro' : 'lite' }
-          : {
-              tier: access === 'access_manager' && enabling ? 'pro' : draft.tier,
-              platformRoles: enabling ? [...new Set([...draft.platformRoles, access])] : draft.platformRoles.filter((role) => role !== access),
-            },
+        [member.uid]:
+          role === 'moderator'
+            ? enabling
+              ? ['moderator']
+              : []
+            : enabling
+              ? [...new Set([...draft, role])]
+              : draft.filter((item) => item !== role),
       };
     });
   }
 
-  function accessDraftFor(member: MemberProfile) {
-    return roleDrafts[member.uid] ?? { tier: member.tier, platformRoles: member.platformRoles };
+  function roleDraftFor(member: MemberProfile) {
+    return roleDrafts[member.uid] ?? member.platformRoles;
   }
 
-  function hasUnsavedAccess(member: MemberProfile) {
+  function hasUnsavedRoles(member: MemberProfile) {
     const draft = roleDrafts[member.uid];
     if (!draft) return false;
-    return draft.tier !== member.tier || [...draft.platformRoles].sort().join('|') !== [...member.platformRoles].sort().join('|');
+    return [...draft].sort().join('|') !== [...member.platformRoles].sort().join('|');
   }
 
-  function saveAccountAccess(member: MemberProfile) {
+  function saveAccountRoles(member: MemberProfile) {
     const draft = roleDrafts[member.uid];
-    if (!isRoot || member.role === 'super_admin' || !draft || !hasUnsavedAccess(member)) return;
+    if (!isModerator || member.role === 'super_admin' || !draft || !hasUnsavedRoles(member)) return;
     update((current) => ({
       ...current,
-      members: current.members.map((item) => (item.uid === member.uid ? { ...item, tier: draft.tier, platformRoles: [...draft.platformRoles] } : item)),
+      members: current.members.map((item) => (item.uid === member.uid ? { ...item, platformRoles: [...draft] } : item)),
       auditLog: [
-        audit(user, 'account_roles_saved', 'role', member.uid, `Saved ${member.displayName}'s access: ${draft.tier}${draft.platformRoles.length ? `, ${draft.platformRoles.join(', ')}` : ''}.`),
+        audit(user, 'account_roles_saved', 'role', member.uid, `Saved ${member.displayName}'s roles: ${draft.join(', ') || 'none'}.`),
         ...current.auditLog,
       ],
     }));
@@ -289,23 +687,75 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
     <>
       <header className="workspace-header">
         <div className="flex min-w-0 items-center gap-3">
-          <button aria-label="Open navigation" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))} className="grid size-10 shrink-0 place-items-center rounded-xl border lg:hidden">
-            <Menu className="size-5" />
-          </button>
+          {isSuperadminWorkspace ? (
+            <Link aria-label="Back to Qraft" href="/" className="grid size-10 shrink-0 place-items-center rounded-xl border transition hover:bg-muted">
+              <ArrowLeft className="size-5" />
+            </Link>
+          ) : (
+            <button aria-label="Open navigation" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))} className="grid size-10 shrink-0 place-items-center rounded-xl border lg:hidden">
+              <Menu className="size-5" />
+            </button>
+          )}
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <ShieldCheck className="size-5 text-primary" />
-              <h1 className="truncate text-lg font-bold tracking-tight">Administration</h1>
+              <h1 className="truncate text-lg font-bold tracking-tight">{isSuperadminWorkspace ? 'Admin Dashboard' : 'Access administration'}</h1>
             </div>
-            <p className="mt-1 text-sm leading-5 text-muted-foreground">Manage members, access and shared content</p>
+            <p className="mt-1 text-sm leading-5 text-muted-foreground">{isSuperadminWorkspace ? 'Here’s what needs your attention.' : 'Manage registrations, account access and participant roles'}</p>
           </div>
         </div>
         <div className="workspace-header-actions">
-          <span className="inline-flex min-h-10 items-center rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{isRoot ? 'SUPERADMIN · MFA' : (user.platformRoles.join(' · ') || user.role).replaceAll('_', ' ').toUpperCase()}</span>
+          {isSuperadminWorkspace && (
+            <>
+              <label className="relative min-w-[190px]">
+                <span className="sr-only">QBank scope</span>
+                <select value={qbankScope} onChange={(event) => setQbankScope(event.target.value)} className="min-h-11 w-full appearance-none rounded-xl border bg-card py-2 pl-3 pr-9 text-sm font-semibold">
+                  <option value="all">All QBanks</option>
+                  {collaboration.qbanks.filter((bank) => !bank.archived).map((bank) => <option key={bank.id} value={bank.id}>{bank.name}</option>)}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-3.5 size-4 text-muted-foreground" />
+              </label>
+              <button onClick={() => setAdminSearchOpen(true)} className="q-button q-button-secondary min-w-[190px] justify-between text-muted-foreground">
+                <span className="inline-flex items-center gap-2"><Search className="size-4" />Search admin</span>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 text-[10px]">⌘K</kbd>
+              </button>
+              <details className="group relative">
+                <summary className="q-button q-button-primary cursor-pointer list-none [&::-webkit-details-marker]:hidden">Quick actions <ChevronDown className="size-4 transition group-open:rotate-180" /></summary>
+                <div className="absolute right-0 top-[calc(100%+8px)] z-50 w-64 overflow-hidden rounded-xl border bg-card p-2 shadow-xl">
+                  {([['question-preview', 'Preview question'], ['subscriptions', 'Activate subscription'], ['discounts', 'Create discount code'], ['registrations', 'Review registrations']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} onClick={() => setTab(id)} className="flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-left text-sm font-semibold hover:bg-muted"><span>{label}</span><ArrowRight className="size-4 text-muted-foreground" /></button>)}
+                </div>
+              </details>
+            </>
+          )}
+          <span className="inline-flex min-h-10 items-center rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{`${administrativeRoleLabels(user).join(' · ').toUpperCase()}${isRoot ? ' · MFA' : ''}`}</span>
+          {isSuperadminWorkspace && onSignOut && (
+            <button onClick={onSignOut} className="q-button q-button-secondary">
+              <LogOut className="size-4" />
+              Sign out
+            </button>
+          )}
         </div>
       </header>
+      {isSuperadminWorkspace && adminSearchOpen && (
+        <div className="fixed inset-0 z-[80] flex items-start justify-center p-4 pt-[max(10vh,env(safe-area-inset-top))]">
+          <button aria-label="Close admin search" onClick={() => setAdminSearchOpen(false)} className="absolute inset-0 size-full bg-slate-950/40 backdrop-blur-sm" />
+          <dialog open aria-label="Search administration" className="relative m-0 w-full max-w-2xl overflow-hidden rounded-2xl border bg-card p-0 text-foreground shadow-2xl">
+            <label className="flex items-center gap-3 border-b px-4">
+              <Search className="size-5 text-muted-foreground" />
+              <input ref={adminSearchRef} value={adminSearch} onChange={(event) => setAdminSearch(event.target.value)} placeholder="Question ID, student ID, email, username or QBank…" className="h-14 min-w-0 flex-1 bg-transparent text-base outline-none" />
+              <button aria-label="Close search" onClick={() => setAdminSearchOpen(false)} className="rounded-lg border px-2 py-1 text-xs text-muted-foreground">ESC</button>
+            </label>
+            <div className="max-h-[55dvh] overflow-y-auto p-2">
+              {searchResults.map((result) => <button key={result.id} onClick={() => { setTab(result.destination); if (result.destination === 'registrations') { setMemberSearch(result.filter); setMemberStatus('all'); setMemberPage(0); } setAdminSearchOpen(false); }} className="flex min-h-14 w-full items-center gap-3 rounded-xl px-3 text-left hover:bg-muted"><Command className="size-4 shrink-0 text-primary" /><span className="min-w-0 flex-1"><strong className="block truncate text-sm">{result.label}</strong><span className="mt-0.5 block truncate text-xs text-muted-foreground">{result.detail}</span></span><ArrowRight className="size-4 shrink-0 text-muted-foreground" /></button>)}
+              {adminSearch.trim() && !searchResults.length && <p className="p-8 text-center text-sm text-muted-foreground">No matching members, QBanks or questions.</p>}
+              {!adminSearch.trim() && <div className="grid gap-2 p-2 sm:grid-cols-2">{([['contact', 'Contact tickets'], ['subscriptions', 'Subscriptions'], ['roles', 'Roles & permissions'], ['audit', 'Audit log']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} onClick={() => { setTab(id); setAdminSearchOpen(false); }} className="flex min-h-11 items-center justify-between rounded-xl border px-3 text-sm font-semibold hover:bg-muted"><span>{label}</span><ArrowRight className="size-4 text-muted-foreground" /></button>)}</div>}
+            </div>
+          </dialog>
+        </div>
+      )}
       <div className="mx-auto grid max-w-[1440px] items-start gap-5 p-4 sm:p-7 xl:grid-cols-[190px_minmax(0,1fr)]">
-        <nav aria-label="Administration sections" className="min-w-0 rounded-2xl border bg-card p-3">
+        <nav aria-label="Administration sections" className="min-w-0 rounded-2xl border bg-card p-3 shadow-sm xl:sticky xl:top-5">
+          {isSuperadminWorkspace && <div className="mb-4 hidden border-b px-2 pb-4 xl:block"><div className="flex items-center gap-2 text-primary"><ShieldCheck className="size-5" /><strong className="text-sm">Admin Control Center</strong></div><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Independent system administration</p></div>}
           <label className="block text-xs font-semibold text-muted-foreground xl:hidden">
             Administration section
             <select value={tab} onChange={e => setTab(e.target.value as Tab)} className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3 text-base text-foreground">
@@ -335,38 +785,62 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
         {isRoot && tab === 'economy' && <EconomyAdmin members={collaboration.members} />}
         {isRoot && tab === 'contact' && <ContactWorkspace admin />}
         {isRoot && tab === 'question-preview' && <QuestionPreview />}
+        {isRoot && tab === 'announcement' && <AnnouncementAdmin />}
+        {isRoot && tab === 'backups' && <BackupAdmin />}
+        {isRoot && tab === 'legal' && <LegalLinksAdmin />}
         {tab === 'overview' && (
           <div className="space-y-6">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wider text-primary">Admin overview</p>
-              <h2 className="mt-2 text-2xl font-bold tracking-tight">Your workspace at a glance</h2>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">Review pending work, manage access and keep your question banks up to date.</p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
-              {([
-                { id: 'registrations', label: 'Pending registrations', value: pendingMembers.length, detail: `${pendingManualIdChecks.length} IDs need manual verification`, icon: UserCheck },
-                { id: 'roles', label: 'Role requests', value: roleRequests.length, detail: 'Review access and responsibilities', icon: ShieldCheck },
-                { id: 'proposals', label: 'Edits to review', value: reviewable.length, detail: 'Question changes awaiting review', icon: Clock3 },
-                { id: 'qbanks', label: 'Visible QBanks', value: collaboration.qbanks.length, detail: 'Open the question bank directory', icon: BookOpen },
-              ] as const).filter(item => tabs.some(([id]) => id === item.id)).map(item => (
-                <button key={item.id} onClick={() => { setTab(item.id); if (item.id === 'registrations') { setMemberStatus('pending'); setMemberSearch(''); setMemberPage(0); } }} className="group min-w-0 rounded-2xl border bg-card p-5 text-start transition-colors hover:border-primary/40 hover:bg-primary/5">
-                  <div className="flex items-center justify-between gap-2"><item.icon className="size-5 text-primary" /><ArrowRight className="size-4 text-muted-foreground" /></div>
-                  <strong className="mt-4 block text-3xl tabular-nums">{item.value}</strong>
-                  <p className="mt-1 text-sm font-semibold">{item.label}</p>
-                  <p className="mt-2 text-xs leading-5 text-muted-foreground">{item.detail}</p>
-                </button>
-              ))}
-            </div>
-            {isRoot && <section className="rounded-2xl border bg-card p-5">
-              <h3 className="font-bold">Quick access</h3>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {([['contact', 'Contact Tickets', 'Respond to account and question issues.'], ['subscriptions', 'Subscriptions', 'Manage Pro access and expiration dates.'], ['discounts', 'Discount Codes', 'Set pricing and manage promotions.'], ['question-preview', 'Question Preview', 'Find a question by ID and inspect the student view.']] as const).map(([id, label, detail]) => <button key={id} onClick={() => setTab(id)} className="flex min-w-0 items-center justify-between gap-3 rounded-xl border p-4 text-start hover:bg-muted/50"><span><strong className="block text-sm">{label}</strong><span className="mt-1 block text-xs leading-5 text-muted-foreground">{detail}</span></span><ArrowRight className="size-4 shrink-0 text-muted-foreground" /></button>)}
+            <section aria-labelledby="attention-heading">
+              <div className="mb-4 flex items-end justify-between gap-3">
+                <div><p className="text-xs font-bold uppercase tracking-wider text-primary">Priority workspace</p><h2 id="attention-heading" className="mt-1 text-2xl font-bold tracking-tight">Needs attention</h2></div>
+                <span className="text-xs text-muted-foreground">Oldest items first</span>
               </div>
-            </section>}
+              <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+                {([
+                  { id: 'proposals', label: 'Reviews awaiting action', value: reviewable.length, oldest: oldestReview, detail: reviewable.length ? 'Question changes ready for review' : 'No reviews waiting 🎉', icon: Clock3, cta: 'Review now' },
+                  { id: 'contact', label: 'Open contact tickets', value: null, oldest: undefined, detail: 'Open the ticket inbox', icon: MessageSquareText, cta: 'Open inbox' },
+                  { id: 'registrations', label: 'Pending registrations', value: pendingMembers.length, oldest: oldestRegistration, detail: pendingMembers.length ? `${pendingManualIdChecks.length} IDs need manual verification` : 'No registrations waiting 🎉', icon: UserCheck, cta: 'Review now' },
+                  { id: 'roles', label: 'Role/access requests', value: roleRequests.length, oldest: oldestRoleRequest, detail: roleRequests.length ? 'Permissions awaiting a decision' : 'No role requests waiting 🎉', icon: ShieldCheck, cta: 'Review now' },
+                ] as Array<{ id: Tab; label: string; value: number | null; oldest?: string; detail: string; icon: typeof Clock3; cta: string }>).filter(item => tabs.some(([id]) => id === item.id)).map(item => (
+                  <button key={item.id} onClick={() => { setTab(item.id); if (item.id === 'registrations') { setMemberStatus('pending'); setMemberSearch(''); setMemberPage(0); } }} className={cx('group min-w-0 rounded-2xl border bg-card p-5 text-start shadow-sm transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md', item.value === 0 && 'bg-card/55 opacity-70 shadow-none')}>
+                    <div className="flex items-center justify-between gap-3"><span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><item.icon className="size-5" /></span><ArrowRight className="size-4 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" /></div>
+                    <strong className="mt-5 block text-4xl font-bold tracking-tight tabular-nums">{item.value ?? '—'}</strong>
+                    <p className="mt-1 font-bold">{item.label}</p>
+                    {item.oldest && <p className="mt-2 text-xs font-semibold text-amber-700 dark:text-amber-300">Oldest: {relativeAge(item.oldest, dashboardNow)}</p>}
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">{item.detail}</p>
+                    <span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-primary">{item.cta} <ArrowRight className="size-3.5" /></span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="overflow-hidden rounded-2xl border bg-card">
+              <div className="flex items-center justify-between gap-3 border-b px-5 py-4"><div><h2 className="font-bold">Action queue</h2><p className="mt-1 text-xs text-muted-foreground">The oldest available operational work across the system.</p></div><Inbox className="size-5 text-primary" /></div>
+              {attentionQueue.filter(item => tabs.some(([id]) => id === item.destination)).length ? (
+                <div className="divide-y">
+                  {attentionQueue.filter(item => tabs.some(([id]) => id === item.destination)).map(item => <button key={`${item.type}:${item.id}`} onClick={() => { setTab(item.destination); if (item.destination === 'registrations') { setMemberSearch(item.item); setMemberStatus('pending'); setMemberPage(0); } if (item.destination === 'roles') setRoleSearch(item.item); }} className="grid min-h-16 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-5 py-3 text-left hover:bg-muted/35 sm:grid-cols-[120px_minmax(0,1.4fr)_minmax(120px,0.8fr)_70px_auto]"><span className="text-xs font-bold text-primary">{item.type}</span><span className="min-w-0 truncate text-sm font-semibold">{item.item}</span><span className="col-start-1 truncate text-xs text-muted-foreground sm:col-auto">{item.context}</span><time className="text-xs font-semibold text-muted-foreground">{relativeAge(item.createdAt, dashboardNow)}</time><span className="col-start-2 row-start-1 row-end-3 inline-flex items-center justify-end gap-1 text-xs font-bold text-primary sm:col-auto sm:row-auto">Open <ArrowRight className="size-3.5" /></span></button>)}
+                </div>
+              ) : <p className="p-8 text-center text-sm text-muted-foreground">Nothing needs attention right now 🎉</p>}
+            </section>
+
+            {isSuperadminWorkspace && <div className="grid gap-5 2xl:grid-cols-[1.3fr_0.7fr]">
+              <section className="rounded-2xl border bg-card p-5">
+                <div className="flex items-center justify-between"><div><h2 className="font-bold">QBank Health</h2><p className="mt-1 text-xs text-muted-foreground">Current scope, using already-loaded content.</p></div><BookOpen className="size-5 text-primary" /></div>
+                <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
+                  {([{ label: 'Published questions', value: qbankHealth.published, destination: 'qbanks' }, { label: 'Awaiting review', value: qbankHealth.awaiting, destination: 'proposals' }, { label: 'Added this week', value: qbankHealth.addedThisWeek, destination: 'qbanks' }, { label: 'Visible QBanks', value: qbankHealth.visibleBanks, destination: 'qbanks' }] as Array<{ label: string; value: number; destination: Tab }>).map(metric => <button key={metric.label} onClick={() => setTab(metric.destination)} className="text-left"><strong className="block text-2xl tabular-nums">{metric.value.toLocaleString()}</strong><span className="mt-1 block text-xs text-muted-foreground">{metric.label}</span></button>)}
+                </div>
+              </section>
+              <section className="rounded-2xl border bg-card p-5">
+                <h2 className="font-bold">Subscription snapshot</h2><p className="mt-1 text-xs text-muted-foreground">Approved, active accounts.</p>
+                <div className="mt-5 grid grid-cols-3 gap-3">{([{ label: 'Lite', value: subscriptionSnapshot.lite }, { label: 'Pro', value: subscriptionSnapshot.pro }, { label: 'Unlimited', value: subscriptionSnapshot.unlimited }] as const).map(item => <button key={item.label} onClick={() => setTab('subscriptions')} className="rounded-xl bg-muted/50 p-3 text-center hover:bg-primary/10"><strong className="block text-xl tabular-nums">{item.value}</strong><span className="mt-1 block text-[11px] text-muted-foreground">{item.label}</span></button>)}</div>
+              </section>
+            </div>}
+
             {isRoot && <section className="rounded-2xl border bg-card p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-bold">Recent activity</h3><button className="q-button border" onClick={() => { setAuditSearch(''); setAuditPage(0); setTab('audit'); }}>View audit log</button></div>
-              {[...collaboration.auditLog].sort((a,b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5).map(item => <div key={item.id} className="mt-4 flex flex-wrap items-start justify-between gap-2 border-t pt-4"><div className="min-w-0"><p className="break-words text-sm font-semibold">{item.action.replaceAll('_', ' ')}</p><p className="mt-1 text-xs text-muted-foreground">{item.actorName}</p></div><time className="text-xs text-muted-foreground">{formatDate(item.createdAt)}</time></div>)}
-              {!collaboration.auditLog.length && <p className="mt-4 text-sm text-muted-foreground">No activity recorded yet.</p>}
+              <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold">Recent activity</h2><p className="mt-1 text-xs text-muted-foreground">The latest useful system events.</p></div><button className="inline-flex items-center gap-1 text-xs font-bold text-primary" onClick={() => { setAuditSearch(''); setAuditPage(0); setTab('audit'); }}>View audit log <ArrowRight className="size-3.5" /></button></div>
+              {auditEntries.slice(0, 5).map(item => <div key={item.id} className="mt-4 flex items-start justify-between gap-4 border-t pt-4"><p className="min-w-0 break-words text-sm">{activityLabel(item)}</p><time className="shrink-0 text-xs font-semibold text-muted-foreground">{relativeAge(item.createdAt, dashboardNow)}</time></div>)}
+              {!auditBusy && !auditEntries.length && <p className="mt-4 text-sm text-muted-foreground">No activity recorded this week.</p>}
+              {auditBusy && <p className="mt-4 animate-pulse text-sm text-muted-foreground">Loading this week’s activity…</p>}
             </section>}
           </div>
         )}
@@ -391,7 +865,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
                       {isRoot && <th className="px-5 py-3">Mobile</th>}
                       <th className="px-5 py-3">University ID</th>
                       <th className="px-5 py-3">Status</th>
-                      <th className="px-5 py-3">Role &amp; tier</th>
+                      <th className="px-5 py-3">Roles &amp; subscription</th>
                       {isRoot && <th className="px-5 py-3">Registered</th>}
                       {isRoot && <th className="px-5 py-3">Reviewed by</th>}
                       <th className="px-5 py-3 text-right">Actions</th>
@@ -431,8 +905,8 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
                           {isRoot && <span className="mt-1 block text-xs text-muted-foreground">MFA {member.mfaEnrolled ? 'enabled' : 'not enabled'}</span>}
                         </td>
                         <td className="px-5 py-4">
-                          <span className="block capitalize">{member.role.replaceAll('_', ' ')}</span>
-                          <span className="mt-1 block text-xs text-muted-foreground">{member.tier} · {member.platformRoles.length ? member.platformRoles.join(', ') : 'no extra roles'}</span>
+                          <span className="block">{administrativeRoleLabels(member).join(' · ') || 'No assigned role'}</span>
+                          <span className="mt-1 block text-xs text-muted-foreground">Subscription: {member.tier.toUpperCase()}</span>
                         </td>
                         {isRoot && <td className="whitespace-nowrap px-5 py-4 text-xs text-muted-foreground">{formatDate(member.createdAt)}</td>}
                         {isRoot && <td className="px-5 py-4 text-xs">
@@ -440,8 +914,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
                         </td>}
                         <td className="px-5 py-4">
                           <div className="flex justify-end gap-2">
-                            {!isRoot && member.subscriptionProtected && <span className="text-xs text-muted-foreground">Official subscription · Superadmin only</span>}
-                            {member.status === 'pending' && (isRoot || !member.subscriptionProtected) && (
+                            {member.status === 'pending' && (
                               <>
                                 <button onClick={() => reviewMember(member.uid, 'rejected')} className="h-9 rounded-lg border px-3 text-xs font-bold text-red-600 dark:text-red-300">
                                   <UserRoundX className="mr-1 inline size-4" />
@@ -455,7 +928,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
                             )}
                             {member.status === 'approved' && member.role !== 'super_admin' && (
                               <>
-                                {isRoot && (
+                                {isModerator && (
                                   <button
                                     onClick={() => {
                                       setRoleSearch(member.email);
@@ -466,9 +939,9 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
                                     Manage roles
                                   </button>
                                 )}
-                                {(isRoot || !member.subscriptionProtected) && <button onClick={() => toggleSuspended(member)} className="h-9 rounded-lg border px-3 text-xs font-bold">
+                                <button onClick={() => toggleSuspended(member)} className="h-9 rounded-lg border px-3 text-xs font-bold">
                                   {member.suspended ? 'Restore' : 'Block'}
-                                </button>}
+                                </button>
                               </>
                             )}
                           </div>
@@ -554,13 +1027,13 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
             </div>
           </section>
         )}
-        {tab === 'roles' && (
+        {isModerator && tab === 'roles' && (
           <div className="space-y-5">
             <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
               <div className="flex flex-col gap-4 border-b p-5 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h2 className="font-bold">Quick account promotion</h2>
-                  <p className="mt-1 text-xs text-muted-foreground">Turn Pro, Reviewer, or Access Manager access on or off with one click.</p>
+                  <h2 className="font-bold">Role management</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">Assign administrative roles independently from each account&apos;s subscription.</p>
                 </div>
                 <input
                   type="search"
@@ -571,15 +1044,15 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
                   aria-label="Search accounts"
                 />
               </div>
-              <p className="border-b px-5 py-3 text-xs text-muted-foreground" dir="auto">قد يظهر الحساب في أكثر من قسم حسب صلاحياته المحفوظة. تُحدّث الأقسام بعد Save.</p>
+              <p className="border-b px-5 py-3 text-xs text-muted-foreground">Moderator includes Reviewer and Access Manager permissions. Subscription features are managed separately.</p>
               {roleGroups.map(group => {
                 const page = Math.min(roleSectionPages[group.id] ?? 0, Math.max(0, Math.ceil(group.members.length / 20) - 1));
                 return <details key={group.id} open className="border-b last:border-b-0">
                   <summary className="cursor-pointer bg-muted/30 px-5 py-4 text-sm font-bold">{group.label}<span className="ms-3 inline-flex min-w-7 items-center justify-center rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">{group.members.length}</span></summary>
                   <div className="divide-y">
                 {group.members.slice(page * 20, page * 20 + 20).map((member) => {
-                    const draft = accessDraftFor(member);
-                    const unsaved = hasUnsavedAccess(member);
+                    const draft = roleDraftFor(member);
+                    const unsaved = hasUnsavedRoles(member);
                     return (
                     <div key={member.uid} className={cx('flex flex-col gap-4 p-5 transition lg:flex-row lg:items-center', unsaved && 'bg-amber-50/60 dark:bg-amber-500/5')}>
                       <div className="min-w-0 flex-1">
@@ -591,28 +1064,30 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <button
-                          aria-pressed={draft.tier === 'pro'}
-                          onClick={() => toggleAccountAccess(member, 'pro')}
-                          className={cx('h-10 rounded-xl border px-4 text-xs font-bold transition', draft.tier === 'pro' && 'border-primary bg-primary text-primary-foreground')}
+                          aria-pressed={draft.includes('moderator')}
+                          onClick={() => toggleAccountRole(member, 'moderator')}
+                          className={cx('h-10 rounded-xl border px-4 text-xs font-bold transition', draft.includes('moderator') && 'border-primary bg-primary text-primary-foreground')}
                         >
-                          Pro
+                          Moderator
                         </button>
                         <button
-                          aria-pressed={draft.platformRoles.includes('reviewer')}
-                          onClick={() => toggleAccountAccess(member, 'reviewer')}
-                          className={cx('h-10 rounded-xl border px-4 text-xs font-bold transition', draft.platformRoles.includes('reviewer') && 'border-primary bg-primary text-primary-foreground')}
+                          aria-pressed={draft.includes('moderator') || draft.includes('reviewer')}
+                          disabled={draft.includes('moderator')}
+                          onClick={() => toggleAccountRole(member, 'reviewer')}
+                          className={cx('h-10 rounded-xl border px-4 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-60', (draft.includes('moderator') || draft.includes('reviewer')) && 'border-primary bg-primary text-primary-foreground')}
                         >
                           Reviewer
                         </button>
                         <button
-                          aria-pressed={draft.platformRoles.includes('access_manager')}
-                          onClick={() => toggleAccountAccess(member, 'access_manager')}
-                          className={cx('h-10 rounded-xl border px-4 text-xs font-bold transition', draft.platformRoles.includes('access_manager') && 'border-primary bg-primary text-primary-foreground')}
+                          aria-pressed={draft.includes('moderator') || draft.includes('access_manager')}
+                          disabled={draft.includes('moderator')}
+                          onClick={() => toggleAccountRole(member, 'access_manager')}
+                          className={cx('h-10 rounded-xl border px-4 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-60', (draft.includes('moderator') || draft.includes('access_manager')) && 'border-primary bg-primary text-primary-foreground')}
                         >
                           Access Manager
                         </button>
                         <button
-                          onClick={() => saveAccountAccess(member)}
+                          onClick={() => saveAccountRoles(member)}
                           disabled={!unsaved}
                           className="inline-flex h-10 items-center gap-2 rounded-xl bg-emerald-600 px-4 text-xs font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-35"
                         >
@@ -635,7 +1110,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
             <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
               <div className="border-b p-5">
                 <h2 className="font-bold">Pending role requests</h2>
-                <p className="mt-1 text-xs text-muted-foreground">Approve or reject requests submitted by users from the Contributions page.</p>
+                <p className="mt-1 text-xs text-muted-foreground">Moderators can approve or reject role requests submitted from the Contributions page.</p>
               </div>
               {roleRequests.length ? (
                 <div className="divide-y">
@@ -680,15 +1155,31 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
           </section>
         )}
         {tab === 'proposals' && <ReviewWorkspace user={user} collaboration={collaboration} update={update} replaceFromServer={replaceFromServer} embedded />}
+        {tab === 'reviewer-performance' && user.isAdmin && <ReviewerPerformance />}
         {tab === 'audit' && (
           <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
-            <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="border-b p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0"><h2 className="font-bold">Audit log</h2>
-              <p className="mt-1 text-xs text-muted-foreground">Latest activity first. Search by actor, action or target ID.</p></div>
+              <p className="mt-1 text-xs text-muted-foreground">One small weekly request at a time. Choose a year, month and week.</p></div>
               <input aria-label="Search audit log" placeholder="Search activity…" value={auditSearch} onChange={e => { setAuditSearch(e.target.value); setAuditPage(0); }} className="min-h-11 w-full min-w-0 rounded-xl border bg-background px-3 text-sm sm:w-72" />
+              </div>
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                <select aria-label="Audit year" value={auditYear} onChange={(event) => { const year = Number(event.target.value); setAuditYear(year); setAuditWeek(weeksForMonth(year, auditMonth)[0]); setAuditPage(0); }} className="h-11 rounded-xl border bg-background px-3 text-sm font-semibold">
+                  {Array.from({ length: 7 }, (_, index) => new Date().getUTCFullYear() - index).map((year) => <option key={year} value={year}>{year}</option>)}
+                </select>
+                <select aria-label="Audit month" value={auditMonth} onChange={(event) => { const month = Number(event.target.value); setAuditMonth(month); setAuditWeek(weeksForMonth(auditYear, month)[0]); setAuditPage(0); }} className="h-11 rounded-xl border bg-background px-3 text-sm font-semibold">
+                  {Array.from({ length: 12 }, (_, month) => <option key={month} value={month}>{new Intl.DateTimeFormat('en', { month: 'long' }).format(new Date(Date.UTC(2026, month, 1)))}</option>)}
+                </select>
+                <select aria-label="Audit week" value={auditWeek} onChange={(event) => { setAuditWeek(event.target.value); setAuditPage(0); }} className="h-11 rounded-xl border bg-background px-3 text-sm font-semibold">
+                  {auditWeeks.map((week, index) => <option key={week} value={week}>Week {index + 1} · {formatDate(week)}</option>)}
+                </select>
+              </div>
+              {auditLimited && <p className="mt-3 text-xs font-semibold text-amber-700 dark:text-amber-300">Showing the newest 250 entries for this week.</p>}
             </div>
             <div className="divide-y">
-              {filteredAudit.slice(logsPage * 25, logsPage * 25 + 25).map((item) => (
+              {auditBusy && <div className="space-y-3 p-5">{Array.from({ length: 5 }, (_, index) => <div key={index} className="h-12 animate-pulse rounded-xl bg-muted" />)}</div>}
+              {!auditBusy && filteredAudit.slice(logsPage * 25, logsPage * 25 + 25).map((item) => (
                 <details key={item.id} className="group min-w-0 text-sm open:bg-muted/20">
                   <summary className="grid min-h-14 cursor-pointer list-none grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-4 py-3 hover:bg-muted/30 focus-visible:outline-offset-[-3px] lg:grid-cols-[minmax(100px,0.8fr)_minmax(0,1.4fr)_minmax(0,1.5fr)_auto] [&::-webkit-details-marker]:hidden">
                     <strong className="min-w-0 break-words" dir="auto">{item.actorName}</strong>
@@ -703,7 +1194,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer 
                 </details>
               ))}
             </div>
-            {!filteredAudit.length && <p className="p-6 text-sm text-muted-foreground">No activity matches your search.</p>}
+            {!auditBusy && !filteredAudit.length && <p className="p-6 text-sm text-muted-foreground">No activity matches this week and search.</p>}
             <div className="flex flex-wrap items-center justify-between gap-3 border-t p-4 text-xs text-muted-foreground">
               <span>{filteredAudit.length} entries · Page {logsPage + 1} of {Math.max(1, Math.ceil(filteredAudit.length / 25))}</span>
               <div className="flex gap-2"><button className="q-button border" disabled={logsPage === 0} onClick={() => setAuditPage(logsPage - 1)}>Previous</button><button className="q-button border" disabled={(logsPage + 1) * 25 >= filteredAudit.length} onClick={() => setAuditPage(logsPage + 1)}>Next</button></div>

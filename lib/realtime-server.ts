@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { currentUser, json, readJson } from './cloudflare-server';
 import { bankAccessState } from './qbank-access-repository';
-import { canAccessBank, canReviewBank } from './medguard-types';
+import { canAccessBank, canReviewBank, hasAccessManagerRole, hasModeratorRole } from './medguard-types';
 
 type RealtimeStub = DurableObjectStub & {
   publish(topic: string): Promise<void>;
@@ -21,8 +21,8 @@ export async function connectRealtime(request: Request) {
   let allowed = channel === `user:${user.uid}`;
   if (user.status === 'approved') {
     if (channel === 'catalog') allowed = true;
-    if (channel === 'admin') allowed = Boolean(user.role === 'super_admin' && user.mfaEnrolled && user.mfaVerified);
-    if (channel === 'access') allowed = user.role === 'super_admin' || user.platformRoles.includes('access_manager');
+    if (channel === 'admin') allowed = hasModeratorRole(user) && (user.role !== 'super_admin' || Boolean(user.mfaEnrolled && user.mfaVerified));
+    if (channel === 'access') allowed = hasAccessManagerRole(user);
     if (channel.startsWith('bank:')) {
       const state = await bankAccessState(channel.slice(5));
       const bank = state.qbanks.find(b => b.id === channel.slice(5));
@@ -45,7 +45,12 @@ export async function publishChanges(channels: Iterable<string>, topic = 'collab
 // are sent over the socket; the client re-fetches through existing permissions.
 export async function notifyMutation(request: Request) {
   const path = new URL(request.url).pathname.split('/').slice(3);
-  if (['state', 'media', 'ids'].includes(path[0]) || (path[0] === 'platform' && path[1] === 'quote')) return;
+  if (
+    ['state', 'media', 'ids'].includes(path[0]) ||
+    (path[0] === 'auth' && path[1] !== 'register') ||
+    (path[0] === 'platform' && ['exam-start', 'quote'].includes(path[1]))
+  )
+    return;
   const input = await readJson<Record<string, unknown>>(request, 2_000_000);
   const user = await currentUser(request);
   const channels = new Set<string>(['admin']);
@@ -74,16 +79,23 @@ export async function notifyMutation(request: Request) {
       if (operation.collection === 'qbanks') { addBank(operation.id); channels.add('catalog'); }
       if (operation.type === 'delete' || ['qbankMemberships', 'qbankInvitations', 'system'].includes(operation.collection)) channels.add('catalog');
     }
+  } else if (path[0] === 'platform' && path[1] === 'review-history') {
+    topic = 'review-history';
   } else if (path[0] === 'platform' && path[1] === 'discounts') {
     topic = 'pricing'; channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'subscriptions') {
     topic = 'account'; channels.add('access');
+  } else if (path[0] === 'platform' && path[1] === 'announcement') {
+    topic = 'announcement'; channels.add('catalog');
+  } else if (path[0] === 'platform' && path[1] === 'economy-admin') {
+    if (input.operation === 'grant-reward') topic = 'reward-gift';
+    else if (input.operation === 'adjust-credits') topic = 'reward';
   } else if (path[0] === 'platform' && path[1] === 'bulk-review' && Array.isArray(input.proposalIds)) {
-    const rows = await env.DB.prepare("SELECT qbank_id FROM records WHERE type='questionProposals' AND id IN (SELECT value FROM json_each(?)) GROUP BY qbank_id")
-      .bind(JSON.stringify(input.proposalIds)).all<{ qbank_id: string }>();
-    rows.results.forEach(row => addBank(row.qbank_id));
+    const rows = await env.DB.prepare("SELECT qbank_id,owner_id FROM records WHERE type='questionProposals' AND id IN (SELECT value FROM json_each(?))")
+      .bind(JSON.stringify(input.proposalIds)).all<{ qbank_id: string; owner_id: string }>();
+    rows.results.forEach(row => { addBank(row.qbank_id); addUser(row.owner_id); });
+    if (input.status === 'approved') topic = 'reward';
   } else if (path[0] === 'auth') {
-    if (path[1] !== 'register') return;
     channels.add('access');
   } else if (path[0] === 'qbanks' || path[1] === 'question') {
     channels.add('catalog');

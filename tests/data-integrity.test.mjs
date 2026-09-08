@@ -47,7 +47,9 @@ void test('PWA shell and Cloudflare persistence configuration are present', asyn
   const wrangler = await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
   const schema = await readFile(new URL('../db/schema.ts', import.meta.url), 'utf8');
   assert.equal(manifest.display, 'standalone');
-  assert.equal(manifest.icons.length, 2);
+  assert.ok(manifest.icons.some(icon => icon.purpose === 'maskable' && icon.sizes === '512x512'));
+  assert.ok(manifest.icons.some(icon => icon.purpose === 'any' && icon.sizes === '192x192'));
+  assert.ok(manifest.icons.some(icon => icon.purpose === 'any' && icon.sizes === '512x512'));
   assert.match(serviceWorker, /CACHE_NAME/);
   assert.match(serviceWorker, /'\/offline'/);
   assert.match(wrangler, /"binding": "DB"/);

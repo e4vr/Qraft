@@ -4,52 +4,55 @@ import { highestPlan, isPlanId, type PlanId } from './plan-config';
 
 export type EffectiveEntitlement = {
   effectivePlan: PlanId;
+  effectivePlanExpiresAt: string | null;
   subscriptionPlan: PlanId | null;
   rewardPlan: PlanId | null;
   adminPlan: PlanId | null;
-  reviewerBenefit: boolean;
 };
 
 export async function getEffectiveEntitlement(
-  profile: Pick<MemberProfile, 'uid' | 'tier' | 'role' | 'platformRoles'>,
+  profile: Pick<MemberProfile, 'uid' | 'tier'>,
   now = new Date().toISOString(),
 ): Promise<EffectiveEntitlement> {
   const [subscription, reward, admin] = await env.DB.batch([
     env.DB.prepare(
-      "SELECT plan FROM subscriptions WHERE user_id=? AND status IN ('active','manually_activated') AND (expires_at IS NULL OR expires_at>?) LIMIT 1",
+      "SELECT plan,expires_at FROM subscriptions WHERE user_id=? AND status IN ('active','manually_activated') AND (expires_at IS NULL OR expires_at>?) LIMIT 1",
     ).bind(profile.uid, now),
     env.DB.prepare(
-      "SELECT plan FROM reward_passes WHERE user_id=? AND status='active' AND expires_at>? ORDER BY CASE plan WHEN 'unlimited' THEN 3 WHEN 'pro' THEN 2 WHEN 'lite' THEN 1 ELSE 0 END DESC LIMIT 1",
+      "SELECT plan,expires_at FROM reward_passes WHERE user_id=? AND status='active' AND expires_at>? ORDER BY CASE plan WHEN 'unlimited' THEN 3 WHEN 'pro' THEN 2 WHEN 'lite' THEN 1 ELSE 0 END DESC LIMIT 1",
     ).bind(profile.uid, now),
     env.DB.prepare(
-      "SELECT plan FROM admin_plan_entitlements WHERE user_id=? AND active=1 AND (expires_at IS NULL OR expires_at>?) ORDER BY CASE plan WHEN 'unlimited' THEN 3 WHEN 'pro' THEN 2 WHEN 'lite' THEN 1 ELSE 0 END DESC LIMIT 1",
+      "SELECT plan,expires_at FROM admin_plan_entitlements WHERE user_id=? AND active=1 AND (expires_at IS NULL OR expires_at>?) ORDER BY CASE plan WHEN 'unlimited' THEN 3 WHEN 'pro' THEN 2 WHEN 'lite' THEN 1 ELSE 0 END DESC LIMIT 1",
     ).bind(profile.uid, now),
   ]);
-  const subscriptionRow = subscription.results[0] as { plan?: unknown } | undefined;
-  const rewardRow = reward.results[0] as { plan?: unknown } | undefined;
-  const adminRow = admin.results[0] as { plan?: unknown } | undefined;
+  const subscriptionRow = subscription.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
+  const rewardRow = reward.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
+  const adminRow = admin.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
   const subscriptionPlan = isPlanId(subscriptionRow?.plan)
     ? subscriptionRow.plan
     : null;
   const rewardPlan = isPlanId(rewardRow?.plan) ? rewardRow.plan : null;
   const adminPlan = isPlanId(adminRow?.plan) ? adminRow.plan : null;
-  const reviewerBenefit =
-    profile.role === 'super_admin' ||
-    profile.role === 'reviewer' ||
-    profile.platformRoles.includes('reviewer');
   const basePlan = isPlanId(profile.tier) ? profile.tier : 'free';
-  return {
-    effectivePlan: highestPlan(
-      basePlan,
-      subscriptionPlan,
-      rewardPlan,
-      adminPlan,
-      reviewerBenefit ? 'unlimited' : null,
-    ),
+  const effectivePlan = highestPlan(
+    basePlan,
     subscriptionPlan,
     rewardPlan,
     adminPlan,
-    reviewerBenefit,
+  );
+  const matchingExpirations = [
+    subscriptionPlan === effectivePlan ? subscriptionRow?.expires_at : null,
+    rewardPlan === effectivePlan ? rewardRow?.expires_at : null,
+    adminPlan === effectivePlan ? adminRow?.expires_at : null,
+  ].filter((value): value is string => Boolean(value));
+  return {
+    effectivePlan,
+    effectivePlanExpiresAt: matchingExpirations.length
+      ? matchingExpirations.sort().at(-1) ?? null
+      : null,
+    subscriptionPlan,
+    rewardPlan,
+    adminPlan,
   };
 }
 

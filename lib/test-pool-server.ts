@@ -1,0 +1,57 @@
+import { env } from 'cloudflare:workers';
+import { canAccessBank, type AppUser, type Question, type TestBuilderConfig } from './medguard-types';
+import { bankAccessState } from './qbank-access-repository';
+import { getPlanLimits } from './plan-config';
+import { json } from './cloudflare-server';
+
+// Count and random selection share this exact predicate. The per-exam limit is
+// applied only to the final SELECT, never to the candidates or count.
+export async function testPool(user: AppUser, input: Record<string, unknown>) {
+  const qbankId = typeof input.qbankId === 'string' ? input.qbankId : '';
+  const state = await bankAccessState(qbankId);
+  const bank = state.qbanks.find(item => item.id === qbankId);
+  if (!bank || bank.archived || !canAccessBank(user, bank, state.memberships)) return json({ error: 'QBank access required.' }, 403);
+  const config = input.config as TestBuilderConfig | undefined;
+  if (!config || typeof config.specialty !== 'string' || !Array.isArray(config.topics) || config.topics.some(topic => typeof topic !== 'string') || !Array.isArray(config.statuses) || config.statuses.some(status => !['new','previous','correct','incorrect','flagged'].includes(status)))
+    return json({ error: 'Invalid test filters.' }, 400);
+  const select = input.select === true;
+  const limit = getPlanLimits(user.effectivePlan ?? user.tier).maxQuestionsPerExam;
+  if (select && (!Number.isInteger(config.count) || config.count < 1 || config.count > limit)) return json({ error: `Your plan allows at most ${limit} questions per test.` }, 403);
+  const progress = input.progress && typeof input.progress === 'object' && !Array.isArray(input.progress) ? JSON.stringify(input.progress) : null;
+  const sql = `WITH app AS (SELECT coalesce((SELECT payload FROM app_states WHERE user_id=?),'{}') AS payload),
+    candidates AS (
+      SELECT id,payload FROM records WHERE type='sharedQuestions' AND qbank_id=?
+      UNION ALL
+      SELECT json_extract(c.value,'$.id') AS id,c.value AS payload FROM app,json_each(app.payload,'$.customQuestions') c
+      WHERE coalesce(json_extract(c.value,'$.qbankId'),'smle-gs')=?
+        AND NOT EXISTS (SELECT 1 FROM records WHERE type='sharedQuestions' AND id=json_extract(c.value,'$.id'))
+    ), effective AS (
+      SELECT c.id,json_patch(c.payload,coalesce(o.value,'{}')) AS payload
+      FROM candidates c CROSS JOIN app LEFT JOIN json_each(app.payload,'$.questionOverrides') o ON o.key=c.id
+      WHERE NOT EXISTS (SELECT 1 FROM retired_questions WHERE id=c.id)
+      GROUP BY c.id
+    ), eligible AS (
+      SELECT q.id,q.payload FROM effective q CROSS JOIN app
+      LEFT JOIN json_each(coalesce(?,json_extract(app.payload,'$.progress'),'{}')) p ON p.key=q.id
+      WHERE ?=1 OR (
+        (?='' OR json_extract(q.payload,'$.specialty')=?)
+        AND (json_array_length(?)=0 OR json_extract(q.payload,'$.topic') IN (SELECT value FROM json_each(?)))
+        AND (json_array_length(?)=0 OR EXISTS (
+          SELECT 1 FROM json_each(?) s WHERE
+            (s.value='new' AND coalesce(json_extract(p.value,'$.attempts'),0)=0) OR
+            (s.value='previous' AND coalesce(json_extract(p.value,'$.attempts'),0)>0) OR
+            (s.value='flagged' AND json_extract(p.value,'$.flagged')=1) OR
+            (s.value='correct' AND json_extract(p.value,'$.attempts')>0 AND json_extract(p.value,'$.lastAnswer')=json_extract(q.payload,'$.answer')) OR
+            (s.value='incorrect' AND json_extract(p.value,'$.attempts')>0 AND json_extract(p.value,'$.lastAnswer') IS NOT json_extract(q.payload,'$.answer'))
+        ))
+      )
+    )`;
+  const bindings = [user.uid, qbankId, qbankId, progress, config.randomAll ? 1 : 0, config.specialty, config.specialty, JSON.stringify(config.topics), JSON.stringify(config.topics), JSON.stringify(config.statuses), JSON.stringify(config.statuses)];
+  if (!select) {
+    const count = await env.DB.prepare(`${sql} SELECT count(*) AS eligible FROM eligible`).bind(...bindings).first<{ eligible: number }>();
+    return json({ eligible: count?.eligible ?? 0 });
+  }
+  const rows = await env.DB.prepare(`${sql} SELECT payload FROM eligible ORDER BY random() LIMIT ?`).bind(...bindings, config.count).all<{ payload: string }>();
+  if (rows.results.length < config.count) return json({ error: `Only ${rows.results.length} questions match these filters. Refresh the eligible count and try again.` }, 409);
+  return json({ questions: rows.results.map(row => JSON.parse(row.payload) as Question) });
+}

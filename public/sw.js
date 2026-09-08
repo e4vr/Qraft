@@ -1,5 +1,5 @@
-const CACHE_NAME = 'qraft-shell-v1.0.1';
-const APP_SHELL = ['/', '/offline', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
+const CACHE_NAME = 'qraft-shell-v1.0.3';
+const APP_SHELL = ['/', '/offline', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/icon-maskable-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));

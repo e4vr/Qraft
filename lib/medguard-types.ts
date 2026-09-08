@@ -12,7 +12,7 @@ export type UserRole =
   | 'access_manager'
   | 'student';
 export type AccountTier = 'free' | 'lite' | 'pro' | 'unlimited';
-export type PlatformRole = 'reviewer' | 'access_manager';
+export type PlatformRole = 'moderator' | 'reviewer' | 'access_manager';
 export type BankRole = 'owner' | 'reviewer' | 'viewer';
 export type QBankVisibility = 'public' | 'private';
 export type AccountStatus = 'pending' | 'approved' | 'rejected';
@@ -230,10 +230,10 @@ export interface AppUser {
   createdAt?: string;
   tier: AccountTier;
   effectivePlan?: AccountTier;
+  effectivePlanExpiresAt?: string | null;
   subscriptionPlan?: AccountTier | null;
   rewardPlan?: AccountTier | null;
   adminPlan?: AccountTier | null;
-  reviewerBenefit?: boolean;
   platformRoles: PlatformRole[];
   suspended?: boolean;
   mfaEnrolled?: boolean;
@@ -287,7 +287,6 @@ export interface QBankInvitation {
 }
 
 export interface MemberProfile {
-  subscriptionProtected?: boolean;
   uid: string;
   email: string;
   displayName: string;
@@ -375,7 +374,7 @@ export interface RoleApplication {
   userId: string;
   userName: string;
   userEmail: string;
-  requestedRole: 'pro' | PlatformRole;
+  requestedRole: PlatformRole;
   superAdminUid: string;
   qbankId?: string;
   reason: string;
@@ -650,6 +649,50 @@ export function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 
+type RoleSubject = Pick<AppUser | MemberProfile, 'role' | 'platformRoles'>;
+
+export const PLATFORM_ROLES = [
+  'moderator',
+  'reviewer',
+  'access_manager',
+] as const satisfies readonly PlatformRole[];
+
+export function isPlatformRole(value: unknown): value is PlatformRole {
+  return PLATFORM_ROLES.includes(value as PlatformRole);
+}
+
+export function hasModeratorRole(user: RoleSubject): boolean {
+  return (
+    user.role === 'super_admin' ||
+    user.role === 'admin' ||
+    user.platformRoles.includes('moderator')
+  );
+}
+
+export function hasReviewerRole(user: RoleSubject): boolean {
+  return (
+    hasModeratorRole(user) ||
+    user.role === 'reviewer' ||
+    user.platformRoles.includes('reviewer')
+  );
+}
+
+export function hasAccessManagerRole(user: RoleSubject): boolean {
+  return (
+    hasModeratorRole(user) ||
+    user.role === 'access_manager' ||
+    user.platformRoles.includes('access_manager')
+  );
+}
+
+export function administrativeRoleLabels(user: RoleSubject): string[] {
+  if (hasModeratorRole(user)) return ['Moderator'];
+  const labels: string[] = [];
+  if (hasReviewerRole(user)) labels.push('Reviewer');
+  if (hasAccessManagerRole(user)) labels.push('Access Manager');
+  return labels;
+}
+
 export function bankRoleFor(
   user: AppUser,
   bank: QBank,
@@ -684,12 +727,7 @@ export function canReviewBank(
   bank: QBank,
   memberships: QBankMembership[],
 ): boolean {
-  if (
-    user.role === 'super_admin' ||
-    user.role === 'reviewer' ||
-    user.platformRoles.includes('reviewer')
-  )
-    return true;
+  if (hasReviewerRole(user)) return true;
   const bankRole = bankRoleFor(user, bank, memberships);
   if (bankRole === 'owner' || bankRole === 'reviewer') return true;
   return false;

@@ -1,6 +1,6 @@
 'use client';
 /* oxlint-disable next/no-img-element */
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronDown, Copy, FileJson, GraduationCap, Upload, LoaderCircle } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import {
@@ -42,11 +42,43 @@ export function QuestionImportReview({
   const [dragging, setDragging] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState('');
   const [copyError, setCopyError] = useState('');
+  const [access, setAccess] = useState<{
+    status: 'checking' | 'allowed' | 'suspended' | 'error';
+    endsAt?: string | null;
+    message?: string;
+  }>({ status: 'checking' });
   const [settings, setSettings] = useState<QuestionPromptSettings>({
     source: 'qbank', kind: 'clinical', length: 'medium', countMode: 'fixed', count: 20, optionCount: 4,
   });
   const [countText, setCountText] = useState('20');
   const [optionsText, setOptionsText] = useState('4');
+  useEffect(() => {
+    let active = true;
+    void api<{ suspended: boolean; endsAt: string | null }>(
+      '/platform/json-import-status',
+    )
+      .then((result) => {
+        if (!active) return;
+        setAccess(
+          result.suspended
+            ? { status: 'suspended', endsAt: result.endsAt }
+            : { status: 'allowed' },
+        );
+      })
+      .catch((error) => {
+        if (!active) return;
+        setAccess({
+          status: 'error',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Unable to verify JSON Import access.',
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   const lecture = settings.source === 'lecture';
   const countValid = (lecture && settings.countMode === 'per_slide') ||
     (countText.trim() !== '' && Number.isInteger(Number(countText)) && Number(countText) >= 1 && Number(countText) <= 200);
@@ -146,6 +178,33 @@ export function QuestionImportReview({
       setBusy(false);
     }
   }
+  if (access.status === 'checking')
+    return (
+      <section className="rounded-2xl border bg-muted/30 p-6 text-center">
+        <LoaderCircle className="mx-auto size-6 animate-spin text-primary" />
+        <p className="mt-3 text-sm text-muted-foreground">
+          Checking JSON Import access…
+        </p>
+      </section>
+    );
+  if (access.status === 'suspended')
+    return (
+      <section className="rounded-2xl border border-destructive/30 bg-destructive/10 p-6 text-center">
+        <h3 className="text-lg font-bold text-destructive">You are suspended</h3>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          JSON Import is temporarily unavailable for this account.
+          {access.endsAt
+            ? ` Access may return after ${new Date(access.endsAt).toLocaleString()}.`
+            : ''}
+        </p>
+      </section>
+    );
+  if (access.status === 'error')
+    return (
+      <p role="alert" className="rounded-xl bg-destructive/10 p-4 text-sm text-destructive">
+        {access.message}
+      </p>
+    );
   return (
     <div className="min-w-0 space-y-4">
       <section className="min-w-0 space-y-3 rounded-xl border bg-card p-3 sm:p-4" aria-busy={reading}>

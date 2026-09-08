@@ -77,7 +77,11 @@ export function QBankManagement({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const members = collaboration.memberships.filter((item) => item.qbankId === bankId);
+  const members = useMemo(
+    () =>
+      collaboration.memberships.filter((item) => item.qbankId === bankId),
+    [bankId, collaboration.memberships],
+  );
   const plan = user.effectivePlan ?? user.tier;
   const canAddQuestions = hasFeature(plan, 'addQuestions');
   const canImport = hasFeature(plan, 'jsonImport');

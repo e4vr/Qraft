@@ -1,11 +1,12 @@
 'use client';
 
+import { memo } from 'react';
 import { ArrowRight, BookOpenCheck, Check, CheckCircle2, ChevronRight, ClipboardPlus, Flag, Library, Menu, Play, Target, TrendingUp } from 'lucide-react';
 import { emptyProgress, type AppState, type Question } from '@/lib/medguard-types';
 
 type Destination = 'create' | 'test' | 'library' | 'progress' | 'history';
 
-export function StudyDashboard({ state, questions, name, bankName, navigate, startQuickTest }: {
+export const StudyDashboard = memo(function StudyDashboard({ state, questions, name, bankName, navigate, startQuickTest }: {
   state: AppState;
   questions: Question[];
   name?: string;
@@ -90,4 +91,4 @@ export function StudyDashboard({ state, questions, name, bankName, navigate, sta
       <p className="mt-6 flex items-center justify-center gap-2 text-xs text-muted-foreground"><Check className="size-3.5" />Your study progress is personal. Shared notes help everyone learn.</p>
     </div>
   </>;
-}
+});

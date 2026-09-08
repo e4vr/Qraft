@@ -4,7 +4,7 @@ import { ReviewerSearch } from '@/components/reviewer-search';
 import { openUpgrade, UpgradeButton } from '@/components/subscription-workspace';
 import { ArrowRight, Check, Crown, Menu, Search, FolderPlus, Globe2, Heart, ListChecks, LockKeyhole, Pin, Plus, Settings2, UserPlus, Users, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { bankRoleFor, canAccessBank, canManageBank, type AppUser, type BankRole, type CollaborationState, type QBank, type QBankVisibility } from '@/lib/medguard-types';
+import { bankRoleFor, canAccessBank, canManageBank, type AppUser, type BankRole, type CollaborationState, type QBank, type QBankVisibility, type Question } from '@/lib/medguard-types';
 import { cn as cx, nowIso } from '@/lib/utils';
 import { hasFeature, PLAN_LIMITS } from '@/lib/plan-config';
 
@@ -20,6 +20,7 @@ function slug(value: string) {
 export function QBankWorkspace({
   user,
   collaboration,
+  questionPool,
   update,
   confirmUpdate,
   activeQBankId,
@@ -30,6 +31,7 @@ export function QBankWorkspace({
 }: {
   user: AppUser;
   collaboration: CollaborationState;
+  questionPool: Question[];
   update: (updater: (current: CollaborationState) => CollaborationState) => void;
   confirmUpdate: (updater: (current: CollaborationState) => CollaborationState) => void;
   activeQBankId: string;
@@ -50,25 +52,58 @@ export function QBankWorkspace({
   const [inviteRole, setInviteRole] = useState<Exclude<BankRole, 'owner'>>('viewer');
   const [newCategory, setNewCategory] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
-  const accessible = useMemo(() => collaboration.qbanks.filter((bank) => !bank.archived && canAccessBank(user, bank, collaboration.memberships)), [collaboration, user]);
-  const receivedInvites = collaboration.invitations.filter((item) => item.email === user.email.toLowerCase() && item.status === 'pending');
-  const canCreate = hasFeature(user.effectivePlan ?? user.tier, 'createQBank') || user.role === 'super_admin' || user.platformRoles.includes('access_manager');
-  const categoryNames = ['Uncategorized', ...organization.categories];
-  const categoryTabs = [
-    { id: 'all', label: 'All', count: accessible.length },
-    { id: 'favorites', label: 'Favorites', count: accessible.filter((bank) => organization.favoriteIds.includes(bank.id)).length },
-    { id: 'pinned', label: 'Pinned', count: accessible.filter((bank) => organization.pinnedIds.includes(bank.id)).length },
-    ...categoryNames.map((category) => ({ id: `category:${category}`, label: category, count: accessible.filter((bank) => (organization.categoryByBankId[bank.id] || 'Uncategorized') === category).length })),
-  ];
-  const displayedBanks = accessible
-    .filter((bank) => `${bank.name} ${bank.shortName} ${bank.description}`.toLowerCase().includes(search.trim().toLowerCase()))
-    .filter((bank) => {
-      if (activeCategory === 'favorites') return organization.favoriteIds.includes(bank.id);
-      if (activeCategory === 'pinned') return organization.pinnedIds.includes(bank.id);
-      if (activeCategory.startsWith('category:')) return (organization.categoryByBankId[bank.id] || 'Uncategorized') === activeCategory.slice(9);
-      return true;
-    })
-    .sort((left, right) => Number(organization.pinnedIds.includes(right.id)) - Number(organization.pinnedIds.includes(left.id)) || left.name.localeCompare(right.name));
+  const accessible = useMemo(
+    () =>
+      collaboration.qbanks.filter(
+        (bank) =>
+          !bank.archived &&
+          canAccessBank(user, bank, collaboration.memberships),
+      ),
+    [collaboration.memberships, collaboration.qbanks, user],
+  );
+  const receivedInvites = useMemo(
+    () =>
+      collaboration.invitations.filter(
+        (item) =>
+          item.email === user.email.toLowerCase() && item.status === 'pending',
+      ),
+    [collaboration.invitations, user.email],
+  );
+  const canCreate = hasFeature(user.effectivePlan ?? user.tier, 'createQBank');
+  const categoryNames = useMemo(
+    () => ['Uncategorized', ...organization.categories],
+    [organization.categories],
+  );
+  const categoryTabs = useMemo(
+    () => [
+      { id: 'all', label: 'All', count: accessible.length },
+      { id: 'favorites', label: 'Favorites', count: accessible.filter((bank) => organization.favoriteIds.includes(bank.id)).length },
+      { id: 'pinned', label: 'Pinned', count: accessible.filter((bank) => organization.pinnedIds.includes(bank.id)).length },
+      ...categoryNames.map((category) => ({ id: `category:${category}`, label: category, count: accessible.filter((bank) => (organization.categoryByBankId[bank.id] || 'Uncategorized') === category).length })),
+    ],
+    [accessible, categoryNames, organization.categoryByBankId, organization.favoriteIds, organization.pinnedIds],
+  );
+  const displayedBanks = useMemo(
+    () =>
+      accessible
+        .filter((bank) => `${bank.name} ${bank.shortName} ${bank.description}`.toLowerCase().includes(search.trim().toLowerCase()))
+        .filter((bank) => {
+          if (activeCategory === 'favorites') return organization.favoriteIds.includes(bank.id);
+          if (activeCategory === 'pinned') return organization.pinnedIds.includes(bank.id);
+          if (activeCategory.startsWith('category:')) return (organization.categoryByBankId[bank.id] || 'Uncategorized') === activeCategory.slice(9);
+          return true;
+        })
+        .sort((left, right) => Number(organization.pinnedIds.includes(right.id)) - Number(organization.pinnedIds.includes(left.id)) || left.name.localeCompare(right.name)),
+    [accessible, activeCategory, organization.categoryByBankId, organization.favoriteIds, organization.pinnedIds, search],
+  );
+  const questionCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const question of questionPool) {
+      const bankId = question.qbankId ?? 'smle-gs';
+      counts.set(bankId, (counts.get(bankId) ?? 0) + 1);
+    }
+    return counts;
+  }, [questionPool]);
 
   function toggleList(key: 'favoriteIds' | 'pinnedIds', bankId: string) {
     const values = organization[key];
@@ -284,7 +319,7 @@ export function QBankWorkspace({
             ) : (
               displayedBanks.map((bank) => {
                     const role = bankRoleFor(user, bank, collaboration.memberships);
-                    const questions = collaboration.approvedQuestions.filter((item) => item.qbankId === bank.id).length;
+                    const questions = questionCounts.get(bank.id) ?? 0;
                     const managed = canManageBank(user, bank);
                     const isOwner = bank.ownerId === user.uid;
                     const favorite = organization.favoriteIds.includes(bank.id);

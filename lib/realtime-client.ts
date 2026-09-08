@@ -12,14 +12,20 @@ export function subscribeLive(callback: () => void, topics?: string[]) {
 
 // Each bank/account has its own audience. A reconnect always triggers a refresh
 // to recover changes made while the browser was asleep or disconnected.
-export function openLiveChannels(channels: string[], changed: () => void) {
+export function openLiveChannels(
+  channels: string[],
+  changed: (topic: string) => void,
+) {
   let stopped = false;
   const sockets = new Map<string, WebSocket>();
   const retries = new Map<string, ReturnType<typeof setTimeout>>();
   const attempts = new Map<string, number>();
   const lastMessage = new Map<string, number>();
   const connectedBefore = new Set<string>();
-  const emit = (topic = 'connected') => { changed(); window.dispatchEvent(new CustomEvent(LIVE_CHANGE, { detail: topic })); };
+  const emit = (topic = 'connected') => {
+    changed(topic);
+    window.dispatchEvent(new CustomEvent(LIVE_CHANGE, { detail: topic }));
+  };
   function connect(channel: string) {
     if (stopped || !navigator.onLine || document.visibilityState === 'hidden' || sockets.has(channel)) return;
     const url = new URL('/api/cloudflare/realtime', window.location.origin);

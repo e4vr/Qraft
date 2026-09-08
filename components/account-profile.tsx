@@ -19,7 +19,7 @@ import {
   changeCloudflarePassword,
   updateCloudflareProfile,
 } from '@/lib/application-services';
-import type { AppUser } from '@/lib/medguard-types';
+import { administrativeRoleLabels, type AppUser } from '@/lib/medguard-types';
 
 export function AccountProfile({
   user,
@@ -40,8 +40,7 @@ export function AccountProfile({
   const [passwordMessage, setPasswordMessage] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [showPasswords, setShowPasswords] = useState(false);
-  const role =
-    user.role === 'student' ? 'Learner' : user.role.replaceAll('_', ' ');
+  const role = administrativeRoleLabels(user).join(' · ') || 'Learner';
 
   async function saveProfile(event: { preventDefault: () => void }) {
     event.preventDefault();

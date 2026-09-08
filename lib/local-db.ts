@@ -30,7 +30,10 @@ async function writeValue<T>(key: string, value: T): Promise<void> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE, 'readwrite');
-    transaction.objectStore(STORE).put(value, key);
+    const store = transaction.objectStore(STORE);
+    const uid = key.slice(key.indexOf(':') + 1);
+    const marker = store.get(`deleted:${uid}`);
+    marker.onsuccess = () => { if (!marker.result) store.put(value, key); };
     transaction.oncomplete = () => { db.close(); resolve(); };
     transaction.onerror = () => reject(transaction.error);
   });
@@ -51,4 +54,17 @@ export async function saveLocalCollaboration(state: CollaborationState, uid: str
 
 export async function saveLocalState(uid: string, state: AppState): Promise<void> {
   await writeValue(`state:${uid}`, state);
+}
+
+export async function forgetLocalUser(uid: string): Promise<void> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE, 'readwrite');
+    const store = transaction.objectStore(STORE);
+    store.put(true, `deleted:${uid}`);
+    store.delete(`state:${uid}`);
+    store.delete(`collaboration:${uid}`);
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onerror = () => { db.close(); reject(transaction.error); };
+  });
 }

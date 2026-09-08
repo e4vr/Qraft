@@ -53,6 +53,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from '@/components/ui/alert-dialog';
+import { deleteFlashcardDeck } from '@/lib/flashcard-deletion';
 import { cn } from '@/lib/utils';
 import { uploadNoteImage } from '@/lib/application-services';
 import type {
@@ -638,7 +640,7 @@ function ReviewSession({
   };
 
   return (
-    <section className="min-h-[calc(100dvh-72px)] bg-muted/20 p-4 sm:p-8">
+    <section className="min-h-full bg-muted/20 p-4 sm:p-8">
       <div className="mx-auto max-w-4xl">
         <div className="mb-5 flex items-center justify-between gap-3">
           <Button variant="ghost" onClick={onClose}>
@@ -730,6 +732,7 @@ export function FlashcardsWorkspace({
   questions: Question[];
 }) {
   const [selectedDeckId, setSelectedDeckId] = useState('all');
+  const [deleteDeckId, setDeleteDeckId] = useState<string>();
   const [search, setSearch] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<Flashcard>();
@@ -1107,7 +1110,25 @@ export function FlashcardsWorkspace({
     );
 
   return (
-    <div className="min-h-screen p-4 sm:p-6 lg:p-8">
+    <div className="min-h-full p-4 sm:p-6 lg:p-8">
+      <AlertDialog open={Boolean(deleteDeckId)} onOpenChange={(open) => { if (!open) setDeleteDeckId(undefined); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this deck?</AlertDialogTitle>
+            <AlertDialogDescription>
+              “{decks.find(deck => deck.id === deleteDeckId)?.name}” and its subdecks, cards, and study history will be deleted. Other decks are not affected. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <Button variant="destructive" onClick={() => {
+              if (!deleteDeckId) return;
+              setState(current => deleteFlashcardDeck(current, deleteDeckId, qbankId));
+              setSelectedDeckId('all'); setSelectedCards([]); setDeleteDeckId(undefined);
+            }}>Delete deck</Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="mx-auto max-w-[1440px]">
         <header className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -1255,6 +1276,7 @@ export function FlashcardsWorkspace({
               <span className="ml-auto tabular-nums">{bankCards.length}</span>
             </button>
             <div className="my-3 border-t" />
+            {selectedDeckId !== 'all' && <Button variant="ghost" className="mb-3 w-full text-destructive" onClick={() => setDeleteDeckId(selectedDeckId)}><Trash2 />Delete selected deck</Button>}
             {decks
               .filter((deck) => !deck.parentId)
               .map((deck) => (

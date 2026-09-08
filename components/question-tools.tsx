@@ -1,6 +1,6 @@
 'use client';
 /* oxlint-disable next/no-img-element */
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { Check, Copy, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api-client';
@@ -16,8 +16,6 @@ export function QuestionOption({
   revealed = false,
   percent,
   onSelect,
-  renderText,
-  onTextSelection,
 }: {
   text: string;
   index: number;
@@ -27,8 +25,6 @@ export function QuestionOption({
   revealed?: boolean;
   percent?: number;
   onSelect: () => void;
-  renderText?: ReactNode;
-  onTextSelection?: (element: HTMLElement) => void;
 }) {
   return (
     <button
@@ -71,11 +67,9 @@ export function QuestionOption({
       </span>
       <span
         dir="auto"
-        onPointerUp={(event) => onTextSelection?.(event.currentTarget)}
-        onTouchEnd={(event) => onTextSelection?.(event.currentTarget)}
-        className="min-w-0 flex-1 select-text whitespace-pre-wrap break-words pt-0.5 touch-pan-y"
+        className="min-w-0 flex-1 select-none whitespace-pre-wrap break-words pt-0.5 touch-pan-y"
       >
-        {renderText ?? text}
+        {text}
       </span>
       {revealed && percent !== undefined && (
         <span className="mt-0.5 rounded-full bg-card/80 px-2.5 py-0.5 text-xs font-bold tabular-nums ring-1 ring-current/10">

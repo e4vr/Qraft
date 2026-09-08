@@ -1,4 +1,5 @@
 'use client';
+import { DeleteAccount } from '@/components/delete-account';
 
 /* oxlint-disable next/no-img-element, jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions, jsx-a11y/control-has-associated-label */
 
@@ -18,7 +19,8 @@ import {
   FlashcardsWorkspace,
   QuestionFlashcardDialog,
 } from '@/components/flashcards-workspace';
-import { openLiveChannels } from '@/lib/realtime-client';
+import { openLiveChannels, subscribeLive } from '@/lib/realtime-client';
+import { api } from '@/lib/api-client';
 import { mergeLiveState } from '@/lib/merge-live-state';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
@@ -70,6 +72,7 @@ import {
   StickyNote,
   Sun,
   Trash2,
+  Upload,
   UserPlus,
   Users,
   X,
@@ -82,6 +85,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import Link from 'next/link';
 
 import {
   createCloudflareAccount,
@@ -89,6 +93,7 @@ import {
   completeCloudflareMfaSignIn,
   completeTotpEnrollment,
   joinCloudflareQBankByLink,
+  loadCollaborationSnapshot,
   loadCollaborationState,
   loadCloudState,
   observeCloudflareUser,
@@ -109,6 +114,10 @@ import {
 } from '@/lib/application-services';
 import {
   emptyProgress,
+  administrativeRoleLabels,
+  hasAccessManagerRole,
+  hasModeratorRole,
+  isPlatformRole,
   initialCollaborationState,
   initialAppState,
   normalizeCollaborationState,
@@ -126,6 +135,7 @@ import {
   type QuestionProposal,
   type QuestionStatus,
   type ProposalEditKind,
+  type PlatformRole,
   type TestBuilderConfig,
   type TestSession,
 } from '@/lib/medguard-types';
@@ -191,8 +201,6 @@ interface ModelContextLike {
   ) => void | Promise<void>;
 }
 
-const baseQuestions: Question[] = [];
-
 const NAV_ITEMS = [
   { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
   { id: 'library' as const, label: 'My QBanks', icon: Library },
@@ -246,32 +254,6 @@ function getQuestionProgress(
   return state.progress[questionId] ?? emptyProgress();
 }
 
-function matchesTestConfig(
-  question: Question,
-  state: AppState,
-  config: TestBuilderConfig,
-): boolean {
-  if (config.randomAll) return true;
-  const progress = getQuestionProgress(state, question.id);
-  const statusMatch =
-    config.statuses.length === 0 ||
-    config.statuses.some((status) =>
-      status === 'new'
-        ? progress.attempts === 0
-        : status === 'previous'
-          ? progress.attempts > 0
-          : status === 'correct'
-            ? progress.attempts > 0 && progress.lastAnswer === question.answer
-            : status === 'incorrect'
-              ? progress.attempts > 0 && progress.lastAnswer !== question.answer
-              : progress.flagged,
-    );
-  return (
-    question.specialty === config.specialty &&
-    (config.topics.length === 0 || config.topics.includes(question.topic)) &&
-    statusMatch
-  );
-}
 
 function mergeRanges(ranges: HighlightRange[]): HighlightRange[] {
   const sorted = ranges
@@ -469,19 +451,19 @@ function AuthScreen({
   }
 
   return (
-    <main className="auth-layout grid min-h-screen text-foreground lg:grid-cols-[0.95fr_1.05fr]">
-      <section className="auth-story relative hidden overflow-hidden bg-[radial-gradient(circle_at_15%_15%,#168ee8_0,#075dab_36%,#073c74_100%)] p-14 text-white lg:flex lg:flex-col lg:justify-between">
+    <main className="auth-layout relative grid min-h-screen overflow-hidden text-foreground lg:grid-cols-[0.95fr_1.05fr]">
+      <div aria-hidden="true" className="pointer-events-none absolute -right-[12vw] top-[8vh] z-0 select-none text-[72vw] font-black leading-none tracking-[-0.18em] text-primary/[0.045] dark:text-cyan-200/[0.055] sm:text-[58vw] lg:-right-[5vw] lg:top-[-8vh] lg:text-[55vw]">
+        Q
+      </div>
+      <section className="auth-story relative z-10 hidden overflow-hidden bg-[radial-gradient(circle_at_15%_15%,#168ee8_0,#075dab_36%,#073c74_100%)] p-14 text-white lg:flex lg:flex-col lg:justify-between">
         <div className="absolute -bottom-48 -left-40 size-[560px] rounded-full border border-white/10" />
         <div className="absolute -bottom-28 -left-20 size-[380px] rounded-full border border-cyan-300/15" />
-        <div className="relative flex items-center gap-3">
-          <div className="grid size-11 place-items-center rounded-2xl bg-white/15 ring-1 ring-white/25">
-            <Sparkles className="size-5" />
-          </div>
-          <div>
-            <strong className="block text-xl">Qraft</strong>
-            <span className="text-xs text-blue-100/80">
-              Collaborative QBank
-            </span>
+        <div aria-hidden="true" className="pointer-events-none absolute -bottom-[15vw] -right-[3vw] select-none text-[43vw] font-black leading-none tracking-[-0.18em] text-white/[0.055]">
+          Q
+        </div>
+        <div className="relative flex items-center">
+          <div className="flex h-12 w-[150px] items-center rounded-2xl bg-white px-3 shadow-lg ring-1 ring-white/30">
+            <img src="/11.svg" alt="Qraft" className="h-auto w-full object-contain" />
           </div>
         </div>
         <div className="relative max-w-xl">
@@ -517,13 +499,12 @@ function AuthScreen({
           A thoughtful space to build knowledge, together.
         </p>
       </section>
-      <section className="flex items-center justify-center p-6 sm:p-10">
+      <section className="relative z-10 flex items-center justify-center p-6 sm:p-10">
         <div className="auth-panel q-enter w-full max-w-[470px]">
-          <div className="mb-9 flex items-center gap-3 lg:hidden">
-            <div className="grid size-10 place-items-center rounded-xl bg-primary text-white">
-              <Sparkles className="size-4" />
+          <div className="mb-9 flex items-center lg:hidden">
+            <div className="flex h-10 w-[126px] items-center rounded-xl bg-white px-2.5 shadow-sm ring-1 ring-black/5 dark:bg-slate-50">
+              <img src="/11.svg" alt="Qraft" className="h-auto w-full object-contain" />
             </div>
-            <strong className="text-xl">Qraft</strong>
           </div>
           <div className="mb-8">
             <p className="mb-2 text-sm font-bold text-primary">
@@ -979,6 +960,17 @@ function subscribeConnection(callback: () => void) {
   };
 }
 
+function clearInvitationLink() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('join_qbank');
+  url.searchParams.delete('token');
+  window.history.replaceState(
+    {},
+    '',
+    `${url.pathname}${url.search}${url.hash}`,
+  );
+}
+
 function AppSidebar({
   view,
   setView,
@@ -1008,12 +1000,35 @@ function AppSidebar({
   pendingReviewCount: number;
   dueFlashcardCount: number;
 }) {
+  const [countdownNow, setCountdownNow] = useState(() => Date.now());
   const desktop = useSyncExternalStore(
     subscribeDesktopNavigation,
     () => window.matchMedia('(min-width: 1024px)').matches,
     () => false,
   );
   const sidebarRef = useRef<HTMLElement>(null);
+  const qbankMenuRef = useRef<HTMLDivElement>(null);
+  const [qbankMenuOpen, setQbankMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!qbankMenuOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!qbankMenuRef.current?.contains(event.target as Node))
+        setQbankMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setQbankMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [qbankMenuOpen]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setCountdownNow(Date.now()), 86_400_000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => {
     if (!mobileOpen || desktop) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -1054,8 +1069,25 @@ function AppSidebar({
     setView(next);
     closeMobile();
   };
-  const roleLabel =
-    user.role === 'student' ? 'Learner' : user.role.replaceAll('_', ' ');
+  const roleLabel = administrativeRoleLabels(user).join(' · ');
+  const planExpiry = user.effectivePlanExpiresAt
+    ? Date.parse(user.effectivePlanExpiresAt)
+    : NaN;
+  const remainingDays = Number.isFinite(planExpiry)
+    ? Math.max(0, Math.ceil((planExpiry - countdownNow) / 86_400_000))
+    : null;
+  const formattedExpiry = Number.isFinite(planExpiry)
+    ? new Intl.DateTimeFormat('en', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      }).format(new Date(planExpiry))
+    : null;
+  const planExpiryLabel = formattedExpiry
+    ? `${formattedExpiry} · ${remainingDays}d left`
+    : (user.effectivePlan ?? user.tier) === 'free'
+      ? 'Free plan'
+      : 'No expiry';
   return (
     <>
       {mobileOpen && (
@@ -1070,22 +1102,34 @@ function AppSidebar({
         inert={!desktop && !mobileOpen}
         aria-label="Workspace navigation"
         className={cx(
-          'q-sidebar fixed inset-y-0 left-0 z-50 flex h-dvh w-[270px] shrink-0 flex-col overflow-hidden border-r bg-sidebar shadow-2xl transition-transform duration-200 lg:z-20 lg:w-[254px] lg:translate-x-0 lg:shadow-none',
+          'q-sidebar fixed inset-y-0 left-0 z-50 flex h-dvh w-[270px] shrink-0 flex-col overflow-hidden border-r border-sidebar-border/70 bg-sidebar transition-transform duration-200 lg:z-20 lg:w-[254px] lg:translate-x-0',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
-        <div className="flex h-[72px] shrink-0 items-center justify-between border-b px-5">
+        <div className="flex h-[66px] shrink-0 items-center justify-between border-b border-sidebar-border/70 px-4">
           <div className="flex items-center gap-3">
-            <div className="grid size-9 place-items-center rounded-xl bg-primary text-white shadow-sm">
-              <Sparkles className="size-4" />
-            </div>
-            <div>
-              <strong className="block text-[17px] tracking-tight">
-                Qraft
-              </strong>
-              <span className="block text-xs text-muted-foreground">
-                Learn better, together
-              </span>
+            <div className="flex h-9 w-[112px] shrink-0 items-center px-1">
+              <img
+                src="/11.svg"
+                alt=""
+                aria-hidden="true"
+                className="h-auto w-full object-contain dark:hidden"
+              />
+              <span
+                aria-hidden="true"
+                className="hidden h-[34px] w-full bg-gradient-to-r from-cyan-200 via-teal-200 to-sky-100 dark:block"
+                style={{
+                  WebkitMaskImage: "url('/11.svg')",
+                  maskImage: "url('/11.svg')",
+                  WebkitMaskPosition: 'center',
+                  maskPosition: 'center',
+                  WebkitMaskRepeat: 'no-repeat',
+                  maskRepeat: 'no-repeat',
+                  WebkitMaskSize: 'contain',
+                  maskSize: 'contain',
+                }}
+              />
+              <span className="sr-only">Qraft</span>
             </div>
           </div>
           <button
@@ -1096,37 +1140,59 @@ function AppSidebar({
             <X className="size-5" />
           </button>
         </div>
-        <div className="mx-3 mt-4 shrink-0 rounded-xl border bg-card p-3">
-          <p className="mb-2 px-1 text-xs font-semibold text-muted-foreground">
-            Currently studying
-          </p>
-          <label className="flex items-center gap-2">
-            <Library className="ml-1 size-4 shrink-0 text-primary" />
-            <span className="sr-only">Active QBank</span>
-            <span className="relative min-w-0 flex-1">
-              <select
-                aria-label="Active QBank"
-                value={activeQBankId}
-                onChange={(event) => {
-                  onSelectQBank(event.target.value);
-                  closeMobile();
-                }}
-                className="qbank-selector min-w-0 w-full appearance-none rounded-lg border border-border/70 bg-card px-2 py-1.5 pr-7 text-sm font-semibold text-foreground outline-none transition focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-              >
-                {qbanks
-                  .filter((item) => !item.archived)
-                  .map((qbank) => (
-                    <option key={qbank.id} value={qbank.id}>
-                      {qbank.shortName}
-                    </option>
-                  ))}
-              </select>
+        <div ref={qbankMenuRef} className="relative mx-3 mt-2 shrink-0 py-1.5">
+          <div className="flex h-10 items-center gap-2">
+            <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+              <Library className="size-4" />
+            </span>
+            <button
+              type="button"
+              aria-label="Active QBank"
+              aria-haspopup="menu"
+              aria-expanded={qbankMenuOpen}
+              onClick={() => setQbankMenuOpen((open) => !open)}
+              className="group flex h-9 min-w-0 flex-1 items-center rounded-xl px-3 text-left text-sm font-bold text-foreground transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            >
+              <span className="min-w-0 flex-1 truncate">
+                {qbanks.find((item) => item.id === activeQBankId)?.shortName ?? 'Select QBank'}
+              </span>
               <ChevronDown
-                className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                className={cx('size-4 shrink-0 text-muted-foreground transition-transform duration-200', qbankMenuOpen && 'rotate-180')}
                 aria-hidden="true"
               />
-            </span>
-          </label>
+            </button>
+          </div>
+          {qbankMenuOpen && (
+            <div
+              role="menu"
+              aria-label="Choose QBank"
+              className="absolute inset-x-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-2xl border border-sidebar-border/80 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_45px_-20px_rgba(15,23,42,0.55)] ring-1 ring-black/5 backdrop-blur-xl"
+            >
+              {qbanks.filter((item) => !item.archived).map((qbank) => {
+                const active = qbank.id === activeQBankId;
+                return (
+                  <button
+                    key={qbank.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={active}
+                    onClick={() => {
+                      onSelectQBank(qbank.id);
+                      setQbankMenuOpen(false);
+                      closeMobile();
+                    }}
+                    className={cx(
+                      'flex min-h-10 w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold transition-colors',
+                      active ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground',
+                    )}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{qbank.shortName}</span>
+                    {active && <Check className="size-4 shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
         <nav
           className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-3 [scrollbar-gutter:stable] [scrollbar-width:thin]"
@@ -1241,10 +1307,21 @@ function AppSidebar({
           >
             <ClipboardList className="size-[18px] shrink-0" />
             <span className="min-w-0 truncate whitespace-nowrap">
-              Submit contribution
+              + Add Questions
             </span>
           </button>
-          {user.isAdmin && (
+          {user.isAdmin && user.role === 'super_admin' ? (
+            <Link
+              href="/Admin"
+              onClick={closeMobile}
+              className="flex h-11 w-full min-w-0 items-center gap-3 overflow-hidden rounded-xl px-3 text-left text-sm font-semibold text-sidebar-foreground/80 transition hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            >
+              <ShieldCheck className="size-[18px] shrink-0" />
+              <span className="min-w-0 truncate whitespace-nowrap">
+                Superadmin
+              </span>
+            </Link>
+          ) : user.isAdmin ? (
             <button
               aria-current={view === 'admin' ? 'page' : undefined}
               onClick={() => navigate('admin')}
@@ -1260,76 +1337,75 @@ function AppSidebar({
                 Admin dashboard
               </span>
             </button>
-          )}
+          ) : null}
         </nav>
-        <footer className="shrink-0 border-t bg-sidebar/95 p-3 backdrop-blur-xl">
-          <div className="rounded-2xl border bg-card/80 p-3 shadow-sm">
-            <div className="flex items-center gap-2">
+        <footer className="shrink-0 border-t border-sidebar-border/70 bg-sidebar/90 px-2.5 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] backdrop-blur-xl">
+          <div className="overflow-hidden rounded-2xl border border-sidebar-border/70 bg-card/95 shadow-[0_14px_34px_-25px_rgba(15,23,42,0.75)] dark:shadow-black/30">
+            <div className="flex items-center gap-1 p-1.5">
               <button
                 onClick={() => navigate('account')}
                 aria-label="Open account profile"
-                className="flex min-w-0 flex-1 items-center gap-3 rounded-xl p-1 text-left transition hover:bg-muted"
+                className="group flex min-w-0 flex-1 items-center gap-2.5 rounded-xl py-1.5 pl-1.5 pr-3 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 <span
-                  className={`profile-ring profile-ring-${user.tier} grid size-10 shrink-0 place-items-center rounded-full bg-primary/10 text-sm font-black text-primary`}
+                  className={`profile-ring profile-ring-${user.tier} grid size-9 shrink-0 place-items-center rounded-full bg-primary/10 text-xs font-black text-primary transition-transform group-hover:scale-[1.02]`}
                 >
                   {user.displayName.slice(0, 2).toUpperCase()}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <strong className="block truncate text-sm">
-                    {user.displayName}
-                  </strong>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <strong className="min-w-0 flex-1 truncate text-[13px] font-bold leading-tight">
+                      {user.displayName}
+                    </strong>
+                  </span>
                   <span
-                    className="mt-0.5 block truncate text-xs capitalize text-muted-foreground"
+                    className="mt-1 flex min-w-0 items-center gap-1.5"
                     title={user.email}
                   >
-                    {roleLabel} · {user.tier.toUpperCase()}
+                    {roleLabel && (
+                      <span className="min-w-0 truncate text-[10px] font-medium capitalize text-muted-foreground">
+                        {roleLabel}
+                      </span>
+                    )}
+                    <span className="shrink-0 rounded-md bg-primary/10 px-1 py-px text-[8px] font-bold leading-4 tracking-wide text-primary">
+                      {user.tier.toUpperCase()}
+                    </span>
                   </span>
                 </span>
               </button>
+              <span
+                title={syncStatus === 'syncing' ? 'Syncing changes' : syncStatus === 'synced' ? 'All changes synced' : syncStatus === 'error' ? 'Sync needs attention' : syncStatus === 'offline' ? 'Working offline' : 'Saved on this device'}
+                className={cx(
+                  'ml-1.5 grid size-8 shrink-0 place-items-center rounded-xl',
+                  syncStatus === 'error' ? 'bg-red-50 text-red-600 dark:bg-red-500/10' : syncStatus === 'offline' || syncStatus === 'local' ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/10' : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10',
+                )}
+              >
+                {syncStatus === 'syncing' ? <RefreshCw className="size-3.5 animate-spin" /> : syncStatus === 'error' ? <CircleAlert className="size-3.5" /> : syncStatus === 'offline' || syncStatus === 'local' ? <CloudOff className="size-3.5" /> : <Cloud className="size-3.5" />}
+              </span>
               <button
                 title="Sign out"
                 aria-label="Sign out"
                 onClick={onSignOut}
-                className="grid size-9 shrink-0 place-items-center rounded-xl text-muted-foreground transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10"
+                className="grid size-8 shrink-0 place-items-center rounded-xl border border-transparent text-muted-foreground transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30 dark:hover:border-red-500/20 dark:hover:bg-red-500/10"
               >
                 <LogOut className="size-4" />
               </button>
             </div>
-            {(user.effectivePlan ?? user.tier) !== 'unlimited' && (
-              <div className="mt-3">
-                <UpgradeButton />
-              </div>
-            )}
-            <div
-              className={cx(
-                'mt-3 flex items-center gap-2 border-t pt-2.5 text-xs font-medium',
-                syncStatus === 'error'
-                  ? 'text-red-600'
-                  : syncStatus === 'offline' || syncStatus === 'local'
-                    ? 'text-amber-700 dark:text-amber-300'
-                    : 'text-emerald-700 dark:text-emerald-300',
-              )}
-            >
-              {syncStatus === 'syncing' ? (
-                <RefreshCw className="size-3.5 animate-spin" />
-              ) : syncStatus === 'offline' || syncStatus === 'local' ? (
-                <CloudOff className="size-3.5" />
-              ) : (
-                <Cloud className="size-3.5" />
-              )}
-              <span className="truncate">
-                {syncStatus === 'syncing'
-                  ? 'Syncing changes'
-                  : syncStatus === 'synced'
-                    ? 'All changes synced'
-                    : syncStatus === 'error'
-                      ? 'Sync needs attention'
-                      : syncStatus === 'offline'
-                        ? 'Working offline'
-                        : 'Saved on this device'}
+            <div className="flex items-center justify-between gap-2 border-t border-sidebar-border/60 px-2 pb-2 pt-2">
+              <span
+                className="flex min-w-0 items-center gap-1.5 text-[10px] font-medium text-muted-foreground"
+                title={formattedExpiry ? `Plan ends ${formattedExpiry}` : 'No scheduled plan expiry'}
+              >
+                <Clock3 className="size-3.5 shrink-0 text-primary" />
+                <span className="truncate">{planExpiryLabel}</span>
               </span>
-              <span className="ml-auto size-1.5 shrink-0 rounded-full bg-current" />
+              <button
+                type="button"
+                onClick={() => navigate('subscribe')}
+                className="shrink-0 rounded-lg border border-primary/25 px-2 py-1 text-[10px] font-bold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                Extend
+              </button>
             </div>
           </div>
         </footer>
@@ -1429,11 +1505,15 @@ function CreateTest({
   questions,
   state,
   bankName,
+  qbankId,
+  maxQuestionsPerExam,
   onStart,
 }: {
   questions: Question[];
   state: AppState;
   bankName: string;
+  qbankId: string;
+  maxQuestionsPerExam: number;
   onStart: (config: TestBuilderConfig) => void;
 }) {
   const topics = useMemo(
@@ -1450,21 +1530,34 @@ function CreateTest({
   );
   const [config, setConfig] = useState<TestBuilderConfig>({
     mode: 'tutor',
-    statuses: ['new'],
-    specialty: questions[0]?.specialty ?? 'General',
+    statuses: [],
+    specialty: '',
     topics: [],
-    count: Math.min(20, Math.max(1, questions.length)),
+    count: Math.min(
+      20,
+      maxQuestionsPerExam,
+      Math.max(1, questions.length),
+    ),
     randomAll: false,
     title: '',
   });
   const [message, setMessage] = useState('');
-  const eligible = useMemo(
-    () =>
-      questions.filter((question) =>
-        matchesTestConfig(question, state, config),
-      ),
-    [config, questions, state],
-  );
+  const [poolResult, setPoolResult] = useState<{ key: string; count: number }>();
+  const [poolError, setPoolError] = useState('');
+  const filters = JSON.stringify({ specialty: config.specialty, topics: config.topics, statuses: config.statuses, randomAll: config.randomAll });
+  const progress = useMemo(() => Object.fromEntries(Object.entries(state.progress).map(([id, value]) => [id, { attempts: value.attempts, lastAnswer: value.lastAnswer, flagged: value.flagged }])), [state.progress]);
+  const poolKey = useMemo(() => JSON.stringify([qbankId, filters, progress, questions.map(question => [question.id, question.revision, question.specialty, question.topic, question.answer])]), [qbankId, filters, progress, questions]);
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setPoolError('');
+      void api<{ eligible: number }>('/platform/test-pool', { method: 'POST', signal: controller.signal, body: JSON.stringify({ qbankId, config: JSON.parse(filters), progress }) })
+        .then(result => { if (!controller.signal.aborted) setPoolResult({ key: poolKey, count: result.eligible }); })
+        .catch(error => { if (!controller.signal.aborted) setPoolError(error instanceof Error ? error.message : 'Unable to count eligible questions.'); });
+    }, 150);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [qbankId, filters, progress, poolKey]);
+  const eligibleCount = poolResult?.key === poolKey ? poolResult.count : undefined;
   const statuses: Array<[QuestionStatus, string]> = [
     ['new', 'New'],
     ['previous', 'Previously tested'],
@@ -1650,6 +1743,7 @@ function CreateTest({
                       }
                       className="h-11 w-full rounded-xl border bg-white px-3 text-sm dark:bg-card"
                     >
+                      <option value="">All specialties</option>
                       {specialties.map((item) => (
                         <option key={item}>{item}</option>
                       ))}
@@ -1670,7 +1764,7 @@ function CreateTest({
                       .filter((topic) =>
                         questions.some(
                           (question) =>
-                            question.specialty === config.specialty &&
+                            (!config.specialty || question.specialty === config.specialty) &&
                             question.topic === topic,
                         ),
                       )
@@ -1698,7 +1792,7 @@ function CreateTest({
                               {
                                 questions.filter(
                                   (question) =>
-                                    question.specialty === config.specialty &&
+                                    (!config.specialty || question.specialty === config.specialty) &&
                                     question.topic === topic,
                                 ).length
                               }
@@ -1742,8 +1836,12 @@ function CreateTest({
                 <strong className="capitalize">{config.mode}</strong>
               </div>
               <div className="flex justify-between">
+                <span className="text-muted-foreground">Available in QBank</span>
+                <strong>{questions.length}</strong>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-muted-foreground">Eligible</span>
-                <strong aria-live="polite">{eligible.length}</strong>
+                <strong aria-live="polite">{eligibleCount ?? '…'}</strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Selected topics</span>
@@ -1770,13 +1868,18 @@ function CreateTest({
                   setMessage('');
                   setConfig({
                     ...config,
-                    count: Math.max(1, Number(event.target.value) || 1),
+                    count: Math.min(
+                      maxQuestionsPerExam,
+                      Math.max(1, Number(event.target.value) || 1),
+                    ),
                   });
                 }}
+                max={maxQuestionsPerExam}
                 className="h-11 w-full rounded-xl border bg-background px-3"
               />
             </label>
-            {!eligible.length && (
+            {poolError && <p role="alert" className="text-sm text-destructive">{poolError}</p>}
+            {eligibleCount === 0 && (
               <output className="mt-4 block rounded-xl bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
                 No questions match yet. Choose another status or clear your
                 topic filters.
@@ -1789,17 +1892,17 @@ function CreateTest({
             )}
             <PrimaryButton
               tone="study"
-              disabled={!eligible.length}
+              disabled={!eligibleCount}
               onClick={() => {
-                if (!eligible.length) {
+                if (!eligibleCount) {
                   setMessage(
                     'No questions match these filters. Try a different status or topic.',
                   );
                   return;
                 }
-                if (config.count > eligible.length) {
+                if (config.count > (eligibleCount ?? 0)) {
                   setMessage(
-                    `Only ${eligible.length} questions are currently available in this QBank.`,
+                    `Only ${eligibleCount} questions are currently available in this QBank.`,
                   );
                   return;
                 }
@@ -1950,13 +2053,14 @@ function TestView({
   const [uploading, setUploading] = useState(false);
   const isMobile = useIsMobile();
   const stemRef = useRef<HTMLParagraphElement>(null);
-  const activeQuestions = useMemo(
-    () =>
-      test.questionIds
-        .map((id) => questions.find((question) => question.id === id))
-        .filter(Boolean) as Question[],
-    [test.questionIds, questions],
-  );
+  const activeQuestions = useMemo(() => {
+    const questionsById = new Map(
+      questions.map((question) => [question.id, question]),
+    );
+    return test.questionIds
+      .map((id) => questionsById.get(id))
+      .filter(Boolean) as Question[];
+  }, [test.questionIds, questions]);
   const answeredCount = test.questionIds.filter(
     (questionId) => test.answers[questionId] !== undefined,
   ).length;
@@ -1981,7 +2085,13 @@ function TestView({
   const selected = question ? test.answers[question.id] : undefined;
   const revealed = question ? test.revealed.includes(question.id) : false;
   const answerStat = noteKey ? collaboration.answerStats[noteKey] : undefined;
-  const answerSelections = Object.values(answerStat?.selections ?? {});
+  const answerSummary = useMemo(() => {
+    const counts = new Map<number, number>();
+    const selections = Object.values(answerStat?.selections ?? {});
+    for (const answer of selections)
+      counts.set(answer, (counts.get(answer) ?? 0) + 1);
+    return { counts, total: selections.length };
+  }, [answerStat?.selections]);
 
   useEffect(() => {
     if (test.timerPaused || test.status !== 'active') return;
@@ -2260,6 +2370,7 @@ function TestView({
   }
 
   function addHighlight(section: string, root: HTMLElement) {
+    if (section !== 'stem' && section !== 'explanation') return;
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0 || selection.isCollapsed)
       return;
@@ -2297,7 +2408,8 @@ function TestView({
   }
 
   function copySelectionAndMark(section: string, root: HTMLElement) {
-    if (!markerActive) return;
+    if (!markerActive || (section !== 'stem' && section !== 'explanation'))
+      return;
     window.setTimeout(() => addHighlight(section, root), 0);
   }
 
@@ -2612,7 +2724,7 @@ function TestView({
     );
 
   return (
-    <main className="q-test-screen flex min-h-screen flex-col bg-[#f5f7fa] dark:bg-background">
+    <main className="q-test-screen flex flex-col bg-[#f5f7fa] dark:bg-background">
       <QuestionFlashcardDialog
         question={question}
         qbankId={qbankId}
@@ -2792,7 +2904,7 @@ function TestView({
           </SecondaryButton>
         </div>
       </header>
-      <div className="flex w-full min-w-0 flex-1">
+      <div className="q-test-body flex w-full min-w-0 flex-1">
         <aside
           className="hidden w-[240px] shrink-0 border-r bg-white p-4 dark:bg-card xl:block"
           aria-label="Question navigator"
@@ -2959,8 +3071,8 @@ function TestView({
                   )}
                   <p className="mt-2 text-xs text-muted-foreground">
                     Turn Marker on, then select text with touch, Apple Pencil,
-                    or mouse. Highlights work in the stem, options, and
-                    explanation; tap a yellow highlight to remove it.
+                    or mouse. Highlights work only in the question stem and
+                    read-only explanation; tap a yellow highlight to remove it.
                   </p>
                   {question.images?.length > 0 && (
                     <section
@@ -3007,11 +3119,9 @@ function TestView({
                       const isCorrect = revealed && question.answer === index;
                       const isWrong =
                         revealed && isSelected && index !== question.answer;
-                      const count = answerSelections.filter(
-                        (answer) => answer === index,
-                      ).length;
-                      const percent = answerSelections.length
-                        ? Math.round((count / answerSelections.length) * 100)
+                      const count = answerSummary.counts.get(index) ?? 0;
+                      const percent = answerSummary.total
+                        ? Math.round((count / answerSummary.total) * 100)
                         : 0;
                       return (
                         <QuestionOption
@@ -3024,19 +3134,6 @@ function TestView({
                           revealed={revealed}
                           percent={percent}
                           onSelect={() => selectAnswer(index)}
-                          renderText={
-                            <HighlightedText
-                              text={option}
-                              ranges={sectionHighlights(`option:${index}`)}
-                              interactive={false}
-                              onRemove={(range) =>
-                                removeHighlight(`option:${index}`, range)
-                              }
-                            />
-                          }
-                          onTextSelection={(element) =>
-                            copySelectionAndMark(`option:${index}`, element)
-                          }
                         />
                       );
                     })}
@@ -3066,8 +3163,8 @@ function TestView({
                           ? 'Correct answer.'
                           : `The keyed answer is ${question.answerLetter}.`}{' '}
                         <span className="font-normal opacity-75">
-                          {answerSelections.length} learner
-                          {answerSelections.length === 1 ? '' : 's'} in response
+                          {answerSummary.total} learner
+                          {answerSummary.total === 1 ? '' : 's'} in response
                           data · Revision {question.revision}
                         </span>
                       </div>
@@ -3157,38 +3254,6 @@ function TestView({
                     Explanation
                   </SecondaryButton>
                 )}
-                <SecondaryButton onClick={() => setLabsOpen(true)}>
-                  <FlaskConical className="size-4" />
-                  Labs
-                </SecondaryButton>
-                <SecondaryButton
-                  onClick={() =>
-                    hasFeature(user.effectivePlan ?? user.tier, 'privateNotes')
-                      ? setPrivateNotesOpen(true)
-                      : openUpgrade()
-                  }
-                >
-                  {hasFeature(user.effectivePlan ?? user.tier, 'privateNotes') ? (
-                    <StickyNote className="size-4" />
-                  ) : (
-                    <LockKeyhole className="size-4" />
-                  )}
-                  Private Note {hasFeature(user.effectivePlan ?? user.tier, 'privateNotes') ? (progress.note.trim() ? '•' : '') : '· Pro'}
-                </SecondaryButton>
-                <SecondaryButton
-                  onClick={() =>
-                    hasFeature(user.effectivePlan ?? user.tier, 'flashcards')
-                      ? setFlashcardOpen(true)
-                      : openUpgrade()
-                  }
-                >
-                  {hasFeature(user.effectivePlan ?? user.tier, 'flashcards') ? (
-                    <Layers3 className="size-4" />
-                  ) : (
-                    <LockKeyhole className="size-4" />
-                  )}
-                  Create Flashcard {hasFeature(user.effectivePlan ?? user.tier, 'flashcards') ? '' : '· Pro'}
-                </SecondaryButton>
                 <SecondaryButton onClick={openReport}>
                   <CircleAlert className="size-4" />
                   Suggest edit
@@ -3755,8 +3820,17 @@ function HistoryView({
   onDelete: (id: string) => void;
 }) {
   const [deleteId, setDeleteId] = useState<string>();
-  const tests = [...state.tests].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+  const tests = useMemo(
+    () =>
+      [...state.tests].sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+      ),
+    [state.tests],
+  );
+  const questionsById = useMemo(
+    () => new Map(questions.map((question) => [question.id, question])),
+    [questions],
   );
   const selectedTest = tests.find((test) => test.id === deleteId);
   return (
@@ -3785,7 +3859,7 @@ function HistoryView({
               const isCompleted = test.status === 'completed';
               const answered = Object.keys(test.answers).length;
               const correct = test.questionIds.filter((id) => {
-                const question = questions.find((item) => item.id === id);
+                const question = questionsById.get(id);
                 return question && test.answers[id] === question.answer;
               }).length;
               const score = answered
@@ -4091,64 +4165,6 @@ function ProgressView({
   );
 }
 
-function escapeHtml(value: string) {
-  return value.replace(
-    /[&<>'"]/g,
-    (character) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[
-        character
-      ] ?? character,
-  );
-}
-
-function exportAsPdf(questions: Question[], collaboration: CollaborationState) {
-  const popup = window.open('', '_blank', 'noopener,noreferrer');
-  if (!popup) {
-    window.alert('Allow pop-ups to export your QBank as PDF.');
-    return;
-  }
-  const content = questions
-    .map((question) => {
-      const options = question.options
-        .map(
-          (option, index) =>
-            `<li class="${index === question.answer ? 'answer' : ''}"><b>${optionLabel(index)}.</b> ${escapeHtml(option)}${index === question.answer ? ' <span>Correct answer</span>' : ''}</li>`,
-        )
-        .join('');
-      const questionImages = (question.images ?? [])
-        .map(
-          (image) =>
-            `<figure><img src="${escapeHtml(image.url)}" alt=""/><figcaption>${escapeHtml(image.caption || image.name)}</figcaption></figure>`,
-        )
-        .join('');
-      const note =
-        collaboration.sharedNotes[
-          `${question.qbankId ?? 'smle-gs'}:${question.id}`
-        ];
-      const images = (note?.images ?? [])
-        .map(
-          (image) =>
-            `<figure><img src="${escapeHtml(image.url)}" alt=""/><figcaption>${escapeHtml(image.caption || image.name)}</figcaption></figure>`,
-        )
-        .join('');
-      return `<article><header><b>Question ${question.number} · ID ${escapeHtml(question.questionId)}</b><small>${escapeHtml(question.specialty)} · ${escapeHtml(question.topic)} · Source page ${question.sourcePage}</small></header><p class="stem">${escapeHtml(question.stem)}</p>${questionImages}<ol>${options}</ol>${note?.content || images ? `<section class="notes"><b>Shared explanation</b><p dir="auto">${escapeHtml(note?.content ?? '').replace(/\n/g, '<br>')}</p>${images}<small>Last edited by ${escapeHtml(note?.updatedByName ?? '')} · ${escapeHtml(formatDate(note?.updatedAt))}</small></section>` : ''}</article>`;
-    })
-    .join('');
-  popup.document.documentElement.innerHTML = `<!doctype html><html><head><title>Qraft QBank Export</title><style>@page{size:A4;margin:15mm}*{box-sizing:border-box}body{font-family:Arial,"Segoe UI",sans-serif;color:#16283a;margin:0}main{max-width:800px;margin:auto}.cover{display:grid;min-height:92vh;place-items:center;text-align:center;page-break-after:always}.brand{color:#086bc4;font-size:42px;margin:0}.cover p{color:#627486}.cover strong{display:block;margin-top:24px;font-size:18px}article{page-break-inside:avoid;border-top:3px solid #086bc4;padding:18px 0 24px;margin-bottom:12px}article header{display:flex;justify-content:space-between;gap:16px;color:#086bc4}small{color:#64788c}.stem{line-height:1.7;font-size:14px}ol{list-style:none;padding:0;margin:16px 0}li{padding:8px 10px;border:1px solid #dce5ee;margin:5px 0;border-radius:7px;font-size:13px}.answer{background:#ecfdf5;border-color:#86efac}.answer span{float:right;color:#087b55;font-size:10px;font-weight:bold}.notes{margin-top:14px;padding:13px;background:#fff9dc;border:1px solid #f3dc75;border-radius:8px}.notes p{white-space:normal;line-height:1.7;font-size:13px}figure{margin:10px 0}figure img{max-width:100%;max-height:420px;object-fit:contain}figcaption{font-size:10px;color:#64788c}@media print{button{display:none}}</style></head><body><main><section class="cover"><div><h1 class="brand">Qraft</h1><p>Collaborative Question Bank</p><strong>${questions.length} questions with answers and shared explanations</strong><p>Exported ${new Date().toLocaleDateString()}</p><button onclick="window.print()">Save as PDF</button></div></section>${content}</main><script>window.onload=()=>setTimeout(()=>window.print(),500);</script></body></html>`;
-}
-
-function downloadBackup(state: AppState, collaboration: CollaborationState) {
-  const blob = new Blob(
-    [JSON.stringify({ personal: state, collaboration }, null, 2)],
-    { type: 'application/json' },
-  );
-  const anchor = document.createElement('a');
-  anchor.href = URL.createObjectURL(blob);
-  anchor.download = `qraft-backup-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.click();
-  URL.revokeObjectURL(anchor.href);
-}
-
 function RoleRequestPanel({
   user,
   collaboration,
@@ -4161,11 +4177,13 @@ function RoleRequestPanel({
   ) => void;
 }) {
   const [roleReason, setRoleReason] = useState('');
-  const [requestedRole, setRequestedRole] = useState<
-    'pro' | 'reviewer' | 'access_manager'
-  >('pro');
+  const [requestedRole, setRequestedRole] =
+    useState<PlatformRole>('reviewer');
   const pendingRole = collaboration.roleApplications.find(
-    (item) => item.userId === user.uid && item.status === 'pending',
+    (item) =>
+      item.userId === user.uid &&
+      item.status === 'pending' &&
+      isPlatformRole(item.requestedRole),
   );
 
   function applyForRole() {
@@ -4191,12 +4209,12 @@ function RoleRequestPanel({
     setRoleReason('');
   }
 
-  if (user.role === 'super_admin') return null;
+  if (hasModeratorRole(user)) return null;
   return (
     <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
       <h2 className="font-bold">Request an additional role</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        The Superadmin reviews every Pro, Reviewer, and Access Manager request.
+        A Moderator reviews every Moderator, Reviewer, and Access Manager request.
       </p>
       {pendingRole ? (
         <div className="mt-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
@@ -4212,7 +4230,7 @@ function RoleRequestPanel({
             }
             className="h-11 rounded-xl border bg-card px-3 text-sm"
           >
-            <option value="pro">Pro user</option>
+            <option value="moderator">Moderator</option>
             <option value="reviewer">Public QBank reviewer</option>
             <option value="access_manager">Access Manager</option>
           </select>
@@ -4240,7 +4258,7 @@ function SettingsView({
   setState,
   syncStatus,
   onSync,
-  questions,
+  onAccountDeleted,
   collaboration,
   user,
   updateCollaboration,
@@ -4249,21 +4267,58 @@ function SettingsView({
   setState: React.Dispatch<React.SetStateAction<AppState>>;
   syncStatus: SyncStatus;
   onSync: () => void;
-  questions: Question[];
+  onAccountDeleted: () => void;
   collaboration: CollaborationState;
   user: AppUser;
   updateCollaboration: (
     updater: (current: CollaborationState) => CollaborationState,
   ) => void;
 }) {
+  const [legalLinks, setLegalLinks] = useState({ termsUrl: '', privacyUrl: '' });
+  const [personalBackupBusy, setPersonalBackupBusy] = useState(false);
+  const [personalBackupMessage, setPersonalBackupMessage] = useState('');
+  useEffect(() => {
+    let active = true;
+    void api<{ termsUrl: string; privacyUrl: string }>('/platform/legal-links')
+      .then((links) => {
+        if (active) setLegalLinks(links);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+  const backupAvailable = hasFeature(user.effectivePlan ?? user.tier, 'flashcards') || hasFeature(user.effectivePlan ?? user.tier, 'createPrivateQBank');
+  const downloadPersonalBackup = async () => {
+    setPersonalBackupBusy(true); setPersonalBackupMessage('');
+    try {
+      const backup = await api<Record<string, unknown>>('/platform/personal-backup');
+      const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = `qraft-personal-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(url);
+      setPersonalBackupMessage('Your personal backup was downloaded.');
+    } catch (error) { setPersonalBackupMessage(error instanceof Error ? error.message : 'Unable to create backup.'); }
+    finally { setPersonalBackupBusy(false); }
+  };
+  const restorePersonalBackup = async (file?: File) => {
+    if (!file) return;
+    setPersonalBackupBusy(true); setPersonalBackupMessage('');
+    try {
+      const raw = await file.text();
+      if (raw.length > 50_000_000) throw new Error('Backup exceeds the 50 MB restore limit.');
+      await api('/platform/personal-backup', { method: 'PUT', body: raw });
+      setPersonalBackupMessage('Backup restored. Refreshing your workspace…');
+      window.location.reload();
+    } catch (error) { setPersonalBackupMessage(error instanceof Error ? error.message : 'Unable to restore backup.'); setPersonalBackupBusy(false); }
+  };
   return (
     <>
       <PageHeader
         title="Settings"
-        subtitle="Study preferences, sync, and exports"
+        subtitle="Study preferences, sync, and account policies"
         openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
       />
       <div className="mx-auto max-w-4xl space-y-5 p-4 sm:p-7">
+        <DeleteAccount uid={user.uid} onDeleted={onAccountDeleted} />
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
           <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
@@ -4355,26 +4410,49 @@ function SettingsView({
           collaboration={collaboration}
           updateCollaboration={updateCollaboration}
         />
+        {backupAvailable && (
+          <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
+            <h2 className="font-bold">Your personal backup</h2>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">Download your Flashcards and the private QBanks you own. A private QBank backup can only be restored by the same account and always remains private.</p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <PrimaryButton onClick={() => void downloadPersonalBackup()} disabled={personalBackupBusy}><Download className="size-4" />Download my backup</PrimaryButton>
+              <label className="q-button q-button-secondary cursor-pointer"><Upload className="size-4" />Restore my backup<input type="file" accept="application/json,.json" disabled={personalBackupBusy} className="sr-only" onChange={(event) => { void restorePersonalBackup(event.target.files?.[0]); event.target.value = ''; }} /></label>
+            </div>
+            {personalBackupMessage && <output className="mt-3 block text-sm text-muted-foreground">{personalBackupMessage}</output>}
+          </section>
+        )}
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
-          <h2 className="font-bold">Export and backup</h2>
+          <h2 className="font-bold">Legal and privacy</h2>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            Create a printable PDF with answers, shared notes, editor
-            attribution, and images.
+            Review the policies that govern your use of Qraft and your data.
           </p>
-          <div className="mt-5 flex flex-wrap gap-3">
-            <PrimaryButton
-              onClick={() => exportAsPdf(questions, collaboration)}
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <a
+              href={legalLinks.termsUrl || undefined}
+              target={legalLinks.termsUrl ? '_blank' : undefined}
+              rel={legalLinks.termsUrl ? 'noreferrer' : undefined}
+              aria-disabled={!legalLinks.termsUrl}
+              className={cx('flex min-h-12 items-center gap-3 rounded-xl border px-4 text-sm font-bold transition hover:border-primary/40 hover:bg-primary/5', !legalLinks.termsUrl && 'pointer-events-none opacity-50')}
             >
-              <FileText className="size-4" />
-              Export current QBank
-            </PrimaryButton>
-            <SecondaryButton
-              onClick={() => downloadBackup(state, collaboration)}
+              <FileText className="size-5 text-primary" />
+              شروط الاستخدام
+              <ArrowRight className="ml-auto size-4 text-muted-foreground" />
+            </a>
+            <a
+              href={legalLinks.privacyUrl || undefined}
+              target={legalLinks.privacyUrl ? '_blank' : undefined}
+              rel={legalLinks.privacyUrl ? 'noreferrer' : undefined}
+              aria-disabled={!legalLinks.privacyUrl}
+              className={cx('flex min-h-12 items-center gap-3 rounded-xl border px-4 text-sm font-bold transition hover:border-primary/40 hover:bg-primary/5', !legalLinks.privacyUrl && 'pointer-events-none opacity-50')}
             >
-              <Download className="size-4" />
-              Download backup
-            </SecondaryButton>
+              <ShieldCheck className="size-5 text-primary" />
+              سياسة الخصوصية
+              <ArrowRight className="ml-auto size-4 text-muted-foreground" />
+            </a>
           </div>
+          {(!legalLinks.termsUrl || !legalLinks.privacyUrl) && (
+            <p className="mt-3 text-xs text-muted-foreground">The Superadmin can configure unavailable links from the Admin page.</p>
+          )}
         </section>
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
           <h2 className="font-bold">PWA installation</h2>
@@ -4826,7 +4904,7 @@ function QuestionManager({
         openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {user.role !== 'super_admin' && (
+            {!hasModeratorRole(user) && (
               <SecondaryButton onClick={() => setRoleRequestOpen(true)}>
                 <UserPlus className="size-4" />
                 Request role
@@ -5087,7 +5165,7 @@ function QuestionManager({
   );
 }
 
-export default function MedGuardApp() {
+export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'superadmin' }) {
   const [user, setUser] = useState<AppUser | null | undefined>(undefined);
   const [state, setState] = useState<AppState>(initialAppState);
   const [collaboration, setCollaboration] = useState<CollaborationState>(
@@ -5098,6 +5176,7 @@ export default function MedGuardApp() {
   const [view, setView] = useState<View>('dashboard');
   const [testError, setTestError] = useState('');
   const creatingTest = useRef(false);
+  const [examPool, setExamPool] = useState<Question[]>([]);
   const [activeTestId, setActiveTestId] = useState<string>();
   const [managedBank, setManagedBank] = useState<{
     id: string;
@@ -5112,6 +5191,7 @@ export default function MedGuardApp() {
   const [offlineDismissed, setOfflineDismissed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [flashcardClock, setFlashcardClock] = useState(() => Date.now());
+  const [announcement, setAnnouncement] = useState({ enabled: false, content: '', href: '' });
   const [linkInvitation, setLinkInvitation] = useState<
     (QBankLinkInvitation & { token: string }) | null
   >(null);
@@ -5121,6 +5201,7 @@ export default function MedGuardApp() {
   const stateDirty = useRef(false);
   const stateSyncInFlight = useRef(false);
   const stateSnapshot = useRef(state);
+  const cloudStateSnapshot = useRef<AppState | undefined>(undefined);
   const collaborationSaveTimer = useRef<number | undefined>(undefined);
   const lastSavedCollaboration = useRef<CollaborationState>(
     initialCollaborationState(),
@@ -5136,6 +5217,25 @@ export default function MedGuardApp() {
   const handledInvitationLink = useRef('');
   const hydratedIdentity = useRef('');
   const cloudLoaded = useRef(false);
+  const announcementUserId = user?.uid;
+  const announcementUserStatus = user?.status;
+  useEffect(() => {
+    if (!announcementUserId || announcementUserStatus !== 'approved') return;
+    let active = true;
+    const refresh = () => {
+      void api<typeof announcement>('/platform/announcement')
+        .then((value) => {
+          if (active) setAnnouncement(value);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const stop = subscribeLive(refresh, ['announcement']);
+    return () => {
+      active = false;
+      stop();
+    };
+  }, [announcementUserId, announcementUserStatus]);
   const confirmUpdate = (
     updater: (current: CollaborationState) => CollaborationState,
   ) => {
@@ -5154,7 +5254,8 @@ export default function MedGuardApp() {
     if (!user) return;
     const refresh = () => {
       void observeCloudflareUser((next) => {
-        if (next && next.uid === user.uid) setUser(next);
+        if (!next) setUser(null);
+        else if (next.uid === user.uid) setUser(next);
       }).catch(() => undefined);
     };
     const changed = (event: Event) => {
@@ -5180,22 +5281,15 @@ export default function MedGuardApp() {
   }, [user]);
 
   const allQuestions = useMemo(() => {
-    const imported = baseQuestions.map((question, index) => ({
-      ...question,
-      questionId: question.questionId ?? String(index + 1).padStart(5, '0'),
-      images: question.images ?? [],
-      qbankId: question.qbankId ?? 'smle-gs',
-    }));
     const merged = new Map<string, Question>();
     [
-      ...imported,
       ...state.customQuestions.map((question, index) => ({
         ...question,
         questionId: question.questionId ?? String(218 + index).padStart(5, '0'),
         images: question.images ?? [],
         qbankId: question.qbankId ?? 'smle-gs',
       })),
-      ...collaboration.approvedQuestions.map((question) => ({
+      ...[...collaboration.approvedQuestions, ...(view === 'test' ? examPool : [])].map((question) => ({
         ...question,
         images: question.images ?? [],
       })),
@@ -5210,6 +5304,8 @@ export default function MedGuardApp() {
     state.customQuestions,
     state.questionOverrides,
     collaboration.approvedQuestions,
+    examPool,
+    view,
   ]);
   const accessibleQBanks = useMemo(
     () =>
@@ -5293,15 +5389,71 @@ export default function MedGuardApp() {
   useEffect(() => {
     const theme = state.settings.theme;
     const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const apply = () =>
-      document.documentElement.classList.toggle(
-        'dark',
-        theme === 'dark' || (theme === 'system' && media.matches),
+    const apply = () => {
+      const dark = theme === 'dark' || (theme === 'system' && media.matches);
+      document.documentElement.classList.toggle('dark', dark);
+      document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+      let themeColor = document.querySelector<HTMLMetaElement>(
+        'meta[name="theme-color"][data-qraft-theme]',
       );
+      if (!themeColor) {
+        themeColor = document.createElement('meta');
+        themeColor.name = 'theme-color';
+        themeColor.dataset.qraftTheme = 'true';
+        document.head.appendChild(themeColor);
+      }
+      themeColor.content = dark ? '#0d1b2a' : '#f4f7fb';
+    };
     apply();
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
   }, [state.settings.theme]);
+
+  useEffect(() => {
+    const standalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (navigator as Navigator & { standalone?: boolean }).standalone === true;
+    if (!standalone) return;
+
+    let viewport = document.querySelector<HTMLMetaElement>(
+      'meta[name="viewport"]',
+    );
+    const created = !viewport;
+    if (!viewport) {
+      viewport = document.createElement('meta');
+      viewport.name = 'viewport';
+      document.head.appendChild(viewport);
+    }
+    const previousContent = viewport.content || 'width=device-width, initial-scale=1';
+    const content = previousContent
+      .split(',')
+      .map((item) => item.trim())
+      .filter(
+        (item) =>
+          !/^(minimum-scale|maximum-scale|user-scalable)=/i.test(item),
+      );
+    content.push('minimum-scale=1', 'maximum-scale=1', 'user-scalable=no');
+    viewport.content = content.join(', ');
+
+    const preventGestureZoom = (event: Event) => event.preventDefault();
+    document.addEventListener('gesturestart', preventGestureZoom, {
+      passive: false,
+    });
+    document.addEventListener('gesturechange', preventGestureZoom, {
+      passive: false,
+    });
+    document.addEventListener('gestureend', preventGestureZoom, {
+      passive: false,
+    });
+    return () => {
+      document.removeEventListener('gesturestart', preventGestureZoom);
+      document.removeEventListener('gesturechange', preventGestureZoom);
+      document.removeEventListener('gestureend', preventGestureZoom);
+      if (created) viewport?.remove();
+      else if (viewport?.content === content.join(', '))
+        viewport.content = previousContent;
+    };
+  }, []);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -5330,17 +5482,27 @@ export default function MedGuardApp() {
     cloudLoaded.current = false;
     let cancelled = false;
     async function hydrate() {
+      let localState: AppState | undefined;
+      let localCollaboration: CollaborationState | undefined;
       try {
-        const local = await loadLocalState(user!.uid);
-        let resolved = normalizeAppState(local);
+        [localState, localCollaboration] = await Promise.all([
+          loadLocalState(user!.uid),
+          loadLocalCollaboration(user!.uid),
+        ]);
+        let resolved = normalizeAppState(localState);
         let shared = normalizeCollaborationState(
-          (await loadLocalCollaboration(user!.uid)) ??
-            initialCollaborationState(),
+          localCollaboration ?? initialCollaborationState(),
         );
         if (navigator.onLine && user!.status === 'approved') {
-          const cloud = await loadCloudState(user!.uid);
-          if (cloud) resolved = normalizeAppState(cloud);
-          shared = await loadCollaborationState(user!);
+          const [cloud, remoteCollaboration] = await Promise.all([
+            loadCloudState(user!.uid),
+            loadCollaborationState(user!),
+          ]);
+          if (cloud) {
+            resolved = normalizeAppState(cloud);
+            cloudStateSnapshot.current = resolved;
+          }
+          shared = remoteCollaboration;
           cloudLoaded.current = true;
           setSyncStatus('synced');
         }
@@ -5355,9 +5517,13 @@ export default function MedGuardApp() {
       } catch {
         if (!cancelled) {
           const shared = normalizeCollaborationState(
-            await loadLocalCollaboration(user!.uid),
+            localCollaboration ?? await loadLocalCollaboration(user!.uid),
           );
-          setState(normalizeAppState(await loadLocalState(user!.uid)));
+          setState(
+            normalizeAppState(
+              localState ?? await loadLocalState(user!.uid),
+            ),
+          );
           setCollaboration(shared);
           lastSavedCollaboration.current = shared;
           setHydrated(true);
@@ -5381,8 +5547,19 @@ export default function MedGuardApp() {
     const linkKey = `${user.uid}:${qbankId}:${token}`;
     if (handledInvitationLink.current === linkKey) return;
     handledInvitationLink.current = linkKey;
+    clearInvitationLink();
+    if (
+      collaboration.memberships.some(
+        (membership) =>
+          membership.qbankId === qbankId && membership.userId === user.uid,
+      )
+    )
+      return;
     void previewCloudflareQBankInvitation(qbankId, token)
-      .then((invitation) => setLinkInvitation({ ...invitation, token }))
+      .then((invitation) => {
+        setLinkInvitationError('');
+        setLinkInvitation({ ...invitation, token });
+      })
       .catch((error) => {
         setLinkInvitationError(
           error instanceof Error
@@ -5391,18 +5568,7 @@ export default function MedGuardApp() {
         );
         handledInvitationLink.current = '';
       });
-  }, [collaborationHydrated, user]);
-
-  function clearInvitationLink() {
-    const url = new URL(window.location.href);
-    url.searchParams.delete('join_qbank');
-    url.searchParams.delete('token');
-    window.history.replaceState(
-      {},
-      '',
-      `${url.pathname}${url.search}${url.hash}`,
-    );
-  }
+  }, [collaboration.memberships, collaborationHydrated, user]);
 
   function declineLinkInvitation() {
     setLinkInvitation(null);
@@ -5445,12 +5611,15 @@ export default function MedGuardApp() {
 
   useEffect(() => {
     if (!user || !hydrated) return;
-    stateDirty.current = true;
+    const alreadySynced = cloudStateSnapshot.current === state;
+    cloudStateSnapshot.current = undefined;
+    if (!alreadySynced) stateDirty.current = true;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
       if (creatingTest.current) return;
       void saveLocalState(user.uid, state);
-      setSyncStatus(navigator.onLine ? 'local' : 'offline');
+      if (!alreadySynced)
+        setSyncStatus(navigator.onLine ? 'local' : 'offline');
     }, 200);
     return () => {
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
@@ -5557,9 +5726,10 @@ export default function MedGuardApp() {
                 ...collaboration.qbanks.map((bank) => `bank:${bank.id}`),
               ]
             : []),
-          ...(user.role === 'super_admin' && user.mfaVerified
+          ...(hasModeratorRole(user) &&
+          (user.role !== 'super_admin' || user.mfaVerified)
             ? ['admin', 'access']
-            : user.platformRoles.includes('access_manager')
+            : hasAccessManagerRole(user)
               ? ['access']
               : []),
         ].sort()
@@ -5589,10 +5759,13 @@ export default function MedGuardApp() {
       pending = false;
       const baseline = lastSavedCollaboration.current;
       try {
-        let account = liveSnapshot.current.user;
-        await observeCloudflareUser((next) => {
-          account = next;
-        });
+        const currentAccount = liveSnapshot.current.user;
+        if (!currentAccount) {
+          setUser(null);
+          return;
+        }
+        const snapshot = await loadCollaborationSnapshot(currentAccount);
+        const account = snapshot.user;
         if (stopped) return;
         if (!account) {
           setUser(null);
@@ -5603,7 +5776,7 @@ export default function MedGuardApp() {
         )
           setUser(account);
         if (account.status !== 'approved') return;
-        const shared = await loadCollaborationState(account);
+        const shared = snapshot.collaboration;
         if (stopped) return;
         if (
           collaborationWriteInFlight.current ||
@@ -5638,7 +5811,8 @@ export default function MedGuardApp() {
           );
       }
     };
-    const disconnect = openLiveChannels(channels, () => {
+    const disconnect = openLiveChannels(channels, (topic) => {
+      if (!['connected', 'collaboration', 'account'].includes(topic)) return;
       pending = true;
       if (timer === undefined && !fetching)
         timer = setTimeout(() => void refresh(), 80);
@@ -5667,6 +5841,8 @@ export default function MedGuardApp() {
         saveLocalCollaboration(collaboration, user.uid),
       ]);
       lastSavedCollaboration.current = collaboration;
+      stateDirty.current = false;
+      cloudStateSnapshot.current = next;
       setState(next);
       setSyncStatus('synced');
     } catch {
@@ -5701,19 +5877,21 @@ export default function MedGuardApp() {
         );
         return;
       }
-      const eligible = questions.filter((question) =>
-        matchesTestConfig(question, state, config),
-      );
-      if (config.count > eligible.length) {
-        setTestError(
-          `Only ${eligible.length} questions are currently available in this QBank.`,
-        );
-        setView('create');
+      let selected: Question[];
+      creatingTest.current = true;
+      try {
+        // Persist personal questions/overrides before using the same server pool
+        // as the counter. Plan rules remain in the existing exam registration.
+        await saveCloudState(user.uid, state);
+        const result = await api<{ questions: Question[] }>('/platform/test-pool', {
+          method: 'POST', body: JSON.stringify({ qbankId: activeQBankId, config, select: true }),
+        });
+        selected = result.questions;
+        setExamPool(selected);
+      } catch (error) {
+        setTestError(error instanceof Error ? error.message : 'Unable to select questions.');
         return;
-      }
-      const selected = [...eligible]
-        .sort(() => Math.random() - 0.5)
-        .slice(0, config.count);
+      } finally { creatingTest.current = false; }
       if (!selected.length) {
         setView('create');
         return;
@@ -5764,6 +5942,8 @@ export default function MedGuardApp() {
         setView('test');
         try {
           await saveCloudState(user.uid, nextState);
+          if (JSON.stringify(stateSnapshot.current) === JSON.stringify(nextState))
+            stateDirty.current = false;
         } catch {
           setSyncStatus('error');
         }
@@ -5777,7 +5957,7 @@ export default function MedGuardApp() {
         creatingTest.current = false;
       }
     },
-    [questions, state, collaboration.qbanks, activeQBankId, user],
+    [state, collaboration.qbanks, activeQBankId, user],
   );
 
   const quickTest = useCallback(() => {
@@ -5883,14 +6063,17 @@ export default function MedGuardApp() {
     );
   if (user === undefined)
     return (
-      <main className="grid min-h-screen place-items-center bg-background">
-        <div className="text-center">
-          <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary text-white">
-            <Sparkles className="size-5 animate-pulse" />
+      <main className="grid min-h-screen place-items-center bg-background px-6">
+        <div className="q-loading-panel w-full max-w-xs rounded-3xl border bg-card/80 p-8 text-center shadow-xl shadow-primary/5 backdrop-blur">
+          <div className="q-loading-logo mx-auto grid size-24 place-items-center rounded-[28px] border bg-white p-4 shadow-lg ring-1 ring-black/5 dark:bg-slate-50">
+            <img src="/2222.svg" alt="Qraft" className="h-full w-full object-contain" />
           </div>
-          <p className="mt-3 text-sm font-semibold text-muted-foreground">
+          <p className="mt-6 text-sm font-semibold text-foreground">
             Preparing Qraft…
           </p>
+          <div className="mx-auto mt-4 h-1 w-28 overflow-hidden rounded-full bg-muted">
+            <div className="q-loading-progress h-full w-1/2 rounded-full bg-primary" />
+          </div>
         </div>
       </main>
     );
@@ -5908,15 +6091,46 @@ export default function MedGuardApp() {
     );
   if (!hydrated || !collaborationHydrated)
     return (
-      <main className="grid min-h-screen place-items-center bg-background">
-        <div className="text-center">
-          <RefreshCw className="mx-auto size-7 animate-spin text-primary" />
+      <main className="grid min-h-screen place-items-center bg-background px-6">
+        <div className="q-loading-panel w-full max-w-xs rounded-3xl border bg-card/80 p-8 text-center shadow-xl shadow-primary/5 backdrop-blur">
+          <div className="q-loading-logo mx-auto grid size-20 place-items-center rounded-[24px] border bg-white p-3 shadow-lg ring-1 ring-black/5 dark:bg-slate-50">
+            <img src="/2222.svg" alt="Qraft" className="h-full w-full object-contain" />
+          </div>
           <p className="mt-3 text-sm font-semibold text-muted-foreground">
             Loading your collaborative workspace…
           </p>
         </div>
       </main>
     );
+  if (portal === 'superadmin') {
+    if (user.role !== 'super_admin' || !user.mfaVerified)
+      return (
+        <main className="grid min-h-screen place-items-center bg-background p-6">
+          <section className="w-full max-w-lg rounded-3xl border bg-card p-8 text-center shadow-xl">
+            <ShieldCheck className="mx-auto size-10 text-muted-foreground" />
+            <h1 className="mt-5 text-2xl font-bold">Superadmin access required</h1>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">
+              This workspace is available only to the verified Superadmin account.
+            </p>
+            <Link href="/" className="q-button q-button-primary mt-6 inline-flex">
+              Return to Qraft
+            </Link>
+          </section>
+        </main>
+      );
+    return (
+      <main className="q-admin-dashboard min-h-screen bg-background text-foreground">
+        <AdminDashboard
+          user={user}
+          collaboration={collaboration}
+          update={(updater) => setCollaboration(updater)}
+          replaceFromServer={replaceCollaborationFromServer}
+          scope="superadmin"
+          onSignOut={() => void signOut()}
+        />
+      </main>
+    );
+  }
   if (view === 'test' && activeTest)
     return (
       <TestView
@@ -5963,8 +6177,13 @@ export default function MedGuardApp() {
 
   return (
     <main
-      className="q-shell min-h-screen bg-background text-foreground"
+      className="q-shell bg-background text-foreground"
       data-navigation-open={mobileOpen}
+      data-announcement-visible={
+        portal === 'app' && announcement.enabled && Boolean(announcement.content)
+          ? 'true'
+          : 'false'
+      }
     >
       <a className="skip-navigation" href="#main-content">
         Skip to content
@@ -6052,6 +6271,16 @@ export default function MedGuardApp() {
           key={view}
           className="q-stage q-enter"
         >
+          {portal === 'app' && announcement.enabled && announcement.content && (
+            <output className="q-announcement flex min-h-10 items-center justify-center gap-3 bg-gradient-to-r from-primary via-cyan-600 to-teal-600 px-4 py-2 text-center text-xs font-bold text-white shadow-sm sm:text-sm">
+              <span>{announcement.content}</span>
+              {announcement.href && (
+                <a href={announcement.href} className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-[11px] ring-1 ring-white/30 transition hover:bg-white/25">
+                  معرفة المزيد
+                </a>
+              )}
+            </output>
+          )}
           {view === 'subscribe' && <Subscribe user={user} onUser={setUser} />}
           {view === 'contact' && <ContactWorkspace />}
           {view === 'account' && (
@@ -6084,6 +6313,7 @@ export default function MedGuardApp() {
               confirmUpdate={confirmUpdate}
               user={user}
               collaboration={collaboration}
+              questionPool={allQuestions}
               update={(updater) => setCollaboration(updater)}
               activeQBankId={activeQBankId}
               organization={{
@@ -6128,10 +6358,15 @@ export default function MedGuardApp() {
           )}
           {view === 'create' && (
             <CreateTest
+              qbankId={activeQBankId}
               key={activeQBankId}
               questions={questions}
               state={state}
               bankName={activeQBank?.name ?? 'QBank'}
+              maxQuestionsPerExam={
+                getPlanLimits(user.effectivePlan ?? user.tier)
+                  .maxQuestionsPerExam
+              }
               onStart={createTest}
             />
           )}
@@ -6171,11 +6406,11 @@ export default function MedGuardApp() {
           )}
           {view === 'settings' && (
             <SettingsView
+              onAccountDeleted={() => { setUser(null); setState(initialAppState()); setCollaboration(initialCollaborationState()); setView('dashboard'); }}
               state={state}
               setState={setState}
               syncStatus={syncStatus}
               onSync={() => void manualSync()}
-              questions={questions}
               collaboration={collaboration}
               user={user}
               updateCollaboration={(updater) => setCollaboration(updater)}
@@ -6194,6 +6429,7 @@ export default function MedGuardApp() {
           )}
           {view === 'contribution-center' && (
             <ContributionCenter
+              userId={user.uid}
               onEntitlementChange={() => {
                 void observeCloudflareUser((next) => {
                   if (next) setUser(next);
@@ -6207,6 +6443,7 @@ export default function MedGuardApp() {
               collaboration={collaboration}
               update={(updater) => setCollaboration(updater)}
               replaceFromServer={replaceCollaborationFromServer}
+              scope="access"
             />
           )}
         </section>

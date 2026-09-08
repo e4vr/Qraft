@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
-export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: [{media:'(prefers-color-scheme: light)',color:'#f4f7fb'},{media:'(prefers-color-scheme: dark)',color:'#111827'}] };
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: [{media:'(prefers-color-scheme: light)',color:'#f4f7fb'},{media:'(prefers-color-scheme: dark)',color:'#0d1b2a'}] };
 
 export const metadata: Metadata = {
   title: 'Qraft Collaborative QBank',
@@ -10,8 +10,11 @@ export const metadata: Metadata = {
   manifest: '/manifest.webmanifest',
   appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Qraft' },
   icons: {
-    icon: '/icon-192.png',
-    apple: '/icon-192.png',
+    icon: [
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/icon-192.png?v=3', sizes: '192x192', type: 'image/png' },
+    ],
+    apple: '/apple-touch-icon.png?v=3',
   },
   openGraph: {
     title: 'Qraft Collaborative QBank',

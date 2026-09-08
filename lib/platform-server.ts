@@ -1,4 +1,6 @@
 import { env } from 'cloudflare:workers';
+import { reviewerPerformance } from './reviewer-performance-server';
+import { testPool } from './test-pool-server';
 import {
   assertSameOrigin,
   currentUser,
@@ -277,12 +279,212 @@ export async function platformApi(request: Request, action: string) {
   const input =
     request.method === 'GET'
       ? {}
-      : await readJson<Record<string, unknown>>(request, 2_000_000);
+      : await readJson<Record<string, unknown>>(
+          request,
+          action === 'content-backup' || action === 'personal-backup'
+            ? 50_000_000
+            : 2_000_000,
+        );
   const text = (key: string) =>
     typeof input[key] === 'string' ? (input[key] as string).trim() : '';
   const root =
     user.role === 'super_admin' && user.mfaEnrolled && user.mfaVerified;
   try {
+    if (action === 'reviewer-performance' && request.method === 'GET') return reviewerPerformance(user, url);
+    if (action === 'test-pool' && request.method === 'POST') return testPool(user, input);
+    if (action === 'json-import-status' && request.method === 'GET') {
+      const now = new Date().toISOString();
+      const suspension = await env.DB.prepare(
+        'SELECT ends_at FROM json_import_suspensions WHERE user_id=? AND removed_at IS NULL AND starts_at<=? AND ends_at>? ORDER BY ends_at DESC LIMIT 1',
+      )
+        .bind(user.uid, now, now)
+        .first<{ ends_at: string }>();
+      return json({
+        suspended: Boolean(suspension),
+        endsAt: suspension?.ends_at ?? null,
+      });
+    }
+    if (action === 'announcement') {
+      const defaults = { enabled: false, content: '', href: '' };
+      const record = await env.DB.prepare(
+        "SELECT payload FROM records WHERE type='system' AND id='announcement' LIMIT 1",
+      ).first<{ payload: string }>();
+      const current = record
+        ? { ...defaults, ...(JSON.parse(record.payload) as Partial<typeof defaults>) }
+        : defaults;
+      if (request.method === 'GET') return json(current);
+      if (request.method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
+      if (!root) return json({ error: 'Superadmin access required.' }, 403);
+      const href = text('href').slice(0, 1000);
+      if (href && !(href.startsWith('/') && !href.startsWith('//'))) {
+        try {
+          if (new URL(href).protocol !== 'https:') throw new Error();
+        } catch {
+          return json({ error: 'Use a secure HTTPS URL or an internal path beginning with /.' }, 400);
+        }
+      }
+      const next = {
+        enabled: input.enabled === true,
+        content: text('content').slice(0, 280),
+        href,
+      };
+      if (next.enabled && !next.content)
+        return json({ error: 'Enter announcement content before enabling it.' }, 400);
+      const now = new Date().toISOString();
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO records(type,id,owner_id,payload,updated_at) VALUES('system','announcement',?,?,?) ON CONFLICT(type,id) DO UPDATE SET owner_id=excluded.owner_id,payload=excluded.payload,updated_at=excluded.updated_at",
+        ).bind(user.uid, JSON.stringify(next), now),
+        auditStatement(user, 'announcement_updated', 'announcement', current, next),
+      ]);
+      return json(next);
+    }
+    if (action === 'audit-week' && request.method === 'GET') {
+      if (!root) return json({ error: 'Superadmin access required.' }, 403);
+      const start = url.searchParams.get('start') ?? '';
+      const parsed = new Date(`${start}T00:00:00.000Z`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || Number.isNaN(parsed.getTime()))
+        return json({ error: 'Choose a valid week.' }, 400);
+      const end = new Date(parsed.getTime() + 7 * 86_400_000).toISOString();
+      const rows = await env.DB.prepare(
+        "SELECT payload FROM records WHERE type='auditLog' AND updated_at>=? AND updated_at<? ORDER BY updated_at DESC LIMIT 250",
+      ).bind(parsed.toISOString(), end).all<{ payload: string }>();
+      return json({
+        start,
+        end: end.slice(0, 10),
+        entries: rows.results.map((row) => JSON.parse(row.payload)),
+        limited: rows.results.length === 250,
+      });
+    }
+    if (action === 'content-backup') {
+      if (!root) return json({ error: 'Superadmin access required.' }, 403);
+      const allowedTypes = ['qbanks', 'sharedQuestions', 'questionProposals', 'sharedNotes', 'qbankMemberships'];
+      if (request.method === 'GET') {
+        const placeholders = allowedTypes.map(() => '?').join(',');
+        const rows = await env.DB.prepare(
+          `SELECT type,id,qbank_id,owner_id,payload,updated_at FROM records WHERE type IN (${placeholders}) ORDER BY type,id`,
+        ).bind(...allowedTypes).all<{ type: string; id: string; qbank_id: string | null; owner_id: string | null; payload: string; updated_at: string }>();
+        return json({
+          format: 'qraft-content-backup-v1',
+          exportedAt: new Date().toISOString(),
+          records: rows.results.map((row) => ({ ...row, payload: JSON.parse(row.payload) })),
+        });
+      }
+      if (request.method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
+      const backup = input as { format?: string; records?: Array<{ type?: string; id?: string; qbank_id?: string | null; owner_id?: string | null; payload?: unknown; updated_at?: string }> };
+      if (backup.format !== 'qraft-content-backup-v1' || !Array.isArray(backup.records) || backup.records.length > 50_000)
+        return json({ error: 'Invalid or oversized Qraft content backup.' }, 400);
+      const valid = backup.records.filter((record) => record && allowedTypes.includes(record.type ?? '') && typeof record.id === 'string' && record.id.length > 0 && record.id.length <= 200 && record.payload && typeof record.payload === 'object');
+      if (valid.length !== backup.records.length) return json({ error: 'Backup contains invalid records.' }, 400);
+      const now = new Date().toISOString();
+      for (let offset = 0; offset < valid.length; offset += 400) {
+        await env.DB.batch(valid.slice(offset, offset + 400).map((record) => {
+          const value = record.payload as Record<string, unknown>;
+          const qbankId = typeof value.qbankId === 'string' ? value.qbankId : record.qbank_id ?? null;
+          const ownerId = typeof value.ownerId === 'string' ? value.ownerId : record.owner_id ?? null;
+          return env.DB.prepare(
+            'INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,owner_id=excluded.owner_id,payload=excluded.payload,updated_at=excluded.updated_at',
+          ).bind(record.type!, record.id!, qbankId, ownerId, JSON.stringify(record.payload), record.updated_at || now);
+        }));
+      }
+      await auditStatement(user, 'content_backup_restored', 'content-backup', null, { records: valid.length }).run();
+      return json({ ok: true, restored: valid.length });
+    }
+    if (action === 'personal-backup') {
+      const plan = user.effectivePlan ?? user.tier;
+      const limits = getPlanLimits(plan);
+      if (!limits.canUseFlashcards && !limits.canCreatePrivateQBank)
+        return json({ error: 'Backup is available with Flashcards or Private QBanks access.' }, 403);
+      if (request.method === 'GET') {
+        const state = limits.canUseFlashcards
+          ? await env.DB.prepare('SELECT payload FROM app_states WHERE user_id=?').bind(user.uid).first<{ payload: string }>()
+          : null;
+        const banks = limits.canCreatePrivateQBank
+          ? await env.DB.prepare("SELECT id,payload FROM records WHERE type='qbanks' AND owner_id=? AND json_extract(payload,'$.visibility')='private'").bind(user.uid).all<{ id: string; payload: string }>()
+          : { results: [] as Array<{ id: string; payload: string }> };
+        const bankIds = banks.results.map((bank) => bank.id);
+        const related = bankIds.length
+          ? await env.DB.prepare(`SELECT type,id,qbank_id,owner_id,payload,updated_at FROM records WHERE qbank_id IN (${bankIds.map(() => '?').join(',')}) AND type IN ('sharedQuestions','questionProposals','sharedNotes','qbankMemberships') ORDER BY type,id`).bind(...bankIds).all<{ type: string; id: string; qbank_id: string | null; owner_id: string | null; payload: string; updated_at: string }>()
+          : { results: [] as Array<{ type: string; id: string; qbank_id: string | null; owner_id: string | null; payload: string; updated_at: string }> };
+        const app = state ? JSON.parse(state.payload) as Record<string, unknown> : {};
+        return json({
+          format: 'qraft-personal-backup-v1',
+          ownerId: user.uid,
+          exportedAt: new Date().toISOString(),
+          flashcards: limits.canUseFlashcards ? {
+            flashcardDecks: app.flashcardDecks ?? [], flashcards: app.flashcards ?? [], flashcardSchedules: app.flashcardSchedules ?? {}, flashcardReviewLog: app.flashcardReviewLog ?? [], flashcardSettings: app.flashcardSettings,
+          } : null,
+          records: [...banks.results.map((bank) => ({ type: 'qbanks', id: bank.id, qbank_id: bank.id, owner_id: user.uid, payload: JSON.parse(bank.payload), updated_at: new Date().toISOString() })), ...related.results.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))],
+        });
+      }
+      if (request.method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
+      const backup = input as { format?: string; ownerId?: string; flashcards?: Record<string, unknown> | null; records?: Array<{ type?: string; id?: string; payload?: unknown; updated_at?: string }> };
+      if (backup.format !== 'qraft-personal-backup-v1' || backup.ownerId !== user.uid || !Array.isArray(backup.records) || backup.records.length > 20_000)
+        return json({ error: 'This backup does not belong to the signed-in account.' }, 403);
+      const bankRecords = backup.records.filter((record) => record.type === 'qbanks');
+      const bankIds = new Set(bankRecords.map((record) => record.id).filter((id): id is string => Boolean(id)));
+      if ([...bankRecords].some((record) => !record.payload || typeof record.payload !== 'object' || (record.payload as Record<string, unknown>).ownerId !== user.uid || (record.payload as Record<string, unknown>).visibility !== 'private'))
+        return json({ error: 'Private QBank ownership could not be verified.' }, 403);
+      const allowedRecordTypes = new Set(['qbanks', 'sharedQuestions', 'questionProposals', 'sharedNotes', 'qbankMemberships']);
+      const records = backup.records.filter((record) => {
+        const qbankId = record.payload && typeof record.payload === 'object'
+          ? (record.payload as Record<string, unknown>).qbankId
+          : undefined;
+        return allowedRecordTypes.has(record.type ?? '') && typeof record.id === 'string' && record.payload && typeof record.payload === 'object' && (record.type === 'qbanks' || (typeof qbankId === 'string' && bankIds.has(qbankId)));
+      });
+      if (records.length !== backup.records.length) return json({ error: 'Backup contains data outside its private QBanks.' }, 403);
+      const now = new Date().toISOString();
+      for (let offset = 0; offset < records.length; offset += 400) {
+        await env.DB.batch(records.slice(offset, offset + 400).map((record) => {
+          const value = record.payload as Record<string, unknown>;
+          const qbankId = record.type === 'qbanks' ? record.id! : String(value.qbankId);
+          return env.DB.prepare('INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,owner_id=excluded.owner_id,payload=excluded.payload,updated_at=excluded.updated_at').bind(record.type!, record.id!, qbankId, user.uid, JSON.stringify(record.payload), record.updated_at || now);
+        }));
+      }
+      if (limits.canUseFlashcards && backup.flashcards) {
+        const stored = await env.DB.prepare('SELECT payload FROM app_states WHERE user_id=?').bind(user.uid).first<{ payload: string }>();
+        const app = stored ? JSON.parse(stored.payload) as Record<string, unknown> : { version: 1 };
+        const merged = { ...app, ...backup.flashcards };
+        await env.DB.prepare('INSERT INTO app_states(user_id,payload,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').bind(user.uid, JSON.stringify(merged), now).run();
+      }
+      await auditStatement(user, 'personal_backup_restored', user.uid, null, { records: records.length }).run();
+      return json({ ok: true, restored: records.length });
+    }
+    if (action === 'legal-links') {
+      const defaults = { termsUrl: '', privacyUrl: '' };
+      const record = await env.DB.prepare(
+        "SELECT payload FROM records WHERE type='system' AND id='legalLinks' LIMIT 1",
+      ).first<{ payload: string }>();
+      const current = record
+        ? { ...defaults, ...(JSON.parse(record.payload) as Partial<typeof defaults>) }
+        : defaults;
+      if (request.method === 'GET') return json(current);
+      if (request.method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
+      if (!root) return json({ error: 'Superadmin access required.' }, 403);
+      const validLink = (value: string) => {
+        if (!value) return true;
+        if (value.startsWith('/') && !value.startsWith('//')) return true;
+        try {
+          return new URL(value).protocol === 'https:';
+        } catch {
+          return false;
+        }
+      };
+      const next = {
+        termsUrl: text('termsUrl').slice(0, 1000),
+        privacyUrl: text('privacyUrl').slice(0, 1000),
+      };
+      if (!validLink(next.termsUrl) || !validLink(next.privacyUrl))
+        return json({ error: 'Use a secure HTTPS URL or an internal path beginning with /.' }, 400);
+      const now = new Date().toISOString();
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO records(type,id,owner_id,payload,updated_at) VALUES('system','legalLinks',?,?,?) ON CONFLICT(type,id) DO UPDATE SET owner_id=excluded.owner_id,payload=excluded.payload,updated_at=excluded.updated_at",
+        ).bind(user.uid, JSON.stringify(next), now),
+        auditStatement(user, 'legal_links_updated', 'legalLinks', current, next),
+      ]);
+      return json(next);
+    }
     if (action === 'plan-status' && request.method === 'GET') {
       const plan = user.effectivePlan ?? user.tier;
       const limits = getPlanLimits(plan);
@@ -628,6 +830,7 @@ export async function platformApi(request: Request, action: string) {
         );
       }
       for (const proposal of proposalsToFinalize) {
+        statements.push(env.DB.prepare('INSERT INTO review_completion_claims(proposal_id,reviewer_id,created_at) VALUES(?,?,?)').bind(proposal.id, user.uid, now));
         const existing = proposal.questionId ? existingQuestions.get(proposal.questionId) : undefined;
         const internalId = proposal.type === 'new_question' ? `shared-${crypto.randomUUID()}` : proposal.questionId!;
         const reviewedProposal: QuestionProposal = {
@@ -638,8 +841,6 @@ export async function platformApi(request: Request, action: string) {
           reviewedByName: user.displayName,
           reviewedAt: now,
         };
-        statements.push(env.DB.prepare("UPDATE records SET payload=?,updated_at=? WHERE type='questionProposals' AND id=? AND json_extract(payload,'$.status')='pending'")
-          .bind(JSON.stringify(reviewedProposal), now, proposal.id));
         statements.push(
           env.DB.prepare(
             'INSERT INTO contribution_reviews(id,proposal_id,author_id,reviewer_id,decision,high_risk,created_at,metadata) VALUES(?,?,?,?,?,?,?,?)',
@@ -654,6 +855,8 @@ export async function platformApi(request: Request, action: string) {
             '{}',
           ),
         );
+        statements.push(env.DB.prepare("UPDATE records SET payload=?,updated_at=? WHERE type='questionProposals' AND id=? AND json_extract(payload,'$.status')='pending'")
+          .bind(JSON.stringify(reviewedProposal), now, proposal.id));
         if (status === 'approved') {
           const number = existing?.number ?? (nextNumbers.set(proposal.qbankId, (nextNumbers.get(proposal.qbankId) ?? 0) + 1), nextNumbers.get(proposal.qbankId)!);
           const displayId = existing?.questionId ?? reservedByBank.get(proposal.qbankId)!.shift()!;

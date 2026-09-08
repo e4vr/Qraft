@@ -334,12 +334,3 @@ export function parseQuestionImportReport(
     repaired,
   };
 }
-
-export function parseQuestionImport(
-  parsed: unknown,
-): QuestionProposalPayload[] {
-  const report = parseQuestionImportReport(parsed);
-  if (!report.questions.length)
-    throw new Error('لم يتم العثور على أي سؤال مكتمل وصالح للاستيراد.');
-  return report.questions;
-}

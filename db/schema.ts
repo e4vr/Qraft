@@ -1,4 +1,5 @@
 import {
+  check,
   index,
   integer,
   primaryKey,
@@ -6,6 +7,7 @@ import {
   text,
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 
 export const profiles = sqliteTable(
   'profiles',
@@ -519,9 +521,23 @@ export const contributionReviews = sqliteTable(
     metadata: text('metadata').notNull().default('{}'),
   },
   (table) => [
+    uniqueIndex('idx_contribution_reviews_independent').on(table.proposalId, table.reviewerId),
+    index('idx_contribution_reviews_created_reviewer').on(table.createdAt, table.reviewerId),
     index('idx_contribution_reviews_reviewer_created').on(
       table.reviewerId,
       table.createdAt,
     ),
   ],
 );
+
+export const accountDeletions = sqliteTable('account_deletions', {
+  id: text('id').primaryKey(),
+  completedAt: text('completed_at').notNull(),
+  snapshotValid: integer('snapshot_valid').notNull(),
+}, table => [check('account_deletion_snapshot_valid', sql`${table.snapshotValid}=1`)]);
+
+export const reviewCompletionClaims = sqliteTable('review_completion_claims', {
+  proposalId: text('proposal_id').primaryKey(),
+  reviewerId: text('reviewer_id').notNull(),
+  createdAt: text('created_at').notNull(),
+});

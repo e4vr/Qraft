@@ -1,6 +1,7 @@
 import application from 'vinext/server/fetch-handler';
 import { connectRealtime } from './lib/realtime-server';
 import { createQuestionBackup } from './lib/question-backup';
+import { cleanDeletedAccountMedia } from './lib/account-deletion-server';
 
 const worker = {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext) {
@@ -9,7 +10,10 @@ const worker = {
       try { return await connectRealtime(request); }
       catch { return Response.json({ error: 'Live connection unavailable.' }, { status: 503 }); }
     }
-    return application.fetch(request, env, ctx);
+    const response = await application.fetch(request, env, ctx);
+    if (request.method === 'DELETE' && new URL(request.url).pathname === '/api/cloudflare/auth/account' && response.ok)
+      ctx.waitUntil(cleanDeletedAccountMedia());
+    return response;
   },
   scheduled(
     controller: ScheduledController,
@@ -17,6 +21,7 @@ const worker = {
     ctx: ExecutionContext,
   ) {
     ctx.waitUntil(createQuestionBackup(env, controller.scheduledTime));
+    ctx.waitUntil(cleanDeletedAccountMedia());
   },
 };
 export default worker;
