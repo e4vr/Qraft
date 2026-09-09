@@ -580,6 +580,7 @@ export function normalizeCollaborationState(
       phones: [
         ...new Set(
           (input.blockedAccess?.phones ?? base.blockedAccess.phones)
+            .filter((value): value is string => typeof value === 'string')
             .map((value) => value.replace(/\D/g, ''))
             .filter(Boolean),
         ),
@@ -590,6 +591,7 @@ export function normalizeCollaborationState(
             input.blockedAccess?.universityIds ??
             base.blockedAccess.universityIds
           )
+            .filter((value): value is string => typeof value === 'string')
             .map((value) => value.replace(/\s+/g, '').toUpperCase())
             .filter(Boolean),
         ),
@@ -597,6 +599,7 @@ export function normalizeCollaborationState(
       emails: [
         ...new Set(
           (input.blockedAccess?.emails ?? base.blockedAccess.emails)
+            .filter((value): value is string => typeof value === 'string')
             .map((value) => value.trim().toLowerCase())
             .filter(Boolean),
         ),
@@ -639,15 +642,15 @@ export function normalizeCollaborationState(
 }
 
 export function normalizePhone(value: string): string {
-  return value.replace(/\D/g, '');
+  return (value ?? '').replace(/\D/g, '');
 }
 
 export function normalizeUniversityId(value: string): string {
-  return value.replace(/\s+/g, '').toUpperCase();
+  return (value ?? '').replace(/\s+/g, '').toUpperCase();
 }
 
 export function normalizeEmail(value: string): string {
-  return value.trim().toLowerCase();
+  return (value ?? '').trim().toLowerCase();
 }
 
 type RoleSubject = Pick<AppUser | MemberProfile, 'role' | 'platformRoles'>;

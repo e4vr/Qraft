@@ -56,6 +56,13 @@ void test('the registration dashboard highlights IDs that need manual verificati
   assert.match(dashboard, /MANUALLY VERIFIED/);
 });
 
+void test('collaboration normalization ignores malformed blocked access values', async () => {
+  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  assert.match(types, /input\.blockedAccess\?\.phones[\s\S]*filter\(\(value\): value is string => typeof value === 'string'\)/);
+  assert.match(types, /input\.blockedAccess\?\.universityIds[\s\S]*filter\(\(value\): value is string => typeof value === 'string'\)/);
+  assert.match(types, /input\.blockedAccess\?\.emails[\s\S]*filter\(\(value\): value is string => typeof value === 'string'\)/);
+});
+
 void test('platform roles are managed independently from subscriptions', async () => {
   const app = await readFile(
     new URL('components/medguard-app.tsx', root),
