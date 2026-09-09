@@ -387,7 +387,7 @@ export function QBankWorkspace({
         )}
       </div>
       {creating && (
-        <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm">
+        <div className="q-safe-overlay fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm">
           <form onSubmit={createBank} className="my-8 w-full max-w-xl rounded-2xl bg-card p-6 shadow-2xl ring-1 ring-border">
             <div className="flex items-center justify-between">
               <div>

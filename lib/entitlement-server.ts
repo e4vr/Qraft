@@ -8,13 +8,14 @@ export type EffectiveEntitlement = {
   subscriptionPlan: PlanId | null;
   rewardPlan: PlanId | null;
   adminPlan: PlanId | null;
+  adminOverridePlan: PlanId | null;
 };
 
 export async function getEffectiveEntitlement(
   profile: Pick<MemberProfile, 'uid' | 'tier'>,
   now = new Date().toISOString(),
 ): Promise<EffectiveEntitlement> {
-  const [subscription, reward, admin] = await env.DB.batch([
+  const [subscription, reward, admin, override] = await env.DB.batch([
     env.DB.prepare(
       "SELECT plan,expires_at FROM subscriptions WHERE user_id=? AND status IN ('active','manually_activated') AND (expires_at IS NULL OR expires_at>?) LIMIT 1",
     ).bind(profile.uid, now),
@@ -24,7 +25,11 @@ export async function getEffectiveEntitlement(
     env.DB.prepare(
       "SELECT plan,expires_at FROM admin_plan_entitlements WHERE user_id=? AND active=1 AND (expires_at IS NULL OR expires_at>?) ORDER BY CASE plan WHEN 'unlimited' THEN 3 WHEN 'pro' THEN 2 WHEN 'lite' THEN 1 ELSE 0 END DESC LIMIT 1",
     ).bind(profile.uid, now),
+    env.DB.prepare(
+      'SELECT plan,expires_at FROM account_plan_overrides WHERE user_id=? AND (expires_at IS NULL OR expires_at>?)',
+    ).bind(profile.uid, now),
   ]);
+  const overrideRow = override.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
   const subscriptionRow = subscription.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
   const rewardRow = reward.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
   const adminRow = admin.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
@@ -34,7 +39,8 @@ export async function getEffectiveEntitlement(
   const rewardPlan = isPlanId(rewardRow?.plan) ? rewardRow.plan : null;
   const adminPlan = isPlanId(adminRow?.plan) ? adminRow.plan : null;
   const basePlan = isPlanId(profile.tier) ? profile.tier : 'free';
-  const effectivePlan = highestPlan(
+  const adminOverridePlan = isPlanId(overrideRow?.plan) ? overrideRow.plan : null;
+  const effectivePlan = adminOverridePlan ?? highestPlan(
     basePlan,
     subscriptionPlan,
     rewardPlan,
@@ -47,12 +53,13 @@ export async function getEffectiveEntitlement(
   ].filter((value): value is string => Boolean(value));
   return {
     effectivePlan,
-    effectivePlanExpiresAt: matchingExpirations.length
+    effectivePlanExpiresAt: adminOverridePlan !== null ? overrideRow?.expires_at ?? null : matchingExpirations.length
       ? matchingExpirations.sort().at(-1) ?? null
       : null,
     subscriptionPlan,
     rewardPlan,
     adminPlan,
+    adminOverridePlan,
   };
 }
 

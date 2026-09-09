@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowLeft, ArrowRight, BookOpen, ChevronDown, Clock3, Command, Database, Download, Fingerprint, Inbox, LogOut, Megaphone, Menu, MessageSquareText, Save, Search, ShieldCheck, Upload, UserCheck, UserRoundX } from 'lucide-react';
+import { Activity, BarChart3, CreditCard, FileText, LayoutDashboard, Coins, Ticket, Users, ArrowLeft, ArrowRight, BookOpen, ChevronDown, Clock3, Command, Database, Download, Fingerprint, Inbox, LogOut, Megaphone, Menu, MessageSquareText, Save, Search, ShieldCheck, Upload, UserCheck, UserRoundX } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { administrativeRoleLabels, canReviewBank, hasAccessManagerRole, hasModeratorRole, hasReviewerRole, isPlatformRole, normalizeEmail, normalizePhone, normalizeUniversityId, type AccessBlocklist, type AccountStatus, type AppUser, type AuditEntry, type CollaborationState, type MemberProfile, type PlatformRole } from '@/lib/medguard-types';
@@ -12,6 +12,7 @@ import { ContactWorkspace } from '@/components/contact-workspace';
 import { QuestionPreview } from '@/components/question-tools';
 import { ReviewWorkspace } from '@/components/review-workspace';
 import { api } from '@/lib/api-client';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 
 type Tab = 'reviewer-performance' | 'discounts' | 'subscriptions' | 'economy' | 'contact' | 'question-preview' | 'overview' | 'registrations' | 'blocked' | 'roles' | 'qbanks' | 'proposals' | 'student-ids' | 'announcement' | 'backups' | 'legal' | 'audit';
 const adminGroups: Array<{ label: string; ids: Tab[] }> = [
@@ -22,6 +23,25 @@ const adminGroups: Array<{ label: string; ids: Tab[] }> = [
   { label: 'QBANK', ids: ['qbanks', 'question-preview'] },
   { label: 'SYSTEM', ids: ['announcement', 'backups', 'legal', 'audit'] },
 ];
+const adminSections: Record<Tab, { icon: typeof ShieldCheck; description: string }> = {
+  overview: { icon: LayoutDashboard, description: 'Your platform at a glance. Prioritize the work that matters today.' },
+  'reviewer-performance': { icon: BarChart3, description: 'Track review quality, contribution and team performance.' },
+  registrations: { icon: Users, description: 'Review applications, verify identities and manage account access.' },
+  blocked: { icon: UserRoundX, description: 'Manage suspended accounts and the access blocklist.' },
+  roles: { icon: ShieldCheck, description: 'Review role requests and manage administrative permissions.' },
+  'student-ids': { icon: Fingerprint, description: 'Maintain the student registry and verify eligibility.' },
+  subscriptions: { icon: CreditCard, description: 'Manage plans, activations and subscription access.' },
+  discounts: { icon: Ticket, description: 'Create and manage promotional codes.' },
+  economy: { icon: Coins, description: 'Manage platform credits, rewards and incentives.' },
+  contact: { icon: MessageSquareText, description: 'Respond to support requests and follow up with members.' },
+  qbanks: { icon: BookOpen, description: 'Inspect the question banks available across your platform.' },
+  proposals: { icon: Inbox, description: 'Review proposed questions and changes before publication.' },
+  'question-preview': { icon: Search, description: 'Find and inspect questions in the learner experience.' },
+  announcement: { icon: Megaphone, description: 'Manage the announcement shown across the learner workspace.' },
+  backups: { icon: Database, description: 'Export platform data and manage recovery operations.' },
+  legal: { icon: FileText, description: 'Maintain the terms of use and privacy links.' },
+  audit: { icon: Activity, description: 'Inspect administrative events and trace changes over time.' },
+};
 type BlockKind = keyof AccessBlocklist;
 function formatDate(value?: string) {
   return value
@@ -277,11 +297,14 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
     ],
   );
   const [tab, setTab] = useState<Tab>('overview');
+  const adminContentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { adminContentRef.current?.scrollTo({ top: 0 }); }, [tab]);
   const [dashboardNow] = useState(() => Date.now());
   const [qbankScope, setQbankScope] = useState('all');
   const [adminSearchOpen, setAdminSearchOpen] = useState(false);
   const [adminSearch, setAdminSearch] = useState('');
   const adminSearchRef = useRef<HTMLInputElement>(null);
+  const adminSearchTriggerRef = useRef<HTMLButtonElement>(null);
   const [memberSearch, setMemberSearch] = useState('');
   const [memberStatus, setMemberStatus] = useState('all');
   const [memberPage, setMemberPage] = useState(0);
@@ -501,9 +524,6 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isSuperadminWorkspace]);
 
-  useEffect(() => {
-    if (adminSearchOpen) window.setTimeout(() => adminSearchRef.current?.focus(), 0);
-  }, [adminSearchOpen]);
 
   function reviewMember(uid: string, status: AccountStatus) {
     const reviewedAt = nowIso();
@@ -684,104 +704,70 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
   }
 
   return (
-    <>
-      <header className="workspace-header">
+    <div className={isSuperadminWorkspace ? 'q-admin-layout' : 'q-access-layout'}>
+      <header className="q-admin-toolbar">
         <div className="flex min-w-0 items-center gap-3">
-          {isSuperadminWorkspace ? (
-            <Link aria-label="Back to Qraft" href="/" className="grid size-10 shrink-0 place-items-center rounded-xl border transition hover:bg-muted">
-              <ArrowLeft className="size-5" />
-            </Link>
-          ) : (
-            <button aria-label="Open navigation" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))} className="grid size-10 shrink-0 place-items-center rounded-xl border lg:hidden">
-              <Menu className="size-5" />
-            </button>
-          )}
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="size-5 text-primary" />
-              <h1 className="truncate text-lg font-bold tracking-tight">{isSuperadminWorkspace ? 'Admin Dashboard' : 'Access administration'}</h1>
+          {isSuperadminWorkspace ? <Link aria-label="Back to Qraft" href="/" className="q-admin-icon-button"><ArrowLeft className="size-4" /></Link> : <button aria-label="Open navigation" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))} className="q-admin-icon-button lg:hidden"><Menu className="size-5" /></button>}
+          <span className="text-sm font-semibold">{isSuperadminWorkspace ? 'Administration' : 'Access administration'}</span>
+          <span className="q-admin-toolbar-divider">/</span>
+          <span className="q-admin-toolbar-section">{tabs.find(([id]) => id === tab)?.[1]}</span>
+        </div>
+        {isSuperadminWorkspace && <div className="q-admin-toolbar-actions">
+          <button ref={adminSearchTriggerRef} aria-label="Search administration" onClick={() => setAdminSearchOpen(true)} className="q-admin-search-trigger"><Search className="size-4" /><span>Search anything</span><kbd>⌘ K</kbd></button>
+          <details className="q-admin-quick-actions group relative">
+            <summary className="q-button q-button-primary cursor-pointer list-none [&::-webkit-details-marker]:hidden">Quick actions <ChevronDown className="size-4" /></summary>
+            <div className="absolute right-0 top-[calc(100%+8px)] z-50 w-64 rounded-xl border bg-card p-2 shadow-xl">
+              {([['question-preview', 'Preview question'], ['subscriptions', 'Activate subscription'], ['discounts', 'Create discount code'], ['registrations', 'Review registrations']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} onClick={(event) => { setTab(id); event.currentTarget.closest('details')?.removeAttribute('open'); }} className="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-left text-sm hover:bg-muted"><span>{label}</span><ArrowRight className="size-4" /></button>)}
             </div>
-            <p className="mt-1 text-sm leading-5 text-muted-foreground">{isSuperadminWorkspace ? 'Here’s what needs your attention.' : 'Manage registrations, account access and participant roles'}</p>
-          </div>
-        </div>
-        <div className="workspace-header-actions">
-          {isSuperadminWorkspace && (
-            <>
-              <label className="relative min-w-[190px]">
-                <span className="sr-only">QBank scope</span>
-                <select value={qbankScope} onChange={(event) => setQbankScope(event.target.value)} className="min-h-11 w-full appearance-none rounded-xl border bg-card py-2 pl-3 pr-9 text-sm font-semibold">
-                  <option value="all">All QBanks</option>
-                  {collaboration.qbanks.filter((bank) => !bank.archived).map((bank) => <option key={bank.id} value={bank.id}>{bank.name}</option>)}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-3.5 size-4 text-muted-foreground" />
-              </label>
-              <button onClick={() => setAdminSearchOpen(true)} className="q-button q-button-secondary min-w-[190px] justify-between text-muted-foreground">
-                <span className="inline-flex items-center gap-2"><Search className="size-4" />Search admin</span>
-                <kbd className="rounded border bg-muted px-1.5 py-0.5 text-[10px]">⌘K</kbd>
-              </button>
-              <details className="group relative">
-                <summary className="q-button q-button-primary cursor-pointer list-none [&::-webkit-details-marker]:hidden">Quick actions <ChevronDown className="size-4 transition group-open:rotate-180" /></summary>
-                <div className="absolute right-0 top-[calc(100%+8px)] z-50 w-64 overflow-hidden rounded-xl border bg-card p-2 shadow-xl">
-                  {([['question-preview', 'Preview question'], ['subscriptions', 'Activate subscription'], ['discounts', 'Create discount code'], ['registrations', 'Review registrations']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} onClick={() => setTab(id)} className="flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-left text-sm font-semibold hover:bg-muted"><span>{label}</span><ArrowRight className="size-4 text-muted-foreground" /></button>)}
-                </div>
-              </details>
-            </>
-          )}
-          <span className="inline-flex min-h-10 items-center rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{`${administrativeRoleLabels(user).join(' · ').toUpperCase()}${isRoot ? ' · MFA' : ''}`}</span>
-          {isSuperadminWorkspace && onSignOut && (
-            <button onClick={onSignOut} className="q-button q-button-secondary">
-              <LogOut className="size-4" />
-              Sign out
-            </button>
-          )}
-        </div>
+          </details>
+        </div>}
       </header>
-      {isSuperadminWorkspace && adminSearchOpen && (
-        <div className="fixed inset-0 z-[80] flex items-start justify-center p-4 pt-[max(10vh,env(safe-area-inset-top))]">
-          <button aria-label="Close admin search" onClick={() => setAdminSearchOpen(false)} className="absolute inset-0 size-full bg-slate-950/40 backdrop-blur-sm" />
-          <dialog open aria-label="Search administration" className="relative m-0 w-full max-w-2xl overflow-hidden rounded-2xl border bg-card p-0 text-foreground shadow-2xl">
-            <label className="flex items-center gap-3 border-b px-4">
+      {isSuperadminWorkspace && (
+        <Dialog open={adminSearchOpen} onOpenChange={setAdminSearchOpen}>
+          <DialogContent initialFocus={adminSearchRef} finalFocus={adminSearchTriggerRef} showCloseButton={false} className="gap-0 overflow-hidden rounded-2xl border bg-card p-0 text-foreground shadow-2xl sm:max-w-2xl">
+            <DialogTitle className="sr-only">Search administration</DialogTitle>
+            <div className="flex items-center gap-3 border-b px-4">
               <Search className="size-5 text-muted-foreground" />
-              <input ref={adminSearchRef} value={adminSearch} onChange={(event) => setAdminSearch(event.target.value)} placeholder="Question ID, student ID, email, username or QBank…" className="h-14 min-w-0 flex-1 bg-transparent text-base outline-none" />
+              <input aria-label="Search members, QBanks and questions" ref={adminSearchRef} value={adminSearch} onChange={(event) => setAdminSearch(event.target.value)} placeholder="Question ID, student ID, email, username or QBank…" className="h-14 min-w-0 flex-1 bg-transparent text-base outline-none" />
               <button aria-label="Close search" onClick={() => setAdminSearchOpen(false)} className="rounded-lg border px-2 py-1 text-xs text-muted-foreground">ESC</button>
-            </label>
+            </div>
             <div className="max-h-[55dvh] overflow-y-auto p-2">
               {searchResults.map((result) => <button key={result.id} onClick={() => { setTab(result.destination); if (result.destination === 'registrations') { setMemberSearch(result.filter); setMemberStatus('all'); setMemberPage(0); } setAdminSearchOpen(false); }} className="flex min-h-14 w-full items-center gap-3 rounded-xl px-3 text-left hover:bg-muted"><Command className="size-4 shrink-0 text-primary" /><span className="min-w-0 flex-1"><strong className="block truncate text-sm">{result.label}</strong><span className="mt-0.5 block truncate text-xs text-muted-foreground">{result.detail}</span></span><ArrowRight className="size-4 shrink-0 text-muted-foreground" /></button>)}
               {adminSearch.trim() && !searchResults.length && <p className="p-8 text-center text-sm text-muted-foreground">No matching members, QBanks or questions.</p>}
               {!adminSearch.trim() && <div className="grid gap-2 p-2 sm:grid-cols-2">{([['contact', 'Contact tickets'], ['subscriptions', 'Subscriptions'], ['roles', 'Roles & permissions'], ['audit', 'Audit log']] as Array<[Tab, string]>).map(([id, label]) => <button key={id} onClick={() => { setTab(id); setAdminSearchOpen(false); }} className="flex min-h-11 items-center justify-between rounded-xl border px-3 text-sm font-semibold hover:bg-muted"><span>{label}</span><ArrowRight className="size-4 text-muted-foreground" /></button>)}</div>}
             </div>
-          </dialog>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
-      <div className="mx-auto grid max-w-[1440px] items-start gap-5 p-4 sm:p-7 xl:grid-cols-[190px_minmax(0,1fr)]">
-        <nav aria-label="Administration sections" className="min-w-0 rounded-2xl border bg-card p-3 shadow-sm xl:sticky xl:top-5">
-          {isSuperadminWorkspace && <div className="mb-4 hidden border-b px-2 pb-4 xl:block"><div className="flex items-center gap-2 text-primary"><ShieldCheck className="size-5" /><strong className="text-sm">Admin Control Center</strong></div><p className="mt-1 text-[11px] leading-5 text-muted-foreground">Independent system administration</p></div>}
-          <label className="block text-xs font-semibold text-muted-foreground xl:hidden">
-            Administration section
-            <select value={tab} onChange={e => setTab(e.target.value as Tab)} className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3 text-base text-foreground">
-              {adminGroups.map(group => {
-                const available = tabs.filter(([id]) => group.ids.includes(id));
-                return available.length ? <optgroup key={group.label} label={group.label}>{available.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</optgroup> : null;
-              })}
+      <div className="q-admin-body">
+        <nav aria-label="Administration sections" className="q-admin-navigation">
+          <div className="q-admin-brand"><span><ShieldCheck className="size-6" /></span><div><strong>Qraft<span>admin</span></strong><p>Platform management</p></div></div>
+          <label className="q-admin-mobile-section"><span>Workspace</span>
+            <select aria-label="Administration section" value={tab} onChange={e => setTab(e.target.value as Tab)}>
+              {adminGroups.map(group => { const available = tabs.filter(([id]) => group.ids.includes(id)); return available.length ? <optgroup key={group.label} label={group.label}>{available.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</optgroup> : null; })}
             </select>
           </label>
-          <div className="hidden space-y-5 xl:block">
+          <div className="q-admin-nav-groups">
             {adminGroups.map(group => {
               const available = tabs.filter(([id]) => group.ids.includes(id));
-              return available.length ? <div key={group.label}>
-                <p className="mb-2 px-2 text-[10px] font-bold tracking-wider text-muted-foreground">{group.label}</p>
+              return available.length ? <div key={group.label} className="q-admin-nav-group"><p>{group.label}</p>
                 {available.map(([id, label]) => {
                   const count = id === 'registrations' ? pendingMembers.length : id === 'roles' ? roleRequests.length : id === 'proposals' ? reviewable.length : 0;
-                  return <button key={id} aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)} className={cx('flex min-h-11 w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-start text-sm font-semibold transition-colors', tab === id ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}>
-                    <span>{label}</span>{count > 0 && <span className="rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-foreground">{count}</span>}
-                  </button>;
+                  const Icon = adminSections[id].icon;
+                  return <button key={id} aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)}><Icon className="size-[18px] shrink-0" /><span>{label}</span>{count > 0 && <small>{count}</small>}</button>;
                 })}
               </div> : null;
             })}
           </div>
+          <div className="q-admin-identity"><span className="q-admin-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><strong>{user.displayName}</strong><span>{isRoot ? 'Super administrator · MFA' : administrativeRoleLabels(user).join(' · ')}</span></div>{isSuperadminWorkspace && onSignOut && <button aria-label="Sign out" title="Sign out" onClick={onSignOut}><LogOut className="size-4" /></button>}</div>
         </nav>
-        <div className="min-w-0 space-y-5">
-        {isRoot && (tab === 'discounts' || tab === 'subscriptions') && <SubscriptionAdmin section={tab} />}
+        <div ref={adminContentRef} className="q-admin-content" id="admin-workspace" tabIndex={-1}>
+          <div className="q-admin-page-heading">
+            <div><p className="q-admin-eyebrow">{adminGroups.find(group => group.ids.includes(tab))?.label}</p><h1>{tab === 'overview' ? 'Workspace overview' : tabs.find(([id]) => id === tab)?.[1]}</h1><p>{adminSections[tab].description}</p></div>
+            {isSuperadminWorkspace && (tab === 'overview' || tab === 'proposals') && <label className="q-admin-scope"><span>Content scope</span><select aria-label="QBank scope" value={qbankScope} onChange={event => setQbankScope(event.target.value)}><option value="all">All QBanks</option>{collaboration.qbanks.filter(bank => !bank.archived).map(bank => <option key={bank.id} value={bank.id}>{bank.name}</option>)}</select></label>}
+          </div>
+          <div className="q-admin-panels">
+        {isRoot && (tab === 'discounts' || tab === 'subscriptions') && <SubscriptionAdmin key={tab} section={tab} />}
         {isRoot && tab === 'economy' && <EconomyAdmin members={collaboration.members} />}
         {isRoot && tab === 'contact' && <ContactWorkspace admin />}
         {isRoot && tab === 'question-preview' && <QuestionPreview />}
@@ -789,59 +775,24 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
         {isRoot && tab === 'backups' && <BackupAdmin />}
         {isRoot && tab === 'legal' && <LegalLinksAdmin />}
         {tab === 'overview' && (
-          <div className="space-y-6">
-            <section aria-labelledby="attention-heading">
-              <div className="mb-4 flex items-end justify-between gap-3">
-                <div><p className="text-xs font-bold uppercase tracking-wider text-primary">Priority workspace</p><h2 id="attention-heading" className="mt-1 text-2xl font-bold tracking-tight">Needs attention</h2></div>
-                <span className="text-xs text-muted-foreground">Oldest items first</span>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
-                {([
-                  { id: 'proposals', label: 'Reviews awaiting action', value: reviewable.length, oldest: oldestReview, detail: reviewable.length ? 'Question changes ready for review' : 'No reviews waiting 🎉', icon: Clock3, cta: 'Review now' },
-                  { id: 'contact', label: 'Open contact tickets', value: null, oldest: undefined, detail: 'Open the ticket inbox', icon: MessageSquareText, cta: 'Open inbox' },
-                  { id: 'registrations', label: 'Pending registrations', value: pendingMembers.length, oldest: oldestRegistration, detail: pendingMembers.length ? `${pendingManualIdChecks.length} IDs need manual verification` : 'No registrations waiting 🎉', icon: UserCheck, cta: 'Review now' },
-                  { id: 'roles', label: 'Role/access requests', value: roleRequests.length, oldest: oldestRoleRequest, detail: roleRequests.length ? 'Permissions awaiting a decision' : 'No role requests waiting 🎉', icon: ShieldCheck, cta: 'Review now' },
-                ] as Array<{ id: Tab; label: string; value: number | null; oldest?: string; detail: string; icon: typeof Clock3; cta: string }>).filter(item => tabs.some(([id]) => id === item.id)).map(item => (
-                  <button key={item.id} onClick={() => { setTab(item.id); if (item.id === 'registrations') { setMemberStatus('pending'); setMemberSearch(''); setMemberPage(0); } }} className={cx('group min-w-0 rounded-2xl border bg-card p-5 text-start shadow-sm transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md', item.value === 0 && 'bg-card/55 opacity-70 shadow-none')}>
-                    <div className="flex items-center justify-between gap-3"><span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><item.icon className="size-5" /></span><ArrowRight className="size-4 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" /></div>
-                    <strong className="mt-5 block text-4xl font-bold tracking-tight tabular-nums">{item.value ?? '—'}</strong>
-                    <p className="mt-1 font-bold">{item.label}</p>
-                    {item.oldest && <p className="mt-2 text-xs font-semibold text-amber-700 dark:text-amber-300">Oldest: {relativeAge(item.oldest, dashboardNow)}</p>}
-                    <p className="mt-2 text-xs leading-5 text-muted-foreground">{item.detail}</p>
-                    <span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-primary">{item.cta} <ArrowRight className="size-3.5" /></span>
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            <section className="overflow-hidden rounded-2xl border bg-card">
-              <div className="flex items-center justify-between gap-3 border-b px-5 py-4"><div><h2 className="font-bold">Action queue</h2><p className="mt-1 text-xs text-muted-foreground">The oldest available operational work across the system.</p></div><Inbox className="size-5 text-primary" /></div>
-              {attentionQueue.filter(item => tabs.some(([id]) => id === item.destination)).length ? (
-                <div className="divide-y">
-                  {attentionQueue.filter(item => tabs.some(([id]) => id === item.destination)).map(item => <button key={`${item.type}:${item.id}`} onClick={() => { setTab(item.destination); if (item.destination === 'registrations') { setMemberSearch(item.item); setMemberStatus('pending'); setMemberPage(0); } if (item.destination === 'roles') setRoleSearch(item.item); }} className="grid min-h-16 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-5 py-3 text-left hover:bg-muted/35 sm:grid-cols-[120px_minmax(0,1.4fr)_minmax(120px,0.8fr)_70px_auto]"><span className="text-xs font-bold text-primary">{item.type}</span><span className="min-w-0 truncate text-sm font-semibold">{item.item}</span><span className="col-start-1 truncate text-xs text-muted-foreground sm:col-auto">{item.context}</span><time className="text-xs font-semibold text-muted-foreground">{relativeAge(item.createdAt, dashboardNow)}</time><span className="col-start-2 row-start-1 row-end-3 inline-flex items-center justify-end gap-1 text-xs font-bold text-primary sm:col-auto sm:row-auto">Open <ArrowRight className="size-3.5" /></span></button>)}
-                </div>
-              ) : <p className="p-8 text-center text-sm text-muted-foreground">Nothing needs attention right now 🎉</p>}
-            </section>
-
-            {isSuperadminWorkspace && <div className="grid gap-5 2xl:grid-cols-[1.3fr_0.7fr]">
-              <section className="rounded-2xl border bg-card p-5">
-                <div className="flex items-center justify-between"><div><h2 className="font-bold">QBank Health</h2><p className="mt-1 text-xs text-muted-foreground">Current scope, using already-loaded content.</p></div><BookOpen className="size-5 text-primary" /></div>
-                <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
-                  {([{ label: 'Published questions', value: qbankHealth.published, destination: 'qbanks' }, { label: 'Awaiting review', value: qbankHealth.awaiting, destination: 'proposals' }, { label: 'Added this week', value: qbankHealth.addedThisWeek, destination: 'qbanks' }, { label: 'Visible QBanks', value: qbankHealth.visibleBanks, destination: 'qbanks' }] as Array<{ label: string; value: number; destination: Tab }>).map(metric => <button key={metric.label} onClick={() => setTab(metric.destination)} className="text-left"><strong className="block text-2xl tabular-nums">{metric.value.toLocaleString()}</strong><span className="mt-1 block text-xs text-muted-foreground">{metric.label}</span></button>)}
-                </div>
-              </section>
-              <section className="rounded-2xl border bg-card p-5">
-                <h2 className="font-bold">Subscription snapshot</h2><p className="mt-1 text-xs text-muted-foreground">Approved, active accounts.</p>
-                <div className="mt-5 grid grid-cols-3 gap-3">{([{ label: 'Lite', value: subscriptionSnapshot.lite }, { label: 'Pro', value: subscriptionSnapshot.pro }, { label: 'Unlimited', value: subscriptionSnapshot.unlimited }] as const).map(item => <button key={item.label} onClick={() => setTab('subscriptions')} className="rounded-xl bg-muted/50 p-3 text-center hover:bg-primary/10"><strong className="block text-xl tabular-nums">{item.value}</strong><span className="mt-1 block text-[11px] text-muted-foreground">{item.label}</span></button>)}</div>
-              </section>
-            </div>}
-
-            {isRoot && <section className="rounded-2xl border bg-card p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold">Recent activity</h2><p className="mt-1 text-xs text-muted-foreground">The latest useful system events.</p></div><button className="inline-flex items-center gap-1 text-xs font-bold text-primary" onClick={() => { setAuditSearch(''); setAuditPage(0); setTab('audit'); }}>View audit log <ArrowRight className="size-3.5" /></button></div>
-              {auditEntries.slice(0, 5).map(item => <div key={item.id} className="mt-4 flex items-start justify-between gap-4 border-t pt-4"><p className="min-w-0 break-words text-sm">{activityLabel(item)}</p><time className="shrink-0 text-xs font-semibold text-muted-foreground">{relativeAge(item.createdAt, dashboardNow)}</time></div>)}
-              {!auditBusy && !auditEntries.length && <p className="mt-4 text-sm text-muted-foreground">No activity recorded this week.</p>}
-              {auditBusy && <p className="mt-4 animate-pulse text-sm text-muted-foreground">Loading this week’s activity…</p>}
+          <div className="q-admin-overview">
+            {isSuperadminWorkspace && <section aria-label="Platform summary" className="q-admin-metrics">
+              {([{ label: 'Active members', value: subscriptionSnapshot.lite + subscriptionSnapshot.pro + subscriptionSnapshot.unlimited, detail: 'Approved accounts', icon: Users, destination: 'registrations' }, { label: 'Published questions', value: qbankHealth.published, detail: `${qbankHealth.addedThisWeek} added in the last 7 days`, icon: BookOpen, destination: 'qbanks' }, { label: 'Visible QBanks', value: qbankHealth.visibleBanks, detail: 'Within the selected scope', icon: Database, destination: 'qbanks' }, { label: 'Pending reviews', value: qbankHealth.awaiting, detail: 'Awaiting a review decision', icon: Inbox, destination: 'proposals' }] as const).map(item => <button key={item.label} onClick={() => setTab(item.destination)}><div><span>{item.label}</span><item.icon className="size-[18px]" /></div><strong>{item.value.toLocaleString()}</strong><p>{item.detail}</p></button>)}
             </section>}
+            <section className="q-admin-priorities" aria-labelledby="attention-heading">
+              <div className="q-admin-section-heading"><div><h2 id="attention-heading">Needs your attention</h2><p>A clear starting point for your next action.</p></div><span className="q-admin-chip">{pendingMembers.length + roleRequests.length + reviewable.length} pending</span></div>
+              <div className="q-admin-priority-grid">
+                {([{ id: 'proposals', label: 'Question reviews', value: reviewable.length, oldest: oldestReview, detail: 'Review submitted changes', icon: Clock3 }, { id: 'registrations', label: 'Registrations', value: pendingMembers.length, oldest: oldestRegistration, detail: `${pendingManualIdChecks.length} IDs need verification`, icon: UserCheck }, { id: 'roles', label: 'Access requests', value: roleRequests.length, oldest: oldestRoleRequest, detail: 'Review permission requests', icon: ShieldCheck }, { id: 'contact', label: 'Support inbox', value: null, oldest: undefined, detail: 'Read and respond to tickets', icon: MessageSquareText }] as Array<{ id: Tab; label: string; value: number | null; oldest?: string; detail: string; icon: typeof Clock3 }>).filter(item => tabs.some(([id]) => id === item.id)).map(item => <button key={item.id} onClick={() => { setTab(item.id); if (item.id === 'registrations') { setMemberStatus('pending'); setMemberSearch(''); setMemberPage(0); } }} className="q-admin-priority" data-pending={Boolean(item.value)}><span className="q-admin-priority-icon"><item.icon className="size-5" /></span><div><h3>{item.label}</h3><p>{item.value === 0 ? 'All caught up' : item.detail}</p>{item.oldest && <small>Oldest request · {relativeAge(item.oldest, dashboardNow)}</small>}</div><strong>{item.value ?? <ArrowRight className="size-5" />}</strong></button>)}
+              </div>
+            </section>
+            <div className="q-admin-overview-columns">
+              <section className="q-admin-panel q-admin-queue">
+                <div className="q-admin-section-heading"><div><h2>Action queue</h2><p>Oldest requests first</p></div><Inbox className="size-5 text-muted-foreground" /></div>
+                {attentionQueue.filter(item => tabs.some(([id]) => id === item.destination)).length ? <div className="q-admin-queue-list">{attentionQueue.filter(item => tabs.some(([id]) => id === item.destination)).map(item => <button key={`${item.type}:${item.id}`} onClick={() => { setTab(item.destination); if (item.destination === 'registrations') { setMemberSearch(item.item); setMemberStatus('pending'); setMemberPage(0); } if (item.destination === 'roles') setRoleSearch(item.item); }}><span className="q-admin-queue-icon">{item.type === 'Registration' ? <UserCheck className="size-4" /> : <Inbox className="size-4" />}</span><span><small>{item.type}</small><strong>{item.item}</strong><p>{item.context}</p></span><time>{relativeAge(item.createdAt, dashboardNow)}</time><ArrowRight className="size-4 text-muted-foreground" /></button>)}</div> : <div className="q-admin-empty"><span><ShieldCheck className="size-7" /></span><h3>You’re all caught up</h3><p>New registrations, reviews and access requests will appear here.</p></div>}
+              </section>
+              {isSuperadminWorkspace && <section className="q-admin-panel q-admin-plans"><div className="q-admin-section-heading"><div><h2>Memberships</h2><p>Active accounts by plan</p></div><CreditCard className="size-5 text-muted-foreground" /></div><div className="q-admin-plan-list">{([{ label: 'Lite', value: subscriptionSnapshot.lite }, { label: 'Pro', value: subscriptionSnapshot.pro }, { label: 'Unlimited', value: subscriptionSnapshot.unlimited }] as const).map(item => <button key={item.label} onClick={() => setTab('subscriptions')}><div><span>{item.label}</span><strong>{item.value.toLocaleString()}</strong></div><progress aria-label={`${item.label} active accounts`} value={item.value} max={Math.max(1, subscriptionSnapshot.lite + subscriptionSnapshot.pro + subscriptionSnapshot.unlimited)} /></button>)}</div><button className="q-admin-text-action" onClick={() => setTab('subscriptions')}>Manage subscriptions <ArrowRight className="size-4" /></button></section>}
+            </div>
+            {isRoot && <section className="q-admin-panel q-admin-activity"><div className="q-admin-section-heading"><div><h2>Recent activity</h2><p>Administrative events from this week</p></div><button className="q-admin-text-action" onClick={() => { setAuditSearch(''); setAuditPage(0); setTab('audit'); }}>View audit log <ArrowRight className="size-4" /></button></div>{auditEntries.slice(0, 5).map(item => <div key={item.id} className="q-admin-activity-row"><span><Activity className="size-4" /></span><p>{activityLabel(item)}</p><time>{relativeAge(item.createdAt, dashboardNow)}</time></div>)}{!auditBusy && !auditEntries.length && <p className="q-admin-quiet-message">No activity recorded this week.</p>}{auditBusy && <output className="q-admin-quiet-message">Loading recent activity…</output>}</section>}
           </div>
         )}
         {tab === 'registrations' && (
@@ -857,7 +808,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
             </div>
             {filteredMembers.length ? (
               <div className="overflow-x-auto">
-                <table className={cx('w-full text-left text-sm', isRoot ? 'min-w-[1120px]' : 'min-w-[680px]')}>
+                <table className={cx('q-admin-members-table w-full text-left text-sm', isRoot ? 'min-w-[1120px]' : 'min-w-[680px]')}>
                   <thead className="border-b bg-muted/30 text-xs font-bold uppercase tracking-wide text-muted-foreground">
                     <tr>
                       <th className="px-5 py-3">Registrant</th>
@@ -874,19 +825,19 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
                   <tbody className="divide-y divide-border/70">
                     {filteredMembers.slice(membersPage * 20, membersPage * 20 + 20).map((member) => (
                       <tr key={member.uid} className="align-top transition hover:bg-muted/20">
-                        <td className="px-5 py-4">
+                        <td data-label="Registrant" className="px-5 py-4">
                           <strong className="block whitespace-nowrap text-sm">{member.displayName}</strong>
                           {isRoot && <span className="mt-1 block max-w-[150px] truncate font-mono text-xs text-muted-foreground" title={member.uid}>
                             {member.uid}
                           </span>}
                         </td>
-                        <td className="px-5 py-4">
+                        <td data-label="Email" className="px-5 py-4">
                           <span className="block max-w-[220px] truncate" title={member.email}>
                             {member.email}
                           </span>
                         </td>
-                        {isRoot && <td className="px-5 py-4 font-mono text-xs">{member.phone || '—'}</td>}
-                        <td className="px-5 py-4">
+                        {isRoot && <td data-label="Mobile" className="px-5 py-4 font-mono text-xs">{member.phone || '—'}</td>}
+                        <td data-label="University ID" className="px-5 py-4">
                           <strong className="block font-mono text-xs">{member.universityId}</strong>
                           {member.role === 'super_admin' ? (
                             <span className="mt-1 inline-flex rounded-full bg-primary/10 px-2 py-1 text-xs font-bold text-primary">SYSTEM ACCOUNT</span>
@@ -898,21 +849,21 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
                             <span className="mt-1 inline-flex max-w-[190px] rounded-lg bg-amber-50 px-2 py-1 text-xs font-bold leading-4 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">NOT REGISTERED · VERIFY MANUALLY</span>
                           )}
                         </td>
-                        <td className="px-5 py-4">
+                        <td data-label="Status" className="px-5 py-4">
                           <span className={cx('inline-flex rounded-full px-2.5 py-1 text-xs font-bold uppercase', member.suspended ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300' : member.status === 'pending' ? 'bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200' : member.status === 'approved' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'bg-muted text-muted-foreground')}>
                             {member.suspended ? 'Blocked' : member.status}
                           </span>
                           {isRoot && <span className="mt-1 block text-xs text-muted-foreground">MFA {member.mfaEnrolled ? 'enabled' : 'not enabled'}</span>}
                         </td>
-                        <td className="px-5 py-4">
+                        <td data-label="Roles & subscription" className="px-5 py-4">
                           <span className="block">{administrativeRoleLabels(member).join(' · ') || 'No assigned role'}</span>
                           <span className="mt-1 block text-xs text-muted-foreground">Subscription: {member.tier.toUpperCase()}</span>
                         </td>
-                        {isRoot && <td className="whitespace-nowrap px-5 py-4 text-xs text-muted-foreground">{formatDate(member.createdAt)}</td>}
-                        {isRoot && <td className="px-5 py-4 text-xs">
+                        {isRoot && <td data-label="Registered" className="whitespace-nowrap px-5 py-4 text-xs text-muted-foreground">{formatDate(member.createdAt)}</td>}
+                        {isRoot && <td data-label="Reviewed by" className="px-5 py-4 text-xs">
                           {member.approvedByName ? <><span className="block">{member.approvedByName}</span><span className="mt-1 block text-muted-foreground">{formatDate(member.approvedAt)}</span></> : <span className="text-muted-foreground">Pending review</span>}
                         </td>}
-                        <td className="px-5 py-4">
+                        <td data-label="Actions" className="px-5 py-4">
                           <div className="flex justify-end gap-2">
                             {member.status === 'pending' && (
                               <>
@@ -1201,9 +1152,10 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
             </div>
           </section>
         )}
+          </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 

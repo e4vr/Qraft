@@ -293,14 +293,18 @@ button { cursor: pointer; }
   --q-safe-bottom: env(safe-area-inset-bottom, 0px);
   --q-safe-left: env(safe-area-inset-left, 0px);
 }
-html, body, .q-viewport { background: var(--background); }
-body { margin: 0; min-width: 0; min-height: 100dvh; }
+html, body { background: var(--card); }
+body { margin: 0; min-width: 0; height: 100dvh; box-sizing: border-box; padding-top: var(--q-safe-top); }
 /* The document stays still; each workspace owns its scroll position. */
 html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
-.q-viewport { position: relative; width: 100%; height: 100vh; height: 100dvh; min-width: 0; max-width: 100vw; overflow-x: hidden; overflow-y: auto; overscroll-behavior: none; scroll-padding-block: 1rem; transition: background-color 160ms ease; }
+.q-viewport { position: relative; width: 100%; height: calc(100vh - var(--q-safe-top)); height: calc(100dvh - var(--q-safe-top)); box-sizing: border-box; padding-bottom: var(--q-safe-bottom); min-width: 0; max-width: 100vw; background: var(--background); overflow-x: hidden; overflow-y: auto; overscroll-behavior: none; scroll-padding-block: 1rem; transition: background-color 160ms ease; }
+/* The status bar belongs to the root, including auth, admin and full-screen tests. */
+.q-viewport > main { min-height: 100%; }
+.q-viewport > main:not(.q-shell):not(.q-test-screen):not(.q-admin-dashboard) { padding-left: max(1rem, var(--q-safe-left)); padding-right: max(1rem, var(--q-safe-right)); }
+.q-viewport:has(> .q-shell) { padding-bottom: 0; }
 .q-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
-.q-frame { flex: 1; min-height: 0; padding-top: var(--q-safe-top); }
-.q-frame > .q-stage { padding-bottom: var(--q-safe-bottom); min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: none; scroll-padding-block: 1rem; }
+.q-frame { flex: 1; min-height: 0; background: var(--card); }
+.q-frame > .q-stage { background: var(--background); padding-bottom: var(--q-safe-bottom); min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: none; scroll-padding-block: 1rem; }
 .q-frame > .q-stage.q-enter { animation: none; }
 .q-viewport :where(button, a, input, select, textarea, [role='button']) { touch-action: manipulation; }
 .q-viewport :where(button, a, [role='button']):focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
@@ -325,7 +329,8 @@ body > main, .q-stage { min-width: 0; }
   .workspace-header-actions .q-button { flex: 1 1 140px; padding-inline: 14px; }
 }
 .q-sidebar { padding-top: var(--q-safe-top); padding-left: var(--q-safe-left); }
-.q-announcement { padding-block: 0.5rem; }
+.q-announcement { padding-block: 0.5rem; background: var(--card); color: var(--muted-foreground); box-shadow: none; font-weight: 500; }
+.q-announcement a { color: var(--primary); background: var(--accent); }
 .q-admin-dashboard table thead { position: sticky; top: 0; z-index: 2; backdrop-filter: blur(12px); }
 .q-admin-dashboard table tbody tr { transition: background-color 150ms ease; }
 .q-admin-dashboard table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--muted) 22%, transparent); }
@@ -345,7 +350,7 @@ body > main, .q-stage { min-width: 0; }
 .q-loading-progress { animation: qraft-loading-progress 1.5s ease-in-out infinite; }
 .q-stage, .q-test-screen { padding-left: var(--q-safe-left); padding-right: var(--q-safe-right); }
 @media (display-mode: standalone) {
-  .q-viewport { min-height: 100dvh; box-sizing: border-box; touch-action: pan-x pan-y; }
+  .q-viewport { touch-action: pan-x pan-y; }
   .q-stage > header, .q-test-screen > header, .q-sidebar, .q-mobile-nav, .q-test-bottom { background-clip: border-box; }
 }
 .q-stage :where(p, h1, h2, h3, dd), .q-test-screen p { overflow-wrap: anywhere; }
@@ -361,6 +366,7 @@ body > main, .q-stage { min-width: 0; }
 .q-test-screen .select-text { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
 .q-button:disabled { cursor: not-allowed; opacity: .5; }
 @media (max-width: 767px) {
+  .q-viewport:has(> .q-test-screen) { padding-bottom: 0; }
   input, textarea, select { font-size: 16px; }
   .q-frame > .q-stage { padding-bottom: 0; }
   .q-test-screen > header { gap: 4px; }
@@ -369,7 +375,6 @@ body > main, .q-stage { min-width: 0; }
   .q-test-actions { display: flex; flex-wrap: wrap; justify-content: center; }
   .q-test-actions > button:first-child, .q-test-actions > button:last-child { display: none; }
   .q-test-bottom { display: flex; order: 2; flex-shrink: 0; z-index: 40; align-items: center; justify-content: space-between; gap: 8px; background: var(--card); border-top: 1px solid var(--border); padding: 10px max(12px, var(--q-safe-right)) calc(10px + var(--q-safe-bottom)) max(12px, var(--q-safe-left)); }
-  .q-mobile-nav { padding-left: max(8px, var(--q-safe-left)); padding-right: max(8px, var(--q-safe-right)); }
   .q-mobile-nav button { min-width: 0; flex: 1; }
   .q-test-screen img { height: auto; max-width: 100%; }
   .q-stage > header > div { flex-wrap: wrap; }
@@ -384,4 +389,15 @@ body > main, .q-stage { min-width: 0; }
 .q-test-screen { height: 100%; min-height: 0; overflow: hidden; }
 .q-test-screen > .q-test-body { min-height: 0; overflow-y: auto; }
 @media (min-width: 768px) and (max-width: 1023px) { .q-frame > .q-stage { padding-bottom: 0; } }
+/* A single continuous surface extends from the tab controls to the home indicator. */
+@media (max-width: 1023px) {
+  .q-mobile-nav { gap: 4px; padding: 6px max(12px, var(--q-safe-right)) max(6px, var(--q-safe-bottom)) max(12px, var(--q-safe-left)); background: var(--card); border-top-color: color-mix(in srgb, var(--border) 55%, transparent); box-shadow: 0 -6px 24px #192a4004; }
+  .q-mobile-nav button { flex: 1; min-width: 0; max-width: 160px; min-height: 50px; border-radius: 16px; gap: 3px; padding: 5px 8px; }
+  .q-mobile-nav .mobile-start:not([aria-current='page']) { background: transparent; color: var(--study); }
+}
+.q-test-bottom { padding-bottom: max(8px, var(--q-safe-bottom)); }
+/* Custom full-screen overlays also keep their interactive contents inside the safe rect. */
+.q-safe-overlay { padding-top: max(1rem, var(--q-safe-top)); padding-right: max(1rem, var(--q-safe-right)); padding-bottom: max(1rem, var(--q-safe-bottom)); padding-left: max(1rem, var(--q-safe-left)); }
+.q-test-save-actions { order: 1; flex-shrink: 0; justify-content: flex-end; padding: 8px max(12px, var(--q-safe-right)) 8px max(12px, var(--q-safe-left)); background: var(--card); }
+.q-test-save-actions button { min-height: 44px; }
 [data-slot="dialog-content"], [data-slot="alert-dialog-content"] { top: calc((100% + var(--q-safe-top) - var(--q-safe-bottom)) / 2); left: calc((100% + var(--q-safe-left) - var(--q-safe-right)) / 2); width: calc(100vw - var(--q-safe-left) - var(--q-safe-right) - 2rem); }

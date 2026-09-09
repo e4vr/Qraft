@@ -208,6 +208,15 @@ export const discountCodes = sqliteTable(
   (table) => [uniqueIndex('idx_discount_codes_code').on(table.code)],
 );
 
+export const accountPlanOverrides = sqliteTable('account_plan_overrides', {
+  userId: text('user_id').primaryKey().references(() => profiles.uid, { onDelete: 'cascade' }),
+  plan: text('plan', { enum: ['free', 'lite', 'pro', 'unlimited'] }).notNull(),
+  expiresAt: text('expires_at'),
+  reason: text('reason').notNull().default(''),
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const subscriptions = sqliteTable(
   'subscriptions',
   {

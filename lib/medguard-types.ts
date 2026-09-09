@@ -230,6 +230,7 @@ export interface AppUser {
   createdAt?: string;
   tier: AccountTier;
   effectivePlan?: AccountTier;
+  adminOverridePlan?: AccountTier | null;
   effectivePlanExpiresAt?: string | null;
   subscriptionPlan?: AccountTier | null;
   rewardPlan?: AccountTier | null;

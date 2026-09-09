@@ -3420,7 +3420,7 @@ function TestView({
           </div>
         </section>
       </div>
-      <div className="fixed bottom-4 right-4 z-20 flex gap-2 sm:hidden">
+      <div className="q-test-save-actions flex gap-2 sm:hidden">
         <button
           onClick={finishTest}
           className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-xl"
@@ -3431,7 +3431,7 @@ function TestView({
       {test.timerPaused && test.status === 'active' && (
         <dialog
           open
-          className="fixed inset-0 z-[90] m-0 grid size-full max-h-none max-w-none place-items-center border-0 bg-background/45 p-6 text-foreground backdrop-blur-xl"
+          className="q-safe-overlay fixed inset-0 z-[90] m-0 grid size-full max-h-none max-w-none place-items-center border-0 bg-background/45 p-6 text-foreground backdrop-blur-xl"
           aria-labelledby="paused-test-title"
         >
           <section className="w-full max-w-sm rounded-3xl bg-card/95 p-7 text-center shadow-2xl ring-1 ring-border">
@@ -3454,7 +3454,7 @@ function TestView({
       )}
       {finishConfirmOpen && (
         <div
-          className="fixed inset-0 z-[70] grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          className="q-safe-overlay fixed inset-0 z-[70] grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget)
               setFinishConfirmOpen(false);
@@ -3603,7 +3603,7 @@ function TestView({
         </div>
       )}
       {reportOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm">
+        <div className="q-safe-overlay fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm">
           <div className="mx-auto my-6 w-full max-w-4xl rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border">
             <div className="flex items-center justify-between">
               <div>
@@ -3930,7 +3930,7 @@ function HistoryView({
         )}
       </div>
       {selectedTest && (
-        <div className="fixed inset-0 z-[70] grid place-items-center bg-slate-950/60 p-4">
+        <div className="q-safe-overlay fixed inset-0 z-[70] grid place-items-center bg-slate-950/60 p-4">
           <section
             role="alertdialog"
             aria-modal="true"
@@ -4956,7 +4956,7 @@ function QuestionManager({
       {roleRequestOpen && (
         <dialog
           open
-          className="fixed inset-0 z-[70] m-0 grid h-full w-full max-w-none place-items-center overflow-y-auto border-0 bg-slate-950/45 p-4 backdrop-blur-sm"
+          className="q-safe-overlay fixed inset-0 z-[70] m-0 grid h-full w-full max-w-none place-items-center overflow-y-auto border-0 bg-slate-950/45 p-4 backdrop-blur-sm"
           aria-label="Request a role"
         >
           <div className="w-full max-w-3xl">
@@ -5402,7 +5402,11 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
         themeColor.dataset.qraftTheme = 'true';
         document.head.appendChild(themeColor);
       }
-      themeColor.content = dark ? '#0d1b2a' : '#f4f7fb';
+      // Safari may use the first matching server-rendered theme entry.
+      document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach((meta) => {
+        meta.removeAttribute('media');
+        meta.content = dark ? '#0d1b2a' : '#ffffff';
+      });
     };
     apply();
     media.addEventListener('change', apply);

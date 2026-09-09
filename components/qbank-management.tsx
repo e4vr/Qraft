@@ -510,7 +510,7 @@ export function QBankManagement({
       </div>
 
       {editing && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-sm">
+        <div className="q-safe-overlay fixed inset-0 z-50 overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-sm">
           <form onSubmit={(event) => void saveQuestion(event)} className="mx-auto my-6 w-full max-w-4xl rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border sm:p-7">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -658,7 +658,7 @@ export function QBankManagement({
         </div>
       )}
       {deleteOpen && (
-        <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/60 p-4">
+        <div className="q-safe-overlay fixed inset-0 z-[60] grid place-items-center bg-slate-950/60 p-4">
           <section role="alertdialog" aria-modal="true" aria-labelledby="delete-bank-title" className="w-full max-w-md rounded-2xl bg-card p-6 shadow-2xl">
             <h2 id="delete-bank-title" className="text-xl font-bold">
               Delete {bank.name}?

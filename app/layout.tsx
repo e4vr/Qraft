@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import './admin.css';
+import './billing-admin.css';
 
-export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: [{media:'(prefers-color-scheme: light)',color:'#f4f7fb'},{media:'(prefers-color-scheme: dark)',color:'#0d1b2a'}] };
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: [{media:'(prefers-color-scheme: light)',color:'#ffffff'},{media:'(prefers-color-scheme: dark)',color:'#0d1b2a'}] };
 
 export const metadata: Metadata = {
   title: 'Qraft Collaborative QBank',

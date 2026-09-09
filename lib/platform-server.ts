@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { listAdminSubscribers } from './admin-subscribers';
 import { reviewerPerformance } from './reviewer-performance-server';
 import { testPool } from './test-pool-server';
 import {
@@ -1045,26 +1046,21 @@ export async function platformApi(request: Request, action: string) {
     if (action === 'discounts') {
       if (!root) return json({ error: 'Superadmin MFA required.' }, 403);
       if (request.method === 'GET') {
-        const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
-        const rows = await env.DB.prepare(
-          'SELECT * FROM discount_codes ORDER BY updated_at DESC LIMIT 51 OFFSET ?',
-        )
-          .bind(offset)
-          .all();
+        const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset')) || 0));
+        const usageOffset = Math.max(0, Math.floor(Number(url.searchParams.get('usageOffset')) || 0));
+        const search = `%${(url.searchParams.get('search') || '').slice(0, 100)}%`;
+        const status = url.searchParams.get('status') || '';
+        const now = new Date().toISOString();
+        const where = `WHERE code LIKE ? AND (?='' OR (?='disabled' AND enabled=0) OR (?='active' AND enabled=1 AND (starts_at IS NULL OR starts_at<=?) AND (expires_at IS NULL OR expires_at>?) AND (max_uses IS NULL OR uses<max_uses)) OR (?='expired' AND expires_at<=?) OR (?='scheduled' AND starts_at>?) OR (?='exhausted' AND max_uses IS NOT NULL AND uses>=max_uses))`;
+        const args = [search,status,status,status,now,now,status,now,status,now,status];
+        const [rows, totals] = await env.DB.batch([
+          env.DB.prepare(`SELECT * FROM discount_codes ${where} ORDER BY updated_at DESC,id LIMIT 51 OFFSET ?`).bind(...args,offset),
+          env.DB.prepare(`SELECT count(*) AS total,coalesce(sum(enabled=1),0) AS enabled,coalesce(sum(uses),0) AS uses FROM discount_codes ${where}`).bind(...args),
+        ]);
         const events = url.searchParams.get('id')
-          ? await env.DB.prepare(
-              'SELECT * FROM subscription_events WHERE code_id=? ORDER BY created_at DESC LIMIT 51 OFFSET ?',
-            )
-              .bind(url.searchParams.get('id'), offset)
-              .all()
+          ? await env.DB.prepare('SELECT * FROM subscription_events WHERE code_id=? ORDER BY created_at DESC,id LIMIT 51 OFFSET ?').bind(url.searchParams.get('id'),usageOffset).all()
           : { results: [] };
-        return json({
-          codes: rows.results,
-          events: events.results,
-          price: (await env.DB.prepare(
-            'SELECT price FROM subscription_settings WHERE id=1',
-          ).first<{ price: number }>())!.price,
-        });
+        return json({ codes: rows.results, events: events.results, summary: totals.results[0], price: (await env.DB.prepare('SELECT price FROM subscription_settings WHERE id=1').first<{ price: number }>())!.price });
       }
       if (text('operation') === 'price') {
         const price = Number(input.price);
@@ -1167,28 +1163,8 @@ export async function platformApi(request: Request, action: string) {
     if (action === 'subscriptions') {
       if (!root) return json({ error: 'Superadmin MFA required.' }, 403);
       await expireSubscriptions();
-      if (request.method === 'GET') {
-        const search = `%${(url.searchParams.get('search') || '').slice(0, 100)}%`,
-          status = url.searchParams.get('status') || '',
-          sort =
-            url.searchParams.get('sort') === 'name'
-              ? 'p.email'
-              : 's.expires_at';
-        const rows = await env.DB.prepare(
-          `SELECT p.uid,p.email,json_extract(p.profile_json,'$.displayName') AS name,json_extract(p.profile_json,'$.tier') AS tier,s.* FROM profiles p LEFT JOIN subscriptions s ON s.user_id=p.uid WHERE (p.email LIKE ? OR json_extract(p.profile_json,'$.displayName') LIKE ? OR p.uid LIKE ?) AND (?='' OR coalesce(s.status,'none')=? OR json_extract(p.profile_json,'$.tier')=?) ORDER BY ${sort},p.uid LIMIT 51 OFFSET ?`,
-        )
-          .bind(
-            search,
-            search,
-            search,
-            status,
-            status,
-            status,
-            Math.max(0, Number(url.searchParams.get('offset')) || 0),
-          )
-          .all();
-        return json({ subscriptions: rows.results });
-      }
+      if (request.method === 'GET') return json(await listAdminSubscribers(url));
+      if (!['POST', 'PUT'].includes(request.method)) return json({ error: 'Method not allowed.' }, 405);
       const member = await profileById(text('userId'));
       if (!member) throw new Error('User not found.');
       const old = await env.DB.prepare(
@@ -1197,6 +1173,24 @@ export async function platformApi(request: Request, action: string) {
         .bind(member.uid)
         .first();
       const profile = JSON.parse(member.profile_json) as MemberProfile;
+      if (text('operation') === 'override') {
+        const plan = text('plan');
+        if (!isPlanId(plan)) throw new Error('Choose Free, Lite, Pro or Unlimited.');
+        const now = new Date().toISOString();
+        const requestedEnd = text('expires_at');
+        if (requestedEnd && (!Number.isFinite(Date.parse(requestedEnd)) || Date.parse(requestedEnd) <= Date.parse(now)))
+          throw new Error('Select a future expiration date or no expiration.');
+        const expiresAt = requestedEnd ? new Date(requestedEnd).toISOString() : null;
+        const reason = text('reason').slice(0, 500);
+        const previous = await env.DB.prepare('SELECT * FROM account_plan_overrides WHERE user_id=?').bind(member.uid).first();
+        await env.DB.batch([
+          env.DB.prepare(`INSERT INTO account_plan_overrides(user_id,plan,expires_at,reason,updated_by,updated_at) VALUES(?,?,?,?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan,expires_at=excluded.expires_at,reason=excluded.reason,updated_by=excluded.updated_by,updated_at=excluded.updated_at`)
+            .bind(member.uid, plan, expiresAt, reason, user.uid, now),
+          auditStatement(user, 'subscription_plan_overridden', member.uid, previous, { plan, expires_at: expiresAt, reason, previousSubscription: old }),
+        ]);
+        return json({ ok: true, ...(await getEffectiveEntitlement(profile)) });
+      }
       const cancel = text('operation') === 'cancel';
       const requestedPlan = text('plan');
       const subscriptionPlan = isPlanId(requestedPlan) && requestedPlan !== 'free' ? requestedPlan : 'pro';
@@ -1292,7 +1286,7 @@ export async function platformApi(request: Request, action: string) {
           { status, expires_at: end, paid, plan: subscriptionPlan },
         ),
       ]);
-      return json({ ok: true });
+      return json({ ok: true, ...(await getEffectiveEntitlement(profile)) });
     }
     if (action === 'question') {
       const number = (url.searchParams.get('id') || text('id'))

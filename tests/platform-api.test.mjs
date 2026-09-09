@@ -117,6 +117,7 @@ print(json.dumps(out))`,
     'manual-member',
     'paid-member',
     'discount-member',
+    'override-member',
   ]) {
     const profile = {
       uid,
@@ -221,6 +222,52 @@ print(json.dumps(out))`,
     });
   };
   let codeId;
+  await t.test('Superadmin plan assignments override every entitlement, including Free, and preserve billing and gifts', async () => {
+    const uid = 'override-member', now = new Date().toISOString(), future = new Date(Date.now()+86400000*365).toISOString();
+    await db.prepare("UPDATE profiles SET profile_json=json_set(profile_json,'$.tier','unlimited') WHERE uid=?").bind(uid).run();
+    await db.prepare("INSERT INTO subscriptions(user_id,status,method,paid,updated_at,plan,expires_at) VALUES(?,'active','manual',9900,?,'unlimited',?)").bind(uid,now,future).run();
+    await db.prepare("INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,expires_at,source) VALUES('override-gift',?,'unlimited',1,'year','active',?,?,'admin')").bind(uid,now,future).run();
+    await db.prepare("INSERT INTO admin_plan_entitlements(id,user_id,plan,reason,granted_by,created_at) VALUES('override-old-admin',?,'unlimited','test','admin',?)").bind(uid,now).run();
+    for (const role of ['free','moderator','access']) assert.equal((await call(role,'/platform/subscriptions',{operation:'override',userId:uid,plan:'free'})).status,403);
+    for (const plan of ['free','lite','pro','unlimited','free']) {
+      const changed = await call('admin','/platform/subscriptions',{operation:'override',userId:uid,plan,expires_at:null,reason:'Explicit admin assignment'});
+      assert.equal(changed.status,200,JSON.stringify(changed.data)); assert.equal(changed.data.effectivePlan,plan);
+      const session = await call(uid,'/auth/session'); assert.equal(session.data.user.tier,plan); assert.equal(session.data.user.adminOverridePlan,plan);
+      const listing = await call('admin',`/platform/subscriptions?search=${uid}&status=${plan}`);
+      assert.equal(listing.data.subscriptions[0].tier,plan); assert.equal(listing.data.summary.total,1);
+      assert.equal(listing.data.subscriptions[0].override_plan,plan);
+    }
+    assert.equal((await call('admin','/platform/subscriptions',{operation:'override',userId:uid,plan:'invalid'})).status,400);
+    assert.equal((await call('admin','/platform/subscriptions',{operation:'override',userId:uid,plan:'pro',expires_at:'2020-01-01'})).status,400);
+    assert.equal((await call(uid,'/auth/session')).data.user.tier,'free');
+    // A gift activated after assignment must not bypass the assignment either.
+    await db.prepare("INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,source) VALUES('override-new-gift',?,'unlimited',1,'year','available',?,'admin')").bind(uid,now).run();
+    const gift = await call(uid,'/platform/rewards',{operation:'activate',passId:'override-new-gift'});
+    assert.equal(gift.status,200,JSON.stringify(gift.data)); assert.equal((await call(uid,'/auth/session')).data.user.tier,'free');
+    const billing = await db.prepare('SELECT plan,paid FROM subscriptions WHERE user_id=?').bind(uid).first();
+    assert.equal(billing.plan,'unlimited'); assert.equal(billing.paid,9900);
+    assert.equal((await db.prepare("SELECT status FROM reward_passes WHERE id='override-gift'").first()).status,'active');
+    const logged = await db.prepare("SELECT count(*) AS n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='subscription_plan_overridden' AND json_extract(payload,'$.entityId')=?").bind(uid).first(); assert.equal(logged.n,5);
+    await db.prepare("UPDATE account_plan_overrides SET expires_at='2020-01-01' WHERE user_id=?").bind(uid).run();
+    assert.equal((await call(uid,'/auth/session')).data.user.tier,'unlimited');
+  });
+
+  await t.test('Discount search and usage history use independent server pagination', async () => {
+    const now=new Date().toISOString();
+    await db.batch(Array.from({length:52},(_,i)=>db.prepare('INSERT INTO discount_codes(id,code,kind,amount,enabled,max_uses,per_user,updated_at) VALUES(?,?,?,10,0,NULL,1,?)').bind(`table-qa-${i}`,`TABLE_QA_${i}`,'percent',now)));
+    const first=await call('admin','/platform/discounts?search=TABLE_QA_&status=disabled');
+    assert.equal(first.status,200); assert.equal(first.data.summary.total,52); assert.equal(first.data.codes.length,51);
+    const next=await call('admin','/platform/discounts?search=TABLE_QA_&status=disabled&offset=50');
+    assert.equal(next.data.codes.length,2);
+    const active=await call('admin','/platform/discounts?search=TABLE_QA_&status=active'); assert.equal(active.data.summary.total,0);
+    await db.batch(Array.from({length:52},(_,i)=>db.prepare("INSERT INTO subscription_events(id,user_id,email,name,code_id,code,action,original,discount,final,status,created_at,detail) VALUES(?,?,?,?,?,?,'test',100,10,90,'success',?,'test')").bind(`table-event-${i}`,'override-member','test@example.test','Test member','table-qa-0','TABLE_QA_0',now)));
+    const history=await call('admin','/platform/discounts?search=TABLE_QA_&offset=50&id=table-qa-0&usageOffset=0');
+    assert.equal(history.data.codes.length,2); assert.equal(history.data.events.length,51);
+    const historyNext=await call('admin','/platform/discounts?search=TABLE_QA_&offset=0&id=table-qa-0&usageOffset=50');
+    assert.equal(historyNext.data.codes.length,51); assert.equal(historyNext.data.events.length,2);
+    await db.batch([db.prepare("DELETE FROM subscription_events WHERE id LIKE 'table-event-%'"),db.prepare("DELETE FROM discount_codes WHERE id LIKE 'table-qa-%'")]);
+  });
+
   await t.test('R2 uploads are private, hashed, and deduplicated', async () => {
     const first = await uploadImage('pro');
     assert.equal(first.status, 201);
