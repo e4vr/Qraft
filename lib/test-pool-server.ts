@@ -25,11 +25,18 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
       SELECT json_extract(c.value,'$.id') AS id,c.value AS payload FROM app,json_each(app.payload,'$.customQuestions') c
       WHERE coalesce(json_extract(c.value,'$.qbankId'),'smle-gs')=?
         AND NOT EXISTS (SELECT 1 FROM records WHERE type='sharedQuestions' AND id=json_extract(c.value,'$.id'))
-    ), effective AS (
+    ), effective_base AS (
       SELECT c.id,json_patch(c.payload,coalesce(o.value,'{}')) AS payload
       FROM candidates c CROSS JOIN app LEFT JOIN json_each(app.payload,'$.questionOverrides') o ON o.key=c.id
       WHERE NOT EXISTS (SELECT 1 FROM retired_questions WHERE id=c.id)
       GROUP BY c.id
+    ), effective AS (
+      SELECT e.id,json_set(
+        e.payload,
+        '$.topic',coalesce((SELECT json_extract(t.payload,'$.name') FROM records t WHERE t.type='qbankTopics' AND t.id=json_extract(e.payload,'$.topicId')),json_extract(e.payload,'$.topic')),
+        '$.specialty',coalesce((SELECT json_extract(s.payload,'$.name') FROM records s WHERE s.type='qbankSpecialties' AND s.id=json_extract(e.payload,'$.specialtyId')),json_extract(e.payload,'$.specialty'))
+      ) AS payload
+      FROM effective_base e
     ), eligible AS (
       SELECT q.id,q.payload FROM effective q CROSS JOIN app
       LEFT JOIN json_each(coalesce(?,json_extract(app.payload,'$.progress'),'{}')) p ON p.key=q.id

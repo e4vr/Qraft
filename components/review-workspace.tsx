@@ -25,6 +25,7 @@ import {
   optionLabel,
   type AppUser,
   type CollaborationState,
+  type Question,
   type QuestionProposal,
 } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
@@ -136,6 +137,37 @@ export function ReviewWorkspace({
   const [methodPreset, setMethodPreset] = useState('');
   const [bulkDecision, setBulkDecision] = useState<'approved' | 'rejected'>();
   const [bulkBusy, setBulkBusy] = useState(false);
+  type ReviewResult = {
+    reviewed: number;
+    awaitingSecondReview: number;
+    updatedProposals: QuestionProposal[];
+    updatedQuestions: Question[];
+    queueDelta: number;
+    reviewerCompletedDelta: number;
+  };
+  const applyReviewResult = (result: ReviewResult) => {
+    const proposals = new Map(result.updatedProposals.map(proposal => [proposal.id, proposal]));
+    const questions = new Map(result.updatedQuestions.map(question => [question.id, question]));
+    replaceFromServer({
+      ...collaboration,
+      proposals: collaboration.proposals.map(proposal => proposals.get(proposal.id) ?? proposal),
+      approvedQuestions: [
+        ...collaboration.approvedQuestions.filter(question => !questions.has(question.id)),
+        ...result.updatedQuestions,
+      ],
+    });
+  };
+  useEffect(() => {
+    let active = true;
+    const reconcile = () => {
+      void loadCollaborationState(user).then(next => {
+        if (active) replaceFromServer(next);
+      }).catch(() => undefined);
+    };
+    reconcile();
+    const stop = subscribeLive(reconcile, ['review-queue']);
+    return () => { active = false; stop(); };
+  }, [user, replaceFromServer]);
   useEffect(() => {
     let active = true;
     const load = async () => {
@@ -275,15 +307,14 @@ export function ReviewWorkspace({
     setError('');
     setNotice('');
     try {
-      const result = await api<{ reviewed: number; awaitingSecondReview: number }>('/platform/bulk-review', {
+      const result = await api<ReviewResult>('/platform/bulk-review', {
         method: 'POST',
         body: JSON.stringify({
           proposalIds: selectedProposals.map((proposal) => proposal.id),
           status: bulkDecision,
         }),
       });
-      const next = await loadCollaborationState(user);
-      replaceFromServer(next);
+      applyReviewResult(result);
       setSelectedProposalIds([]);
       setSubmitterPreset('');
       setMethodPreset('');
@@ -312,14 +343,14 @@ export function ReviewWorkspace({
     setError('');
     setNotice('');
     try {
-      const result = await api<{ reviewed: number; awaitingSecondReview: number }>(
+      const result = await api<ReviewResult>(
         '/platform/bulk-review',
         {
           method: 'POST',
           body: JSON.stringify({ proposalIds: [proposal.id], status }),
         },
       );
-      replaceFromServer(await loadCollaborationState(user));
+      applyReviewResult(result);
       setNotice(
         result.awaitingSecondReview
           ? 'First approval recorded. This high-risk medical change now requires a second independent reviewer.'

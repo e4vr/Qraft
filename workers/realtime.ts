@@ -10,30 +10,19 @@ export class RealtimeChannel extends DurableObject {
   async fetch(request: Request) {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('Upgrade required', { status: 426 });
     const pair = new WebSocketPair();
-    const expires = Date.now() + 5 * 60_000;
     this.ctx.acceptWebSocket(pair[1]);
-    pair[1].serializeAttachment({ expires });
-    if (await this.ctx.storage.getAlarm() === null) await this.ctx.storage.setAlarm(expires);
+    pair[1].serializeAttachment({ clientId: request.headers.get('x-qraft-client-id') ?? '' });
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
-  publish(topic: string) {
-    const message = JSON.stringify({ type: 'changed', topic });
+  publish(resources: string[], originClientId = '') {
+    const message = JSON.stringify({ type: 'resources_changed', resources: [...new Set(resources)].slice(0, 20) });
     for (const socket of this.ctx.getWebSockets()) {
       try {
-        const { expires } = socket.deserializeAttachment() as { expires: number };
-        if (expires <= Date.now()) socket.close(4001, 'Renew authorization');
+        const { clientId } = socket.deserializeAttachment() as { clientId?: string };
+        if (originClientId && clientId === originClientId) continue;
         else socket.send(message);
       } catch { /* A disconnected client will refresh after reconnecting. */ }
     }
-  }
-  async alarm() {
-    let next = Infinity;
-    for (const socket of this.ctx.getWebSockets()) {
-      const { expires } = socket.deserializeAttachment() as { expires: number };
-      if (expires <= Date.now()) socket.close(4001, 'Renew authorization');
-      else next = Math.min(next, expires);
-    }
-    if (Number.isFinite(next)) await this.ctx.storage.setAlarm(next);
   }
   webSocketMessage(socket: WebSocket) { socket.close(1008, 'Read-only connection'); }
   webSocketClose(socket: WebSocket, code: number, reason: string) { socket.close(code, reason); }

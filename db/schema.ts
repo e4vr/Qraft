@@ -40,7 +40,44 @@ export const appStates = sqliteTable('app_states', {
     .references(() => profiles.uid, { onDelete: 'cascade' }),
   payload: text('payload').notNull(),
   updatedAt: text('updated_at').notNull(),
+  revision: integer('revision').notNull().default(0),
+  lastOperationId: text('last_operation_id'),
 });
+
+export const stateSyncOperations = sqliteTable(
+  'state_sync_operations',
+  {
+    userId: text('user_id').notNull().references(() => profiles.uid, { onDelete: 'cascade' }),
+    operationId: text('operation_id').notNull(),
+    revision: integer('revision').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  table => [
+    primaryKey({ columns: [table.userId, table.operationId] }),
+    index('idx_state_sync_operations_created').on(table.createdAt),
+  ],
+);
+
+export const qbankClassificationRevisions = sqliteTable(
+  'qbank_classification_revisions',
+  {
+    qbankId: text('qbank_id').primaryKey(),
+    revision: integer('revision').notNull().default(0),
+    updatedAt: text('updated_at').notNull(),
+  },
+);
+
+export const classificationOperations = sqliteTable(
+  'classification_operations',
+  {
+    operationId: text('operation_id').primaryKey(),
+    userId: text('user_id').notNull().references(() => profiles.uid, { onDelete: 'cascade' }),
+    qbankId: text('qbank_id').notNull(),
+    revision: integer('revision').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  table => [index('idx_classification_operations_created').on(table.createdAt)],
+);
 
 export const universityClaims = sqliteTable(
   'university_claims',
@@ -66,6 +103,7 @@ export const records = sqliteTable(
   (table) => [
     uniqueIndex('idx_records_type_id').on(table.type, table.id),
     index('idx_records_type_email').on(table.type, table.email),
+    index('idx_records_type_owner_updated').on(table.type, table.ownerId, table.updatedAt),
   ],
 );
 
@@ -108,74 +146,6 @@ export const media = sqliteTable('media', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at'),
 });
-
-export const syncOperations = sqliteTable(
-  'sync_operations',
-  {
-    id: text('id').primaryKey(),
-    userId: text('user_id')
-      .notNull()
-      .references(() => profiles.uid, { onDelete: 'cascade' }),
-    scope: text('scope').notNull(),
-    createdAt: text('created_at').notNull(),
-  },
-  (table) => [index('idx_sync_operations_user_created').on(table.userId, table.createdAt)],
-);
-
-export const userStats = sqliteTable('user_stats', {
-  userId: text('user_id')
-    .primaryKey()
-    .references(() => profiles.uid, { onDelete: 'cascade' }),
-  questionsAnswered: integer('questions_answered').notNull().default(0),
-  correctAnswers: integer('correct_answers').notNull().default(0),
-  incorrectAnswers: integer('incorrect_answers').notNull().default(0),
-  examsCompleted: integer('exams_completed').notNull().default(0),
-  flashcardsReviewed: integer('flashcards_reviewed').notNull().default(0),
-  updatedAt: text('updated_at').notNull(),
-});
-
-export const userTopicStats = sqliteTable(
-  'user_topic_stats',
-  {
-    userId: text('user_id')
-      .notNull()
-      .references(() => profiles.uid, { onDelete: 'cascade' }),
-    qbankId: text('qbank_id').notNull(),
-    topicId: text('topic_id').notNull(),
-    answered: integer('answered').notNull().default(0),
-    correct: integer('correct').notNull().default(0),
-    incorrect: integer('incorrect').notNull().default(0),
-    updatedAt: text('updated_at').notNull(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.userId, table.qbankId, table.topicId] }),
-    index('idx_user_topic_stats_dashboard').on(table.userId, table.qbankId, table.updatedAt),
-  ],
-);
-
-export const qbankStats = sqliteTable('qbank_stats', {
-  qbankId: text('qbank_id').primaryKey(),
-  totalQuestions: integer('total_questions').notNull().default(0),
-  pendingQuestions: integer('pending_questions').notNull().default(0),
-  approvedQuestions: integer('approved_questions').notNull().default(0),
-  updatedAt: text('updated_at').notNull(),
-});
-
-export const syncChanges = sqliteTable(
-  'sync_changes',
-  {
-    sequence: integer('sequence').primaryKey({ autoIncrement: true }),
-    userId: text('user_id')
-      .notNull()
-      .references(() => profiles.uid, { onDelete: 'cascade' }),
-    entityType: text('entity_type').notNull(),
-    entityId: text('entity_id').notNull(),
-    operation: text('operation').notNull(),
-    version: integer('version').notNull().default(1),
-    updatedAt: text('updated_at').notNull(),
-  },
-  (table) => [index('idx_sync_changes_user_sequence').on(table.userId, table.sequence)],
-);
 
 export const r2UsagePeriods = sqliteTable('r2_usage_periods', {
   periodStart: text('period_start').primaryKey(),
@@ -278,7 +248,111 @@ export const testRegistry = sqliteTable(
     questionCount: integer('question_count').notNull(),
     startedAt: text('started_at'),
   },
-  (table) => [primaryKey({ columns: [table.userId, table.testId] })],
+  (table) => [
+    primaryKey({ columns: [table.userId, table.testId] }),
+    index('idx_test_registry_user_started').on(table.userId, table.startedAt),
+  ],
+);
+
+export const preformedTests = sqliteTable(
+  'preformed_tests',
+  {
+    id: text('id').primaryKey(),
+    code: text('code').notNull(),
+    ownerId: text('owner_id').notNull().references(() => profiles.uid, { onDelete: 'cascade' }),
+    ownerName: text('owner_name').notNull(),
+    title: text('title').notNull(),
+    description: text('description').notNull().default(''),
+    visibility: text('visibility', { enum: ['public', 'private'] }).notNull().default('private'),
+    status: text('status', { enum: ['draft', 'published', 'paused', 'hidden'] }).notNull().default('draft'),
+    version: integer('version').notNull().default(1),
+    questionsJson: text('questions_json').notNull().default('[]'),
+    settingsJson: text('settings_json').notNull().default('{}'),
+    passcodeHash: text('passcode_hash'),
+    passcodeSalt: text('passcode_salt'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  table => [
+    uniqueIndex('idx_preformed_tests_code').on(table.code),
+    index('idx_preformed_tests_owner_updated').on(table.ownerId, table.updatedAt),
+    index('idx_preformed_tests_public_updated').on(table.visibility, table.status, table.updatedAt),
+  ],
+);
+
+export const preformedLeaderboard = sqliteTable(
+  'preformed_leaderboard',
+  {
+    id: text('id').primaryKey(),
+    testId: text('test_id').notNull().references(() => preformedTests.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    participantUserId: text('participant_user_id').references(() => profiles.uid, { onDelete: 'set null' }),
+    participantKey: text('participant_key').notNull(),
+    participantName: text('participant_name').notNull(),
+    guest: integer('guest', { mode: 'boolean' }).notNull().default(false),
+    score: integer('score').notNull(),
+    questionCount: integer('question_count').notNull(),
+    durationSeconds: integer('duration_seconds').notNull(),
+    attemptNumber: integer('attempt_number').notNull(),
+    submittedAt: text('submitted_at').notNull(),
+  },
+  table => [
+    index('idx_preformed_leaderboard_rank').on(table.testId, table.version, table.score, table.durationSeconds, table.submittedAt),
+    index('idx_preformed_leaderboard_participant').on(table.testId, table.version, table.participantKey),
+  ],
+);
+
+export const preformedQuestionStats = sqliteTable(
+  'preformed_question_stats',
+  {
+    testId: text('test_id').notNull().references(() => preformedTests.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    questionId: text('question_id').notNull(),
+    submissions: integer('submissions').notNull().default(0),
+    correct: integer('correct').notNull().default(0),
+  },
+  table => [primaryKey({ columns: [table.testId, table.version, table.questionId] })],
+);
+
+export const preformedParticipation = sqliteTable(
+  'preformed_participation',
+  {
+    testId: text('test_id').notNull().references(() => preformedTests.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    userId: text('user_id').notNull().references(() => profiles.uid, { onDelete: 'cascade' }),
+    attempts: integer('attempts').notNull().default(0),
+    updatedAt: text('updated_at').notNull(),
+  },
+  table => [primaryKey({ columns: [table.testId, table.version, table.userId] })],
+);
+
+export const preformedAttemptTokens = sqliteTable('preformed_attempt_tokens', {
+  tokenHash: text('token_hash').primaryKey(),
+  testId: text('test_id').notNull().references(() => preformedTests.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  userId: text('user_id'),
+  issuedAt: text('issued_at').notNull(),
+  expiresAt: text('expires_at').notNull(),
+});
+
+export const preformedSubmissionReceipts = sqliteTable('preformed_submission_receipts', {
+  submissionId: text('submission_id').primaryKey(),
+  testId: text('test_id').notNull().references(() => preformedTests.id, { onDelete: 'cascade' }),
+  leaderboard: integer('leaderboard', { mode: 'boolean' }).notNull().default(false),
+  resultJson: text('result_json'),
+  createdAt: text('created_at').notNull(),
+});
+
+export const preformedReports = sqliteTable(
+  'preformed_reports',
+  {
+    id: text('id').primaryKey(),
+    testId: text('test_id').notNull().references(() => preformedTests.id, { onDelete: 'cascade' }),
+    reporterId: text('reporter_id').notNull().references(() => profiles.uid, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  table => [uniqueIndex('idx_preformed_reports_user_test').on(table.reporterId, table.testId), index('idx_preformed_reports_test').on(table.testId, table.createdAt)],
 );
 
 export const questionRegistry = sqliteTable(
@@ -377,6 +451,7 @@ export const importedFiles = sqliteTable(
     uniqueIndex('idx_imported_files_user_name').on(table.userId, table.normalizedName),
     uniqueIndex('idx_imported_files_user_hash').on(table.userId, table.fileHash),
     uniqueIndex('idx_imported_files_batch').on(table.batchId),
+    index('idx_imported_files_user_uploaded').on(table.userId, table.uploadedAt),
   ],
 );
 
@@ -534,6 +609,10 @@ export const contributionReviews = sqliteTable(
     index('idx_contribution_reviews_created_reviewer').on(table.createdAt, table.reviewerId),
     index('idx_contribution_reviews_reviewer_created').on(
       table.reviewerId,
+      table.createdAt,
+    ),
+    index('idx_contribution_reviews_author_created').on(
+      table.authorId,
       table.createdAt,
     ),
   ],

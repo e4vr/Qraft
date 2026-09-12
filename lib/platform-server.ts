@@ -16,13 +16,15 @@ import {
   optionLabel,
   type AppUser,
   type MemberProfile,
+  type QBankSpecialty,
+  type QBankTopic,
   type Question,
   type QuestionProposal,
 } from './medguard-types';
 import { parseQuestionImportReport } from './question-import';
 import { bankAccessState } from './qbank-access-repository';
 import { allocateQuestionIds } from './question-id-repository';
-import { getEffectiveEntitlement } from './entitlement-server';
+import { applyEffectiveEntitlement, getEffectiveEntitlement } from './entitlement-server';
 import {
   ABUSE_LIMITS,
   CONTRIBUTION_CREDITS,
@@ -67,6 +69,10 @@ export function auditStatement(
 
 export async function expireSubscriptions() {
   const now = new Date().toISOString();
+  const expiring = await env.DB.prepare(
+    "SELECT user_id FROM subscriptions WHERE status IN ('active','manually_activated') AND expires_at<=?",
+  ).bind(now).all<{ user_id: string }>();
+  if (!expiring.results.length) return [];
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO records(type,id,owner_id,payload,updated_at) SELECT 'auditLog','expired-'||user_id||'-'||expires_at,user_id,json_object('id','expired-'||user_id||'-'||expires_at,'action','subscription_expired','entityType','account','entityId',user_id,'actorId','system','actorName','Qraft','createdAt',?,'detail','Subscription expired; effective access returned to the remaining entitlement.'),? FROM subscriptions WHERE status IN ('active','manually_activated') AND expires_at<=? ON CONFLICT(type,id) DO NOTHING`,
@@ -75,6 +81,7 @@ export async function expireSubscriptions() {
       `UPDATE subscriptions SET status='expired',updated_at=? WHERE status IN ('active','manually_activated') AND expires_at<=?`,
     ).bind(now, now),
   ]);
+  return expiring.results.map(row => row.user_id);
 }
 
 type Discount = {
@@ -169,6 +176,14 @@ function normalizeQuestionText(value: string) {
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizeClassificationName(value: string) {
+  return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
+}
+
+function validClassificationName(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 120;
 }
 
 function tokenSimilarity(left: string, right: string) {
@@ -293,6 +308,194 @@ export async function platformApi(request: Request, action: string) {
   try {
     if (action === 'reviewer-performance' && request.method === 'GET') return reviewerPerformance(user, url);
     if (action === 'test-pool' && request.method === 'POST') return testPool(user, input);
+    if (action === 'classification' && request.method === 'PUT') {
+      const qbankId = text('qbankId');
+      const operationId = text('operationId');
+      const baseRevision = input.baseRevision;
+      const specialties = input.specialties as QBankSpecialty[] | undefined;
+      const topics = input.topics as QBankTopic[] | undefined;
+      const assignments = input.assignments as Array<{ questionId: string; topicId: string }> | undefined;
+      if (
+        !qbankId ||
+        !/^[a-zA-Z0-9-]{20,100}$/.test(operationId) ||
+        !Number.isInteger(baseRevision) ||
+        (baseRevision as number) < 0 ||
+        !Array.isArray(specialties) ||
+        specialties.length > 250 ||
+        !Array.isArray(topics) ||
+        topics.length > 2_000 ||
+        !Array.isArray(assignments) ||
+        assignments.length > 500
+      ) return json({ error: 'Invalid classification change set.' }, 400);
+      const state = await bankAccessState(qbankId);
+      const bank = state.qbanks.find((item) => item.id === qbankId);
+      if (!bank || !canManageBank(user, bank))
+        return json({ error: 'Only the QBank owner can change its classification structure.' }, 403);
+      if (bank.essential && user.role !== 'super_admin')
+        return json({ error: 'Only Superadmin can change an Essential QBank structure.' }, 403);
+
+      const previousOperation = await env.DB.prepare(
+        'SELECT revision FROM classification_operations WHERE operation_id=? AND user_id=? AND qbank_id=?',
+      ).bind(operationId, user.uid, qbankId).first<{ revision: number }>();
+      if (previousOperation)
+        return json({ ok: true, revision: previousOperation.revision, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
+
+      const currentRows = await env.DB.prepare(
+        "SELECT type,payload FROM records WHERE qbank_id=? AND type IN ('qbankSpecialties','qbankTopics')",
+      ).bind(qbankId).all<{ type: string; payload: string }>();
+      const currentSpecialties = currentRows.results
+        .filter((row) => row.type === 'qbankSpecialties')
+        .map((row) => JSON.parse(row.payload) as QBankSpecialty);
+      const currentTopics = currentRows.results
+        .filter((row) => row.type === 'qbankTopics')
+        .map((row) => JSON.parse(row.payload) as QBankTopic);
+      const currentRevision = await env.DB.prepare(
+        'SELECT revision FROM qbank_classification_revisions WHERE qbank_id=?',
+      ).bind(qbankId).first<{ revision: number }>();
+      if ((currentRevision?.revision ?? 0) !== baseRevision)
+        return json({
+          error: 'The classification structure changed on another device. Your draft was kept; review the latest version and try again.',
+          code: 'CLASSIFICATION_CONFLICT',
+          revision: currentRevision?.revision ?? 0,
+          specialties: currentSpecialties,
+          topics: currentTopics,
+        }, 409);
+
+      const specialtyIds = new Set<string>();
+      const topicIds = new Set<string>();
+      if (specialties.some((item) =>
+        !item || typeof item.id !== 'string' || !item.id || item.id.length > 200 ||
+        item.qbankId !== qbankId || !validClassificationName(item.name) ||
+        specialtyIds.has(item.id) || (specialtyIds.add(item.id), false)
+      )) return json({ error: 'A specialty is invalid or repeated.' }, 400);
+      if (topics.some((item) =>
+        !item || typeof item.id !== 'string' || !item.id || item.id.length > 200 ||
+        item.qbankId !== qbankId || !specialtyIds.has(item.specialtyId) ||
+        !validClassificationName(item.name) || topicIds.has(item.id) ||
+        (topicIds.add(item.id), false)
+      )) return json({ error: 'A topic is invalid, repeated, or has no specialty.' }, 400);
+      const foreignId = await env.DB.prepare(
+        `SELECT id FROM records WHERE type IN ('qbankSpecialties','qbankTopics')
+         AND id IN (SELECT value FROM json_each(?)) AND qbank_id<>? LIMIT 1`,
+      ).bind(JSON.stringify([...specialtyIds, ...topicIds]), qbankId).first<{ id: string }>();
+      if (foreignId) return json({ error: 'A classification ID belongs to another QBank.' }, 409);
+
+      const validateNewUniqueness = <T extends { id: string; name: string }>(
+        next: T[],
+        current: T[],
+        parent: (item: T) => string,
+        label: string,
+      ) => {
+        const nextGroups = new Map<string, T[]>();
+        for (const item of next) {
+          const key = `${parent(item)}\u0000${normalizeClassificationName(item.name)}`;
+          nextGroups.set(key, [...(nextGroups.get(key) ?? []), item]);
+        }
+        const currentById = new Map(current.map((item) => [item.id, item]));
+        for (const group of nextGroups.values()) {
+          if (group.length < 2) continue;
+          const grandfathered = group.every((item) => {
+            const old = currentById.get(item.id);
+            return old && old.name === item.name && parent(old) === parent(item);
+          });
+          if (!grandfathered) return `${label} names must be unique in their parent. Choose Merge or Change name.`;
+        }
+        return '';
+      };
+      const duplicateError =
+        validateNewUniqueness(specialties, currentSpecialties, () => qbankId, 'Specialty') ||
+        validateNewUniqueness(topics, currentTopics, (item) => item.specialtyId, 'Topic');
+      if (duplicateError) return json({ error: duplicateError, code: 'DUPLICATE_CLASSIFICATION' }, 409);
+
+      const assignmentByQuestion = new Map<string, string>();
+      for (const assignment of assignments) {
+        if (!assignment || typeof assignment.questionId !== 'string' ||
+            typeof assignment.topicId !== 'string' || !topicIds.has(assignment.topicId) ||
+            assignmentByQuestion.has(assignment.questionId))
+          return json({ error: 'A question assignment is invalid or repeated.' }, 400);
+        assignmentByQuestion.set(assignment.questionId, assignment.topicId);
+      }
+      const questionRows = await env.DB.prepare(
+        "SELECT id,payload FROM records WHERE type='sharedQuestions' AND qbank_id=?",
+      ).bind(qbankId).all<{ id: string; payload: string }>();
+      const topicById = new Map(topics.map((item) => [item.id, item]));
+      const specialtyById = new Map(specialties.map((item) => [item.id, item]));
+      const assignmentValues: Array<{ questionId: string; topicId: string; topic: string; specialtyId: string; specialty: string }> = [];
+      for (const row of questionRows.results) {
+        const question = JSON.parse(row.payload) as Question;
+        let targetId = assignmentByQuestion.get(row.id) ?? question.topicId;
+        if (!targetId) {
+          targetId = topics.find((topic) => {
+            const specialty = specialtyById.get(topic.specialtyId);
+            return topic.name === question.topic && specialty?.name === question.specialty;
+          })?.id;
+        }
+        if (!targetId || !topicById.has(targetId))
+          return json({ error: `Question ${question.questionId ?? row.id} needs a destination before its classification can be removed.` }, 409);
+        if (assignmentByQuestion.has(row.id)) {
+          const topic = topicById.get(targetId)!;
+          const specialty = specialtyById.get(topic.specialtyId)!;
+          assignmentValues.push({ questionId: row.id, topicId: topic.id, topic: topic.name, specialtyId: specialty.id, specialty: specialty.name });
+        }
+      }
+      if ([...assignmentByQuestion.keys()].some((id) => !questionRows.results.some((row) => row.id === id)))
+        return json({ error: 'One or more selected questions no longer exist.' }, 409);
+
+      const now = new Date().toISOString();
+      const nextRevision = (baseRevision as number) + 1;
+      const stampedSpecialties = specialties.map((item, order) => ({ ...item, order, updatedAt: now }));
+      const stampedTopics = topics.map((item, order) => ({ ...item, order, updatedAt: now }));
+      try {
+        await env.DB.batch([
+          env.DB.prepare(`INSERT INTO qbank_classification_revisions(qbank_id,revision,updated_at) VALUES(?,?,?)
+            ON CONFLICT(qbank_id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at`)
+            .bind(qbankId, nextRevision, now),
+          env.DB.prepare(`DELETE FROM records WHERE qbank_id=? AND type='qbankTopics'
+            AND id NOT IN (SELECT json_extract(value,'$.id') FROM json_each(?))`)
+            .bind(qbankId, JSON.stringify(stampedTopics)),
+          env.DB.prepare(`DELETE FROM records WHERE qbank_id=? AND type='qbankSpecialties'
+            AND id NOT IN (SELECT json_extract(value,'$.id') FROM json_each(?))`)
+            .bind(qbankId, JSON.stringify(stampedSpecialties)),
+          env.DB.prepare(`INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at)
+            SELECT 'qbankSpecialties',json_extract(value,'$.id'),?,?,value,? FROM json_each(?) WHERE 1
+            ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,owner_id=excluded.owner_id,payload=excluded.payload,updated_at=excluded.updated_at`)
+            .bind(qbankId, user.uid, now, JSON.stringify(stampedSpecialties)),
+          env.DB.prepare(`INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at)
+            SELECT 'qbankTopics',json_extract(value,'$.id'),?,?,value,? FROM json_each(?) WHERE 1
+            ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,owner_id=excluded.owner_id,payload=excluded.payload,updated_at=excluded.updated_at`)
+            .bind(qbankId, user.uid, now, JSON.stringify(stampedTopics)),
+          env.DB.prepare(`UPDATE records SET payload=json_set(
+              payload,'$.topicId',(SELECT json_extract(value,'$.topicId') FROM json_each(?) WHERE json_extract(value,'$.questionId')=records.id),
+              '$.topic',(SELECT json_extract(value,'$.topic') FROM json_each(?) WHERE json_extract(value,'$.questionId')=records.id),
+              '$.specialtyId',(SELECT json_extract(value,'$.specialtyId') FROM json_each(?) WHERE json_extract(value,'$.questionId')=records.id),
+              '$.specialty',(SELECT json_extract(value,'$.specialty') FROM json_each(?) WHERE json_extract(value,'$.questionId')=records.id)
+            ),updated_at=? WHERE type='sharedQuestions' AND qbank_id=?
+              AND id IN (SELECT json_extract(value,'$.questionId') FROM json_each(?))`)
+            .bind(JSON.stringify(assignmentValues), JSON.stringify(assignmentValues), JSON.stringify(assignmentValues), JSON.stringify(assignmentValues), now, qbankId, JSON.stringify(assignmentValues)),
+          env.DB.prepare('INSERT INTO classification_operations(operation_id,user_id,qbank_id,revision,created_at) VALUES(?,?,?,?,?)')
+            .bind(operationId, user.uid, qbankId, nextRevision, now),
+          auditStatement(user, 'qbank_classification_saved', qbankId, { revision: baseRevision }, { revision: nextRevision, specialties: stampedSpecialties.length, topics: stampedTopics.length, assignments: assignmentValues.length }),
+        ]);
+      } catch (error) {
+        if (String(error).includes('CLASSIFICATION_CONFLICT')) {
+          const latestRows = await env.DB.prepare(
+            "SELECT type,payload FROM records WHERE qbank_id=? AND type IN ('qbankSpecialties','qbankTopics')",
+          ).bind(qbankId).all<{ type: string; payload: string }>();
+          const latestRevision = await env.DB.prepare(
+            'SELECT revision FROM qbank_classification_revisions WHERE qbank_id=?',
+          ).bind(qbankId).first<{ revision: number }>();
+          return json({
+            error: 'The classification structure changed on another device. Your draft was kept.',
+            code: 'CLASSIFICATION_CONFLICT',
+            revision: latestRevision?.revision ?? 0,
+            specialties: latestRows.results.filter((row) => row.type === 'qbankSpecialties').map((row) => JSON.parse(row.payload)),
+            topics: latestRows.results.filter((row) => row.type === 'qbankTopics').map((row) => JSON.parse(row.payload)),
+          }, 409);
+        }
+        throw error;
+      }
+      return json({ ok: true, revision: nextRevision, specialties: stampedSpecialties, topics: stampedTopics, assignments: assignmentValues });
+    }
     if (action === 'json-import-status' && request.method === 'GET') {
       const now = new Date().toISOString();
       const suspension = await env.DB.prepare(
@@ -331,6 +534,7 @@ export async function platformApi(request: Request, action: string) {
       };
       if (next.enabled && !next.content)
         return json({ error: 'Enter announcement content before enabling it.' }, 400);
+      if (JSON.stringify(next) === JSON.stringify(current)) return json({ ...next, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
       const now = new Date().toISOString();
       await env.DB.batch([
         env.DB.prepare(
@@ -443,10 +647,10 @@ export async function platformApi(request: Request, action: string) {
         }));
       }
       if (limits.canUseFlashcards && backup.flashcards) {
-        const stored = await env.DB.prepare('SELECT payload FROM app_states WHERE user_id=?').bind(user.uid).first<{ payload: string }>();
+        const stored = await env.DB.prepare('SELECT payload,revision FROM app_states WHERE user_id=?').bind(user.uid).first<{ payload: string; revision: number }>();
         const app = stored ? JSON.parse(stored.payload) as Record<string, unknown> : { version: 1 };
         const merged = { ...app, ...backup.flashcards };
-        await env.DB.prepare('INSERT INTO app_states(user_id,payload,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').bind(user.uid, JSON.stringify(merged), now).run();
+        await env.DB.prepare('INSERT INTO app_states(user_id,payload,updated_at,revision) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at,revision=app_states.revision+1').bind(user.uid, JSON.stringify(merged), now, (stored?.revision ?? -1) + 1).run();
       }
       await auditStatement(user, 'personal_backup_restored', user.uid, null, { records: records.length }).run();
       return json({ ok: true, restored: records.length });
@@ -477,6 +681,7 @@ export async function platformApi(request: Request, action: string) {
       };
       if (!validLink(next.termsUrl) || !validLink(next.privacyUrl))
         return json({ error: 'Use a secure HTTPS URL or an internal path beginning with /.' }, 400);
+      if (JSON.stringify(next) === JSON.stringify(current)) return json({ ...next, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
       const now = new Date().toISOString();
       await env.DB.batch([
         env.DB.prepare(
@@ -604,9 +809,12 @@ export async function platformApi(request: Request, action: string) {
         if (!reward || !/^[a-zA-Z0-9-]{20,80}$/.test(requestId))
           return json({ error: 'Invalid reward request.' }, 400);
         const passId = `reward-${requestId}`;
-        const prior = await env.DB.prepare('SELECT * FROM reward_passes WHERE id=? AND user_id=?')
+        const prior = await env.DB.prepare('SELECT id,plan,duration,duration_unit,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE id=? AND user_id=?')
           .bind(passId, user.uid).first();
-        if (prior) return json({ pass: prior, duplicate: true });
+        if (prior) {
+          const account = await env.DB.prepare('SELECT credits_balance FROM contribution_accounts WHERE user_id=?').bind(user.uid).first<{ credits_balance: number }>();
+          return json({ pass: prior, creditsBalance: account?.credits_balance ?? 0, duplicate: true });
+        }
         const now = new Date().toISOString();
         try {
           await env.DB.batch([
@@ -624,8 +832,11 @@ export async function platformApi(request: Request, action: string) {
             return json({ error: 'You do not have enough credits for this reward.' }, 409);
           throw error;
         }
-        const pass = await env.DB.prepare('SELECT * FROM reward_passes WHERE id=?').bind(passId).first();
-        return json({ pass }, 201);
+        const [passResult, accountResult] = await env.DB.batch([
+          env.DB.prepare('SELECT id,plan,duration,duration_unit,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE id=?').bind(passId),
+          env.DB.prepare('SELECT credits_balance FROM contribution_accounts WHERE user_id=?').bind(user.uid),
+        ]);
+        return json({ pass: passResult.results[0], creditsBalance: Number((accountResult.results[0] as { credits_balance?: number } | undefined)?.credits_balance ?? 0) }, 201);
       }
       if (operation === 'activate') {
         const passId = text('passId');
@@ -647,7 +858,13 @@ export async function platformApi(request: Request, action: string) {
           env.DB.prepare("UPDATE reward_passes SET status='expired' WHERE user_id=? AND status='active' AND expires_at<=?").bind(user.uid, now),
         ]);
         const entitlement = await getEffectiveEntitlement(user);
-        return json({ activated: true, expiresAt, effectivePlan: entitlement.effectivePlan });
+        return json({
+          activated: true,
+          expiresAt,
+          effectivePlan: entitlement.effectivePlan,
+          user: await applyEffectiveEntitlement(user),
+          pass: { ...pass, status: 'active', activated_at: now, expires_at: expiresAt },
+        });
       }
       return json({ error: 'Invalid reward operation.' }, 400);
     }
@@ -693,7 +910,7 @@ export async function platformApi(request: Request, action: string) {
           if (String(error).includes('UNIQUE constraint')) return json({ ok: true, duplicate: true });
           throw error;
         }
-        return json({ ok: true });
+        return json({ ok: true, accountDelta: amount, transaction: { id, amount, reason, created_at: now, created_by: user.uid } });
       }
       if (operation === 'grant-reward') {
         const plan = text('plan');
@@ -707,7 +924,7 @@ export async function platformApi(request: Request, action: string) {
             .bind(id, targetUserId, plan, duration, durationUnit, now, JSON.stringify({ reason, grantedBy: user.uid })),
           auditStatement(user, 'reward_granted', targetUserId, null, { passId: id, plan, duration, durationUnit, reason }),
         ]);
-        return json({ ok: true, passId: id });
+        return json({ ok: true, pass: { id, plan, duration, duration_unit: durationUnit, status: 'available', created_at: now, expires_at: null } });
       }
       if (operation === 'suspend-json') {
         const days = Number(input.days ?? ABUSE_LIMITS.jsonImportSuspensionDays);
@@ -720,7 +937,7 @@ export async function platformApi(request: Request, action: string) {
             .bind(id, targetUserId, reason, now, endsAt, user.uid),
           auditStatement(user, 'json_import_suspended', targetUserId, null, { id, reason, endsAt }),
         ]);
-        return json({ ok: true, endsAt });
+        return json({ ok: true, suspension: { id, reason, starts_at: now, ends_at: endsAt, removed_at: null } });
       }
       if (operation === 'remove-json-suspension') {
         await env.DB.batch([
@@ -728,7 +945,7 @@ export async function platformApi(request: Request, action: string) {
             .bind(now, user.uid, targetUserId, now),
           auditStatement(user, 'json_import_suspension_removed', targetUserId, null, { reason }),
         ]);
-        return json({ ok: true });
+        return json({ ok: true, removedAt: now });
       }
       return json({ error: 'Invalid admin operation.' }, 400);
     }
@@ -804,6 +1021,8 @@ export async function platformApi(request: Request, action: string) {
 
       const now = new Date().toISOString();
       const nextNumbers = new Map<string, number>();
+      const updatedProposals: QuestionProposal[] = [];
+      const updatedQuestions: Question[] = [];
       if (status === 'approved') {
         for (const bankId of new Set(proposalsToFinalize.map(proposal => proposal.qbankId))) {
           const maximum = await env.DB.prepare("SELECT coalesce(max(CAST(json_extract(payload,'$.number') AS INTEGER)),0) AS value FROM records WHERE type='sharedQuestions' AND qbank_id=?")
@@ -842,6 +1061,7 @@ export async function platformApi(request: Request, action: string) {
           reviewedByName: user.displayName,
           reviewedAt: now,
         };
+        updatedProposals.push(reviewedProposal);
         statements.push(
           env.DB.prepare(
             'INSERT INTO contribution_reviews(id,proposal_id,author_id,reviewer_id,decision,high_risk,created_at,metadata) VALUES(?,?,?,?,?,?,?,?)',
@@ -866,7 +1086,9 @@ export async function platformApi(request: Request, action: string) {
             questionId: displayId,
             number,
             qbankId: proposal.qbankId,
+            specialtyId: proposal.payload.specialtyId ?? existing?.specialtyId,
             specialty: proposal.payload.specialty,
+            topicId: proposal.payload.topicId ?? existing?.topicId,
             topic: proposal.payload.topic,
             stem: proposal.payload.stem,
             options: proposal.payload.options,
@@ -885,6 +1107,7 @@ export async function platformApi(request: Request, action: string) {
             reviewedByName: user.displayName,
             reviewedAt: now,
           };
+          updatedQuestions.push(question);
           statements.push(env.DB.prepare("INSERT INTO records(type,id,qbank_id,payload,updated_at) VALUES('sharedQuestions',?,?,?,?) ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,payload=excluded.payload,updated_at=excluded.updated_at")
             .bind(question.id, question.qbankId, JSON.stringify(question), now));
           const reward = contributionReward(proposal);
@@ -917,6 +1140,10 @@ export async function platformApi(request: Request, action: string) {
         ok: true,
         reviewed: proposalsToFinalize.length,
         awaitingSecondReview: awaitingSecond.size,
+        updatedProposals,
+        updatedQuestions,
+        queueDelta: -proposalsToFinalize.length,
+        reviewerCompletedDelta: proposalsToFinalize.length,
       });
     }
     if (action === 'review-history') {
@@ -956,7 +1183,7 @@ export async function platformApi(request: Request, action: string) {
         .first<{ status: string; user_id: string }>();
       if (prior)
         return prior.user_id === user.uid && prior.status === 'success'
-          ? json({ upgraded: true })
+          ? json({ upgraded: true, user: await applyEffectiveEntitlement(user) })
           : json({ error: 'Please retry with a new request.' }, 409);
       const requestedPlan = text('plan');
       const plan = isPlanId(requestedPlan) && requestedPlan !== 'free' ? requestedPlan : 'pro';
@@ -1031,7 +1258,7 @@ export async function platformApi(request: Request, action: string) {
             409,
           );
         }
-        return json({ upgraded: true });
+        return json({ upgraded: true, user: await applyEffectiveEntitlement(user) });
       }
       if (price.final === 0)
         return json(
@@ -1069,6 +1296,8 @@ export async function platformApi(request: Request, action: string) {
         const old = await env.DB.prepare(
           'SELECT price FROM subscription_settings WHERE id=1',
         ).first();
+        if (Number((old as { price?: number } | null)?.price) === price)
+          return json({ ok: true, unchanged: true, price }, 200, { 'x-qraft-unchanged': '1' });
         await env.DB.batch([
           env.DB.prepare(
             'UPDATE subscription_settings SET price=? WHERE id=1',
@@ -1077,7 +1306,7 @@ export async function platformApi(request: Request, action: string) {
             price,
           }),
         ]);
-        return json({ ok: true });
+        return json({ ok: true, price });
       }
       const id = text('id') || crypto.randomUUID();
       const old = await env.DB.prepare(
@@ -1086,11 +1315,12 @@ export async function platformApi(request: Request, action: string) {
         .bind(id)
         .first<Discount>();
       if (request.method === 'DELETE') {
+        if (!old) return json({ ok: true, unchanged: true, deletedId: id }, 200, { 'x-qraft-unchanged': '1' });
         await env.DB.batch([
           env.DB.prepare('DELETE FROM discount_codes WHERE id=?').bind(id),
           auditStatement(user, 'discount_deleted', id, old, null),
         ]);
-        return json({ ok: true });
+        return json({ ok: true, deletedId: id });
       }
       const code = text('code').toUpperCase(),
         kind = text('kind'),
@@ -1134,6 +1364,12 @@ export async function platformApi(request: Request, action: string) {
         per,
         allowedPlans,
       };
+      const unchanged = Boolean(old &&
+        old.code === code && old.kind === kind && old.amount === amount && old.enabled === next.enabled &&
+        old.starts_at === starts && old.expires_at === expires && old.max_uses === max && old.per_user === per &&
+        JSON.stringify(JSON.parse(old.allowed_plans || '[]')) === JSON.stringify(allowedPlans));
+      if (unchanged) return json({ ok: true, unchanged: true, code: old }, 200, { 'x-qraft-unchanged': '1' });
+      const updatedAt = new Date().toISOString();
       await env.DB.batch([
         env.DB.prepare(
           'INSERT INTO discount_codes(id,code,kind,amount,enabled,starts_at,expires_at,max_uses,per_user,updated_at,allowed_plans) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET code=excluded.code,kind=excluded.kind,amount=excluded.amount,enabled=excluded.enabled,starts_at=excluded.starts_at,expires_at=excluded.expires_at,max_uses=excluded.max_uses,per_user=excluded.per_user,updated_at=excluded.updated_at,allowed_plans=excluded.allowed_plans',
@@ -1147,7 +1383,7 @@ export async function platformApi(request: Request, action: string) {
           expires,
           max,
           per,
-          new Date().toISOString(),
+          updatedAt,
           JSON.stringify(allowedPlans),
         ),
         auditStatement(
@@ -1158,11 +1394,18 @@ export async function platformApi(request: Request, action: string) {
           next,
         ),
       ]);
-      return json({ ok: true });
+      return json({
+        ok: true,
+        code: {
+          id, code, kind, amount, enabled: next.enabled, starts_at: starts,
+          expires_at: expires, max_uses: max, per_user: per,
+          uses: old?.uses ?? 0, updated_at: updatedAt,
+          allowed_plans: JSON.stringify(allowedPlans),
+        },
+      });
     }
     if (action === 'subscriptions') {
       if (!root) return json({ error: 'Superadmin MFA required.' }, 403);
-      await expireSubscriptions();
       if (request.method === 'GET') return json(await listAdminSubscribers(url));
       if (!['POST', 'PUT'].includes(request.method)) return json({ error: 'Method not allowed.' }, 405);
       const member = await profileById(text('userId'));
@@ -1183,13 +1426,16 @@ export async function platformApi(request: Request, action: string) {
         const expiresAt = requestedEnd ? new Date(requestedEnd).toISOString() : null;
         const reason = text('reason').slice(0, 500);
         const previous = await env.DB.prepare('SELECT * FROM account_plan_overrides WHERE user_id=?').bind(member.uid).first();
+        const priorOverride = previous as { plan?: string; expires_at?: string | null; reason?: string } | null;
+        if (priorOverride?.plan === plan && priorOverride.expires_at === expiresAt && (priorOverride.reason ?? '') === reason)
+          return json({ ok: true, unchanged: true, ...(await getEffectiveEntitlement(profile)), override: { plan, expires_at: expiresAt, reason } }, 200, { 'x-qraft-unchanged': '1' });
         await env.DB.batch([
           env.DB.prepare(`INSERT INTO account_plan_overrides(user_id,plan,expires_at,reason,updated_by,updated_at) VALUES(?,?,?,?,?,?)
             ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan,expires_at=excluded.expires_at,reason=excluded.reason,updated_by=excluded.updated_by,updated_at=excluded.updated_at`)
             .bind(member.uid, plan, expiresAt, reason, user.uid, now),
           auditStatement(user, 'subscription_plan_overridden', member.uid, previous, { plan, expires_at: expiresAt, reason, previousSubscription: old }),
         ]);
-        return json({ ok: true, ...(await getEffectiveEntitlement(profile)) });
+        return json({ ok: true, ...(await getEffectiveEntitlement(profile)), override: { plan, expires_at: expiresAt, reason } });
       }
       const cancel = text('operation') === 'cancel';
       const requestedPlan = text('plan');
@@ -1202,6 +1448,13 @@ export async function platformApi(request: Request, action: string) {
       if (!Number.isInteger(paid) || paid < 0)
         throw new Error('Invalid paid amount.');
       const status = cancel ? 'cancelled' : 'manually_activated';
+      const previousSubscription = old as { status?: string; expires_at?: string | null; paid?: number; discount_code?: string | null; plan?: string } | null;
+      if (cancel && previousSubscription?.status === 'cancelled')
+        return json({ ok: true, unchanged: true, ...(await getEffectiveEntitlement(profile)), subscription: previousSubscription }, 200, { 'x-qraft-unchanged': '1' });
+      if (!cancel && previousSubscription?.status === status && previousSubscription.expires_at === end &&
+        previousSubscription.paid === paid && previousSubscription.plan === subscriptionPlan &&
+        (previousSubscription.discount_code ?? '') === text('code'))
+        return json({ ok: true, unchanged: true, ...(await getEffectiveEntitlement(profile)), subscription: previousSubscription }, 200, { 'x-qraft-unchanged': '1' });
       const discounted =
         !cancel && text('code')
           ? await quote(
@@ -1286,7 +1539,21 @@ export async function platformApi(request: Request, action: string) {
           { status, expires_at: end, paid, plan: subscriptionPlan },
         ),
       ]);
-      return json({ ok: true, ...(await getEffectiveEntitlement(profile)) });
+      return json({
+        ok: true,
+        ...(await getEffectiveEntitlement(profile)),
+        subscription: {
+          status,
+          starts_at: previousSubscription?.status === 'active' || previousSubscription?.status === 'manually_activated'
+            ? (old?.starts_at as string | null) ?? now
+            : now,
+          expires_at: cancel ? now : end,
+          method: 'manual',
+          discount_code: text('code') || previousSubscription?.discount_code || null,
+          paid,
+          plan: subscriptionPlan,
+        },
+      });
     }
     if (action === 'question') {
       const number = (url.searchParams.get('id') || text('id'))
@@ -1486,6 +1753,48 @@ export async function platformApi(request: Request, action: string) {
           { error: 'Your submission queue is full. Please wait until some questions are reviewed before importing more.' },
           403,
         );
+      const classificationRows = await env.DB.prepare(
+        "SELECT type,payload FROM records WHERE qbank_id=? AND type IN ('qbankSpecialties','qbankTopics')",
+      ).bind(bank.id).all<{ type: string; payload: string }>();
+      const importSpecialties = classificationRows.results
+        .filter((row) => row.type === 'qbankSpecialties')
+        .map((row) => JSON.parse(row.payload) as QBankSpecialty);
+      const importTopics = classificationRows.results
+        .filter((row) => row.type === 'qbankTopics')
+        .map((row) => JSON.parse(row.payload) as QBankTopic);
+      const createdSpecialties: QBankSpecialty[] = [];
+      const createdTopics: QBankTopic[] = [];
+      for (const item of accepted) {
+        const specialtyName = (item.payload.specialty.trim().replace(/\s+/g, ' ') || 'General').slice(0, 120);
+        let specialty = [...importSpecialties, ...createdSpecialties].find((candidate) => candidate.name === specialtyName)
+          ?? [...importSpecialties, ...createdSpecialties].find((candidate) => normalizeClassificationName(candidate.name) === normalizeClassificationName(specialtyName));
+        if (!specialty) {
+          specialty = {
+            id: crypto.randomUUID(), qbankId: bank.id, name: specialtyName,
+            order: importSpecialties.length + createdSpecialties.length,
+            createdAt: now, updatedAt: now,
+          };
+          createdSpecialties.push(specialty);
+        }
+        const topicName = (item.payload.topic.trim().replace(/\s+/g, ' ') || 'General').slice(0, 120);
+        let topic = [...importTopics, ...createdTopics].find((candidate) => candidate.specialtyId === specialty.id && candidate.name === topicName)
+          ?? [...importTopics, ...createdTopics].find((candidate) => candidate.specialtyId === specialty.id && normalizeClassificationName(candidate.name) === normalizeClassificationName(topicName));
+        if (!topic) {
+          topic = {
+            id: crypto.randomUUID(), qbankId: bank.id, specialtyId: specialty.id,
+            name: topicName, order: importTopics.length + createdTopics.length,
+            createdAt: now, updatedAt: now,
+          };
+          createdTopics.push(topic);
+        }
+        item.payload = {
+          ...item.payload,
+          specialtyId: specialty.id,
+          specialty: specialty.name,
+          topicId: topic.id,
+          topic: topic.name,
+        };
+      }
       const proposals = accepted.map(({ payload, duplicateInfo }, index) => ({
         id: `${batchId}-${index}`,
         qbankId: bank.id,
@@ -1509,6 +1818,8 @@ export async function platformApi(request: Request, action: string) {
       }));
       const result = {
         proposals,
+        specialties: createdSpecialties,
+        topics: createdTopics,
         total: proposals.length + report.skipped.length + duplicateSkips.length,
         successful: proposals.length,
         failed: report.skipped.length + duplicateSkips.length,
@@ -1526,6 +1837,16 @@ export async function platformApi(request: Request, action: string) {
           env.DB.prepare(
             "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'questionProposals',json_extract(value,'$.id'),?,?,value,? FROM json_each(?)",
           ).bind(bank.id, user.uid, now, JSON.stringify(proposals)),
+          env.DB.prepare(
+            "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'qbankSpecialties',json_extract(value,'$.id'),?,?,value,? FROM json_each(?) WHERE 1 ON CONFLICT(type,id) DO NOTHING",
+          ).bind(bank.id, user.uid, now, JSON.stringify(createdSpecialties)),
+          env.DB.prepare(
+            "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'qbankTopics',json_extract(value,'$.id'),?,?,value,? FROM json_each(?) WHERE 1 ON CONFLICT(type,id) DO NOTHING",
+          ).bind(bank.id, user.uid, now, JSON.stringify(createdTopics)),
+          env.DB.prepare(`INSERT INTO qbank_classification_revisions(qbank_id,revision,updated_at)
+            SELECT ?,1,? WHERE ?>0
+            ON CONFLICT(qbank_id) DO UPDATE SET revision=qbank_classification_revisions.revision+1,updated_at=excluded.updated_at WHERE ?>0`)
+            .bind(bank.id, now, createdSpecialties.length + createdTopics.length, createdSpecialties.length + createdTopics.length),
           auditStatement(user, 'questions_json_imported', bank.id, null, {
             batchId, fileName: uploadedFileName, fileHash, count: proposals.length, skipped: report.skipped.length,
           }),
@@ -1538,6 +1859,15 @@ export async function platformApi(request: Request, action: string) {
         if (String(error).includes('UNIQUE constraint failed'))
           return json({ error: 'هذا الملف تم رفعه مسبقًا. لا تحتاج إلى رفعه مرة أخرى.' }, 409);
         throw error;
+      }
+      if (createdSpecialties.length || createdTopics.length) {
+        const classificationRevision = await env.DB.prepare(
+          'SELECT revision FROM qbank_classification_revisions WHERE qbank_id=?',
+        ).bind(bank.id).first<{ revision: number }>();
+        const finalResult = { ...result, classificationRevision: classificationRevision?.revision ?? 0 };
+        await env.DB.prepare('UPDATE import_batches SET result=? WHERE id=?')
+          .bind(JSON.stringify(finalResult), batchId).run();
+        return json(finalResult);
       }
       return json(result);
     }

@@ -1,7 +1,10 @@
 import application from 'vinext/server/fetch-handler';
-import { connectRealtime } from './lib/realtime-server';
+import { connectRealtime, publishChanges } from './lib/realtime-server';
 import { createQuestionBackup } from './lib/question-backup';
 import { cleanDeletedAccountMedia } from './lib/account-deletion-server';
+import { expireSubscriptions } from './lib/platform-server';
+import { cleanStateSyncOperations } from './lib/cloudflare-server';
+import { cleanPreformedTestOperations } from './lib/preformed-test-server';
 
 const worker = {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext) {
@@ -22,6 +25,13 @@ const worker = {
   ) {
     ctx.waitUntil(createQuestionBackup(env, controller.scheduledTime));
     ctx.waitUntil(cleanDeletedAccountMedia());
+    ctx.waitUntil(cleanStateSyncOperations());
+    ctx.waitUntil(cleanPreformedTestOperations());
+    ctx.waitUntil((async () => {
+      const userIds = await expireSubscriptions();
+      if (userIds.length)
+        await publishChanges(['admin', 'access', ...userIds.map(userId => `user:${userId}`)], ['account', 'subscriptions']);
+    })());
   },
 };
 export default worker;

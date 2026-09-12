@@ -2,7 +2,7 @@
 /* oxlint-disable next/no-img-element */
 import { useEffect, useState } from 'react';
 import { MessageSquareText, ArrowLeft } from 'lucide-react';
-import { api } from '@/lib/api-client';
+import { api, setApiCache } from '@/lib/api-client';
 import { subscribeLive } from '@/lib/realtime-client';
 import { QuestionId } from '@/components/question-tools';
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from '@/components/ui/alert-dialog';
@@ -101,7 +101,7 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
     setBusy(true);
     setError('');
     try {
-      await api('/contact', {
+      const result = await api<{ ticket: Ticket; message: Message }>('/contact', {
         method: 'POST',
         body: JSON.stringify({
           id: selected?.id,
@@ -116,7 +116,23 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
       setQuestion('');
       setRequestId(crypto.randomUUID());
       setNotice('تم إرسال البلاغ / Message sent successfully.');
-      setRevision((r) => r + 1);
+      if (!result.ticket || !result.message) return;
+      if (selected) {
+        const updatedTicket = { ...selected, updated_at: result.ticket.updated_at };
+        const nextMessages = [...messages.filter((item) => item.id !== result.message.id), result.message];
+        setSelected(updatedTicket);
+        setMessages(nextMessages);
+        setApiCache(`/contact?id=${selected.id}&offset=${messageOffset}`, {
+          ticket: updatedTicket,
+          messages: nextMessages,
+        });
+      } else {
+        setTickets((current) => {
+          const next = [result.ticket, ...current.filter((item) => item.id !== result.ticket.id)];
+          setApiCache(`/contact?search=${encodeURIComponent(search)}&status=${filter}&offset=${offset}`, { tickets: next });
+          return next;
+        });
+      }
     } catch (e) {
       setError(
         e instanceof Error
@@ -128,9 +144,10 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
     }
   }
   async function status(value: string) {
+    if (!selected || value === selected.status) return;
     setBusy(true);
     try {
-      await api('/contact', {
+      const result = await api<{ ticket: Ticket }>('/contact', {
         method: 'POST',
         body: JSON.stringify({
           id: selected?.id,
@@ -138,7 +155,10 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
           status: value,
         }),
       });
-      setSelected((s) => (s ? { ...s, status: value } : s));
+      const updatedTicket = { ...selected, ...result.ticket };
+      setSelected(updatedTicket);
+      setTickets((current) => current.map((item) => item.id === updatedTicket.id ? { ...item, ...updatedTicket } : item));
+      setApiCache(`/contact?id=${selected.id}&offset=${messageOffset}`, { ticket: updatedTicket, messages });
       setNotice('Status updated.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to update status.');
@@ -161,7 +181,9 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
       setRequestId(crypto.randomUUID());
       setConfirmDelete(false);
       setNotice('تم حذف البلاغ / Ticket deleted.');
-      setRevision((r) => r + 1);
+      setApiCache(`/contact?search=${encodeURIComponent(search)}&status=${filter}&offset=0`, {
+        tickets: tickets.filter((item) => item.id !== selected.id),
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to delete ticket.');
     } finally {

@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react';
 import { subscribeLive } from '@/lib/realtime-client';
 import { Check, Crown, Eye, X, Search, Ticket, Users, ShieldCheck, Pencil, Plus, ChevronLeft, ChevronRight, History, SlidersHorizontal } from 'lucide-react';
-import { api } from '@/lib/api-client';
-import { observeCloudflareUser } from '@/lib/application-services';
+import { api, setApiCache } from '@/lib/api-client';
+import { setAuthenticatedUserCache } from '@/lib/application-services';
 import type { AppUser } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { PLAN_LIMITS, PLAN_ORDER, type PlanId } from '@/lib/plan-config';
@@ -59,16 +59,18 @@ export function Subscribe({
     let active = true;
     const stop = subscribeLive(() => {
       if (busy) return;
-      void api<Quote>('/platform/quote', { method: 'POST', body: JSON.stringify({ code: price?.code || '', plan: selectedPlan }) })
+      void api<Quote>('/platform/quote', { method: 'POST', resourceQuery: true, cacheScope: user.uid, body: JSON.stringify({ code: price?.code || '', plan: selectedPlan }) })
         .then(quote => { if (active) setPrice(quote); })
         .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Unable to refresh price.'); });
     }, ['pricing']);
     return () => { active = false; stop(); };
-  }, [price?.code, busy, selectedPlan]);
+  }, [price?.code, busy, selectedPlan, user.uid]);
   useEffect(() => {
     let live = true;
     api<Quote>('/platform/quote', {
       method: 'POST',
+      resourceQuery: true,
+      cacheScope: user.uid,
       body: JSON.stringify({ code: '', plan: selectedPlan }),
     })
       .then((q) => {
@@ -80,7 +82,7 @@ export function Subscribe({
     return () => {
       live = false;
     };
-  }, [selectedPlan]);
+  }, [selectedPlan, user.uid]);
   async function apply() {
     setBusy(true);
     setError('');
@@ -88,7 +90,9 @@ export function Subscribe({
       setPrice(
         await api<Quote>('/platform/quote', {
           method: 'POST',
-          body: JSON.stringify({ code, plan: selectedPlan }),
+          resourceQuery: true,
+          cacheScope: user.uid,
+          body: JSON.stringify({ code: code.trim().toUpperCase(), plan: selectedPlan }),
         }),
       );
       setRequestId(crypto.randomUUID());
@@ -102,17 +106,16 @@ export function Subscribe({
     setBusy(true);
     setError('');
     try {
-      const result = await api<{ upgraded?: boolean; url?: string }>(
+      const result = await api<{ upgraded?: boolean; url?: string; user?: AppUser }>(
         '/platform/checkout',
         {
           method: 'POST',
           body: JSON.stringify({ code: price?.code || '', requestId, plan: selectedPlan }),
         },
       );
-      if (result.upgraded) {
-        await observeCloudflareUser((u) => {
-          if (u) onUser(u);
-        });
+      if (result.upgraded && result.user) {
+        setAuthenticatedUserCache(result.user);
+        onUser(result.user);
         setSuccess(`تم تفعيل ${PLAN_LIMITS[selectedPlan].name} لمدة سنة كاملة`);
       } else if (result.url) window.location.assign(result.url);
     } catch (e) {
@@ -386,6 +389,18 @@ const emptyCode: Code = {
   uses: 0,
   allowed_plans: '["lite","pro","unlimited"]',
 };
+const codeSignature = (code: Code) => JSON.stringify({
+  id: code.id,
+  code: code.code.trim().toUpperCase(),
+  kind: code.kind,
+  amount: code.amount,
+  enabled: Boolean(code.enabled),
+  starts_at: code.starts_at,
+  expires_at: code.expires_at,
+  max_uses: code.max_uses,
+  per_user: code.per_user,
+  allowedPlans: [...(JSON.parse(code.allowed_plans || '[]') as string[])].sort(),
+});
 export function SubscriptionAdmin({
   section,
 }: {
@@ -396,6 +411,7 @@ export function SubscriptionAdmin({
     [subscriptions, setSubscriptions] = useState<Subscription[]>([]),
     [events, setEvents] = useState<Usage[]>([]),
     [draft, setDraft] = useState<Code>(emptyCode),
+    [originalCode, setOriginalCode] = useState<Code | null>(null),
     [editing, setEditing] = useState(false),
     [selected, setSelected] = useState<Subscription>(),
     [end, setEnd] = useState(''),
@@ -418,6 +434,9 @@ export function SubscriptionAdmin({
     [message, setMessage] = useState(''),
     [busy, setBusy] = useState(false),
     [revision, setRevision] = useState(0);
+  const queryPath = section === 'discounts'
+    ? `/platform/discounts?search=${encodeURIComponent(search.trim())}&status=${status}&offset=${offset}&id=${encodeURIComponent(usageCode)}&usageOffset=${usageOffset}`
+    : `/platform/subscriptions?search=${encodeURIComponent(search.trim())}&status=${status}&sort=${sort}&offset=${offset}`;
   useEffect(
     () =>
       subscribeLive(
@@ -436,9 +455,7 @@ export function SubscriptionAdmin({
         events?: Usage[];
         price?: number;
         summary?: Record<string, number>;
-      }>(
-        `/platform/${section}?search=${encodeURIComponent(search)}&status=${status}&sort=${sort}&offset=${offset}&id=${encodeURIComponent(usageCode)}&usageOffset=${usageOffset}`,
-      )
+      }>(queryPath)
         .then((r) => {
           if (!live) return;
           setSummary(r.summary ?? {});
@@ -459,25 +476,57 @@ export function SubscriptionAdmin({
       live = false;
       clearTimeout(timer);
     };
-  }, [section, search, status, sort, offset, usageCode, usageOffset, revision]);
+  }, [queryPath, revision]);
   async function save(body: unknown, method = 'POST') {
     setSaving(true);
     setError('');
     setMessage('');
     try {
-      const result = await api<{ effectivePlan?: PlanId }>(`/platform/${section}`, { method, body: JSON.stringify(body) });
+      const result = await api<{
+        effectivePlan?: PlanId;
+        code?: Code;
+        deletedId?: string;
+        price?: number;
+        subscription?: Partial<Subscription>;
+        override?: { plan: PlanId; expires_at: string | null; reason: string };
+        unchanged?: boolean;
+      }>(`/platform/${section}`, { method, body: JSON.stringify(body) });
       const override = body && typeof body === 'object' && 'operation' in body && body.operation === 'override';
       setMessage(override ? `${PLAN_LIMITS[result.effectivePlan!].name} access is active now.` : 'Changes saved successfully.');
       setEditing(false);
+      setOriginalCode(null);
       setSelected(undefined);
-      setRevision((r) => r + 1);
+      let nextCodes = codes;
+      let nextSubscriptions = subscriptions;
+      let nextPrice = price;
+      if (section === 'discounts') {
+        if (result.deletedId) nextCodes = codes.filter(code => code.id !== result.deletedId);
+        else if (result.code) nextCodes = [result.code, ...codes.filter(code => code.id !== result.code!.id)];
+        if (result.price !== undefined) nextPrice = String(result.price / 100);
+        setCodes(nextCodes);
+        setPrice(nextPrice);
+      }
       if (section === 'subscriptions' && body && typeof body === 'object' && 'userId' in body) {
         const userId = String(body.userId);
         setPlanDrafts(current => { const next = { ...current }; delete next[userId]; return next; });
-        if (result.effectivePlan) setSubscriptions(current => current.map(row => row.uid === userId ? { ...row, tier: result.effectivePlan!, override_plan: override ? result.effectivePlan! : row.override_plan } : row));
+        if (result.effectivePlan) {
+          nextSubscriptions = subscriptions.map(row => row.uid === userId ? {
+            ...row,
+            ...result.subscription,
+            tier: result.effectivePlan!,
+            override_plan: override ? result.override?.plan ?? result.effectivePlan! : row.override_plan,
+            override_expires_at: override ? result.override?.expires_at ?? null : row.override_expires_at,
+            override_reason: override ? result.override?.reason ?? '' : row.override_reason,
+          } : row);
+          setSubscriptions(nextSubscriptions);
+        }
         // Consumers re-fetch the authoritative session; never guess access from a billing action.
         window.dispatchEvent(new CustomEvent('qraft-account-updated', { detail: { userId, ...(result.effectivePlan ? { tier: result.effectivePlan } : {}) } }));
       }
+      if (!search && !status && offset === 0 && !usageCode && usageOffset === 0)
+        setApiCache(queryPath, section === 'discounts'
+          ? { codes: nextCodes, events, summary, price: Math.round(Number(nextPrice) * 100) }
+          : { subscriptions: nextSubscriptions, summary });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to save.');
     } finally {
@@ -502,7 +551,7 @@ export function SubscriptionAdmin({
         {(section === 'discounts' ? [{ label: 'Matching codes', value: summary.total, icon: Ticket }, { label: 'Enabled codes', value: summary.enabled, icon: Check }, { label: 'Total redemptions', value: summary.uses, icon: History }] : [{ label: 'Matching accounts', value: summary.total, icon: Users }, { label: 'Paid-plan access', value: summary.paid, icon: Crown }, { label: 'Admin assignments', value: summary.overrides, icon: ShieldCheck }]).map(item => <div key={item.label}><item.icon className="size-5" /><span>{item.label}</span><strong>{busy ? '…' : (item.value ?? 0).toLocaleString()}</strong></div>)}
       </div>
       <div className="q-control-table-panel">
-        <div className="q-control-panel-heading"><div><h2>{section === 'discounts' ? 'Discount codes' : 'Subscribers'}</h2><p>{section === 'discounts' ? 'Promotion rules, availability and usage in one place.' : 'Review effective access and assign any plan immediately.'}</p></div>{section === 'discounts' && <button className="q-button q-button-primary" onClick={() => { setDraft(emptyCode); setEditing(true); setError(''); }}><Plus className="size-4" />New code</button>}</div>
+        <div className="q-control-panel-heading"><div><h2>{section === 'discounts' ? 'Discount codes' : 'Subscribers'}</h2><p>{section === 'discounts' ? 'Promotion rules, availability and usage in one place.' : 'Review effective access and assign any plan immediately.'}</p></div>{section === 'discounts' && <button className="q-button q-button-primary" onClick={() => { setDraft(emptyCode); setOriginalCode(null); setEditing(true); setError(''); }}><Plus className="size-4" />New code</button>}</div>
         <div className="q-control-toolbar">
           <label className="q-control-search"><Search className="size-4" /><input aria-label={section === 'discounts' ? 'Search discount codes' : 'Search subscribers'} placeholder={section === 'discounts' ? 'Search by code…' : 'Search name, email or user ID…'} value={search} onChange={e => { setSearch(e.target.value); setOffset(0); }} /></label>
           <select aria-label={section === 'discounts' ? 'Discount status' : 'Subscription filter'} value={status} onChange={e => { setStatus(e.target.value); setOffset(0); }}>
@@ -520,7 +569,7 @@ export function SubscriptionAdmin({
               <td data-label="Status"><span className="q-control-badge" data-tone={codeStatus(c) === 'Active' ? 'success' : 'neutral'}>{codeStatus(c)}</span></td>
               <td data-label="Usage"><strong>{c.uses.toLocaleString()} <span className="text-muted-foreground">/ {c.max_uses ?? '∞'}</span></strong><small>redemptions</small></td>
               <td data-label="Validity"><span>{c.starts_at ? date(c.starts_at) : 'Starts immediately'}</span><small>{c.expires_at ? `Until ${date(c.expires_at)}` : 'No expiration'}</small></td>
-              <td data-label="Actions"><div className="q-control-row-actions"><button aria-label={`Edit ${c.code}`} onClick={() => { setDraft(c); setEditing(true); setError(''); }}><Pencil className="size-4" />Edit</button><button aria-label={`Usage history for ${c.code}`} onClick={() => { setUsageCode(c.id); setUsageOffset(0); }}><History className="size-4" />History</button><details><summary aria-label={`More actions for ${c.code}`}><SlidersHorizontal className="size-4" /></summary><div><button disabled={saving} onClick={() => void save({ ...c, enabled: !c.enabled })}>{c.enabled ? 'Disable code' : 'Enable code'}</button><button disabled={saving} className="text-destructive" onClick={() => { if(window.confirm(`Delete code ${c.code}? Usage history will be retained.`)) void save({id:c.id},'DELETE'); }}>Delete code</button></div></details></div></td>
+              <td data-label="Actions"><div className="q-control-row-actions"><button aria-label={`Edit ${c.code}`} onClick={() => { setDraft(c); setOriginalCode(c); setEditing(true); setError(''); }}><Pencil className="size-4" />Edit</button><button aria-label={`Usage history for ${c.code}`} onClick={() => { setUsageCode(c.id); setUsageOffset(0); }}><History className="size-4" />History</button><details><summary aria-label={`More actions for ${c.code}`}><SlidersHorizontal className="size-4" /></summary><div><button disabled={saving} onClick={() => void save({ ...c, enabled: !c.enabled })}>{c.enabled ? 'Disable code' : 'Enable code'}</button><button disabled={saving} className="text-destructive" onClick={() => { if(window.confirm(`Delete code ${c.code}? Usage history will be retained.`)) void save({id:c.id},'DELETE'); }}>Delete code</button></div></details></div></td>
             </tr>) : subscriptions.slice(0,50).map(row => <tr key={row.uid}>
               <td data-label="Member"><strong>{row.name}</strong><span className="q-control-email">{row.email}</span><small className="q-control-uid" title={row.uid}>{row.uid}</small></td>
               <td data-label="Effective access"><span className="q-control-badge" data-plan={row.tier}>{PLAN_LIMITS[row.tier]?.name ?? row.tier}</span><small>{row.override_plan ? 'Admin assigned' : row.reward_plan === row.tier ? 'Reward access' : 'Standard access'}</small></td>
@@ -545,6 +594,11 @@ export function SubscriptionAdmin({
             className="grid gap-3 sm:grid-cols-2"
             onSubmit={(e) => {
               e.preventDefault();
+              if (originalCode && codeSignature(draft) === codeSignature(originalCode)) {
+                setEditing(false);
+                setMessage('No changes to save.');
+                return;
+              }
               void save({
                 ...draft,
                 allowedPlans: JSON.parse(draft.allowed_plans || '[]'),

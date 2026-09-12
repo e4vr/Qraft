@@ -1,4 +1,5 @@
 import { platformApi } from '@/lib/platform-server';
+import { preformedTestApi } from '@/lib/preformed-test-server';
 import { deleteOwnAccount } from '@/lib/account-deletion-server';
 import { contactApi } from '@/lib/contact-server';
 import { connectRealtime, notifyMutation } from '@/lib/realtime-server';
@@ -19,6 +20,7 @@ import {
   reserveIds,
   saveCollaboration,
   saveState,
+  saveStatePatch,
   serveMedia,
   shareCurrentUserRequest,
   uploadMedia,
@@ -67,7 +69,7 @@ async function safely(request: Request, run: () => Promise<Response>) {
     await enforceRateLimits(request);
     const notification = request.method === 'GET' ? undefined : request.clone();
     const response = await run();
-    if (notification && response.ok) {
+    if (notification && response.ok && response.headers.get('x-qraft-unchanged') !== '1') {
       try {
         shareCurrentUserRequest(request, notification);
         await notifyMutation(notification as Request);
@@ -90,6 +92,7 @@ export async function GET(request: Request) {
   return safely(request, async () => {
   const [scope, action, ...rest] = pathParts(request);
   if (scope === 'realtime') return connectRealtime(request);
+  if (scope === 'preformed' && action) return preformedTestApi(request, action);
   if (scope === 'auth' && action === 'session') {
     const user = await currentUser(request);
     return Response.json({ user: user ?? null }, { headers: { 'cache-control': 'no-store' } });
@@ -106,6 +109,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   return safely(request, async () => {
   const [scope, action] = pathParts(request);
+  if (scope === 'preformed' && action) return preformedTestApi(request, action);
   if (scope === 'platform' && action) return platformApi(request, action);
   if (scope === 'contact') return contactApi(request);
   if (scope === 'auth' && action === 'register') return register(request);
@@ -126,11 +130,15 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   return safely(request, async () => {
   const [scope, action] = pathParts(request);
+  if (scope === 'preformed' && action) return preformedTestApi(request, action);
   if (scope === 'auth' && action === 'profile') return updateOwnProfile(request);
   if (scope === 'auth' && action === 'password') return changeOwnPassword(request);
   if (scope === 'platform' && action) return platformApi(request, action);
   if (scope === 'contact') return contactApi(request);
-  if (scope === 'state') return saveState(request);
+  if (scope === 'state' && action === 'exam') return saveStatePatch(request, 'exam');
+  if (scope === 'state' && action === 'flashcards') return saveStatePatch(request, 'flashcards');
+  if (scope === 'state' && action === 'daily-goal') return saveStatePatch(request, 'daily-goal');
+  if (scope === 'state' && !action) return saveState(request);
   if (scope === 'collaboration') return saveCollaboration(request);
   return Response.json({ error: 'Not found.' }, { status: 404 });
   });
@@ -139,6 +147,7 @@ export async function PUT(request: Request) {
 export async function DELETE(request: Request) {
   return safely(request, async () => {
   const [scope, action] = pathParts(request);
+  if (scope === 'preformed' && action) return preformedTestApi(request, action);
   if (scope === 'auth' && action === 'account') return deleteOwnAccount(request);
   if (scope === 'contact') return contactApi(request);
   if (scope === 'platform' && action) return platformApi(request, action);

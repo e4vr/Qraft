@@ -12,7 +12,7 @@ void test('platform API authorization, import, subscription and ticket workflows
   await mkdir('.ui-review', { recursive: true });
   await build({
     stdin: {
-      contents: `export {RealtimeChannel} from './workers/realtime.ts'; import {GET,POST,PUT,DELETE} from './app/api/cloudflare/[...path]/route.ts'; export default {fetch(request){return ({GET,POST,PUT,DELETE})[request.method](request)}}`,
+      contents: `export {RealtimeChannel} from './workers/realtime.ts'; import {GET,POST,PUT,DELETE} from './app/api/cloudflare/[...path]/route.ts'; import {expireSubscriptions} from './lib/platform-server.ts'; export default {fetch(request){return ({GET,POST,PUT,DELETE})[request.method](request)},scheduled(){return expireSubscriptions()}}`,
       resolveDir: process.cwd(),
       sourcefile: 'qa-worker.ts',
     },
@@ -1078,8 +1078,8 @@ print(json.dumps(out))`,
       });
       assert.equal(saved.status, 200);
       assert.deepEqual(await received, [
-        { type: 'changed', topic: 'contact' },
-        { type: 'changed', topic: 'contact' },
+        { type: 'resources_changed', resources: ['contact', 'audit'] },
+        { type: 'resources_changed', resources: ['contact', 'audit'] },
       ]);
       assert.equal(
         (await call('other', `/contact?id=${saved.data.id}`)).data.messages[0]
@@ -1303,10 +1303,25 @@ print(json.dumps(out))`,
         proposalIds: [proposalId],
         status: 'approved',
       });
-      assert.deepEqual(first, {
-        status: 200,
-        data: { ok: true, reviewed: 0, awaitingSecondReview: 1 },
-      });
+      assert.equal(first.status, 200);
+      assert.deepEqual(
+        {
+          ok: first.data.ok,
+          reviewed: first.data.reviewed,
+          awaitingSecondReview: first.data.awaitingSecondReview,
+          queueDelta: first.data.queueDelta,
+          reviewerCompletedDelta: first.data.reviewerCompletedDelta,
+        },
+        {
+          ok: true,
+          reviewed: 0,
+          awaitingSecondReview: 1,
+          queueDelta: 0,
+          reviewerCompletedDelta: 0,
+        },
+      );
+      assert.deepEqual(first.data.updatedProposals, []);
+      assert.deepEqual(first.data.updatedQuestions, []);
       assert.equal(
         JSON.parse(
           (
@@ -1332,10 +1347,13 @@ print(json.dumps(out))`,
         proposalIds: [proposalId],
         status: 'approved',
       });
-      assert.deepEqual(second, {
-        status: 200,
-        data: { ok: true, reviewed: 1, awaitingSecondReview: 0 },
-      });
+      assert.equal(second.status, 200);
+      assert.equal(second.data.reviewed, 1);
+      assert.equal(second.data.awaitingSecondReview, 0);
+      assert.equal(second.data.queueDelta, -1);
+      assert.equal(second.data.reviewerCompletedDelta, 1);
+      assert.equal(second.data.updatedProposals.length, 1);
+      assert.equal(second.data.updatedQuestions.length, 1);
       const reviews = await db
         .prepare('SELECT reviewer_id FROM contribution_reviews WHERE proposal_id=? ORDER BY reviewer_id')
         .bind(proposalId)
@@ -1389,10 +1407,14 @@ print(json.dumps(out))`,
         proposalIds: approved.map((proposal) => proposal.id),
         status: 'approved',
       });
-      assert.deepEqual(approval, {
-        status: 200,
-        data: { ok: true, reviewed: 150, awaitingSecondReview: 0 },
-      });
+      assert.equal(approval.status, 200);
+      assert.equal(approval.data.ok, true);
+      assert.equal(approval.data.reviewed, 150);
+      assert.equal(approval.data.awaitingSecondReview, 0);
+      assert.equal(approval.data.queueDelta, -150);
+      assert.equal(approval.data.reviewerCompletedDelta, 150);
+      assert.equal(approval.data.updatedProposals.length, 150);
+      assert.equal(approval.data.updatedQuestions.length, 150);
       const rejectedImport = await call('unlimited', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
@@ -1696,6 +1718,22 @@ print(json.dumps(out))`,
       )
       .run();
     assert.equal((await call('lite', '/auth/session')).data.user.tier, 'lite');
+    assert.equal(
+      (
+        await db
+          .prepare(
+            "SELECT count(*) AS n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='subscription_expired'",
+          )
+          .first()
+      ).n,
+      0,
+    );
+    const worker = await mf.getWorker(built ? 'app' : undefined);
+    const scheduled = await worker.scheduled({
+      cron: '0 3 * * *',
+      scheduledTime: new Date(),
+    });
+    assert.equal(scheduled.outcome, 'ok');
     assert.equal(
       (
         await db

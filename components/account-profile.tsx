@@ -19,7 +19,7 @@ import {
   changeCloudflarePassword,
   updateCloudflareProfile,
 } from '@/lib/application-services';
-import { administrativeRoleLabels, type AppUser } from '@/lib/medguard-types';
+import { administrativeRoleLabels, normalizePhone, type AppUser } from '@/lib/medguard-types';
 
 export function AccountProfile({
   user,
@@ -45,11 +45,18 @@ export function AccountProfile({
   async function saveProfile(event: { preventDefault: () => void }) {
     event.preventDefault();
     if (profileBusy) return;
+    const normalizedName = displayName.trim().replace(/\s+/g, ' ');
+    const normalizedPhone = normalizePhone(phone);
+    if (normalizedName === user.displayName && normalizedPhone === normalizePhone(user.phone ?? '')) {
+      setProfileMessage('No changes to save.');
+      setProfileError('');
+      return;
+    }
     setProfileBusy(true);
     setProfileError('');
     setProfileMessage('');
     try {
-      const updated = await updateCloudflareProfile(displayName, phone);
+      const updated = await updateCloudflareProfile(normalizedName, normalizedPhone);
       onUser(updated);
       setDisplayName(updated.displayName);
       setPhone(updated.phone ?? '');

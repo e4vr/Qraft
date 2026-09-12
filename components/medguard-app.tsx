@@ -20,8 +20,10 @@ import {
   QuestionFlashcardDialog,
 } from '@/components/flashcards-workspace';
 import { openLiveChannels, subscribeLive } from '@/lib/realtime-client';
-import { api } from '@/lib/api-client';
+import { api, setApiCache } from '@/lib/api-client';
 import { mergeLiveState } from '@/lib/merge-live-state';
+import { appStateFreshness, mergeAppStates } from '@/lib/merge-app-state';
+import { loadActiveLocalTheme, loadLocalTheme, saveLocalTheme, type LocalTheme } from '@/lib/local-preferences';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
   Award,
@@ -44,6 +46,7 @@ import {
   Download,
   FileText,
   FlaskConical,
+  Globe2,
   Flag,
   Eye,
   EyeOff,
@@ -93,14 +96,20 @@ import {
   completeCloudflareMfaSignIn,
   completeTotpEnrollment,
   joinCloudflareQBankByLink,
-  loadCollaborationSnapshot,
   loadCollaborationState,
   loadCloudState,
   observeCloudflareUser,
+  observeCloudStateSync,
   previewCloudflareQBankInvitation,
   registerStartedExam,
+  flushPendingCloudState,
+  saveBestEffortStateCheckpoint,
   saveCloudState,
+  saveDailyGoal,
+  saveExamCheckpoint,
+  saveFlashcardCheckpoint,
   saveCollaborationState,
+  setAuthenticatedUserCache,
   signInCloudflare,
   signOutCloudflare,
   uploadNoteImage,
@@ -146,6 +155,7 @@ import {
 } from '@/components/collaboration-dashboard';
 import { QBankWorkspace } from '@/components/qbank-workspace';
 import { QBankManagement } from '@/components/qbank-management';
+import { PreformedTestRunner, PreformedTestsWorkspace } from '@/components/preformed-tests-workspace';
 import { ReviewWorkspace } from '@/components/review-workspace';
 import {
   ResizableHandle,
@@ -177,6 +187,7 @@ type View =
   | 'qbank-management'
   | 'review'
   | 'create'
+  | 'preformed'
   | 'history'
   | 'flashcards'
   | 'progress'
@@ -186,6 +197,24 @@ type View =
   | 'admin'
   | 'test';
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'offline' | 'error';
+
+function preserveNewerLocalAnswers(
+  remote: CollaborationState,
+  local: CollaborationState,
+  uid: string,
+) {
+  const answerStats = { ...remote.answerStats };
+  for (const [id, localStat] of Object.entries(local.answerStats)) {
+    const answer = localStat.selections[uid];
+    if (!Number.isInteger(answer)) continue;
+    const remoteStat = answerStats[id] ?? localStat;
+    answerStats[id] = {
+      ...remoteStat,
+      selections: { ...remoteStat.selections, [uid]: answer },
+    };
+  }
+  return { ...remote, answerStats };
+}
 
 interface ModelContextLike {
   registerTool: (
@@ -205,6 +234,7 @@ const NAV_ITEMS = [
   { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
   { id: 'library' as const, label: 'My QBanks', icon: Library },
   { id: 'create' as const, label: 'Create test', icon: ClipboardPlus },
+  { id: 'preformed' as const, label: 'Preformed tests', icon: Globe2 },
   { id: 'history' as const, label: 'Previous tests', icon: BookOpenCheck },
   { id: 'flashcards' as const, label: 'Flashcards', icon: Layers3 },
   { id: 'progress' as const, label: 'Progress', icon: BarChart3 },
@@ -396,8 +426,10 @@ function SecondaryButton({
 
 function AuthScreen({
   onAuthenticated,
+  onJoinTest,
 }: {
   onAuthenticated: (user: AppUser) => void;
+  onJoinTest: (code: string) => void;
 }) {
   const [register, setRegister] = useState(false);
   const [name, setName] = useState('');
@@ -411,6 +443,7 @@ function AuthScreen({
   const [error, setError] = useState('');
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaCode, setMfaCode] = useState('');
+  const [testCode, setTestCode] = useState('');
 
   async function submit(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -721,6 +754,27 @@ function AuthScreen({
               {register ? 'Sign in' : 'Create an account'}
             </button>
           </p>
+          <div className="mt-6 border-t pt-6">
+            <p className="text-center text-xs font-bold uppercase tracking-widest text-muted-foreground">
+              Joining a shared test?
+            </p>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const value = testCode.trim().toUpperCase().replace(/\s+/g, '');
+                if (value) onJoinTest(value.startsWith('QF-') ? value : `QF-${value}`);
+              }}
+              className="mt-3 flex gap-2"
+            >
+              <input
+                value={testCode}
+                onChange={(event) => setTestCode(event.target.value)}
+                placeholder="QF-XXXXXX"
+                className="h-11 min-w-0 flex-1 rounded-xl border bg-background px-3 font-mono font-bold uppercase outline-none focus:border-primary"
+              />
+              <button className="q-button q-button-secondary">Join test</button>
+            </form>
+          </div>
         </div>
       </section>
     </main>
@@ -969,6 +1023,12 @@ function clearInvitationLink() {
     '',
     `${url.pathname}${url.search}${url.hash}`,
   );
+}
+
+function clearTestLink() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('join_test');
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
 function AppSidebar({
@@ -1505,14 +1565,12 @@ function CreateTest({
   questions,
   state,
   bankName,
-  qbankId,
   maxQuestionsPerExam,
   onStart,
 }: {
   questions: Question[];
   state: AppState;
   bankName: string;
-  qbankId: string;
   maxQuestionsPerExam: number;
   onStart: (config: TestBuilderConfig) => void;
 }) {
@@ -1542,22 +1600,24 @@ function CreateTest({
     title: '',
   });
   const [message, setMessage] = useState('');
-  const [poolResult, setPoolResult] = useState<{ key: string; count: number }>();
-  const [poolError, setPoolError] = useState('');
-  const filters = JSON.stringify({ specialty: config.specialty, topics: config.topics, statuses: config.statuses, randomAll: config.randomAll });
-  const progress = useMemo(() => Object.fromEntries(Object.entries(state.progress).map(([id, value]) => [id, { attempts: value.attempts, lastAnswer: value.lastAnswer, flagged: value.flagged }])), [state.progress]);
-  const poolKey = useMemo(() => JSON.stringify([qbankId, filters, progress, questions.map(question => [question.id, question.revision, question.specialty, question.topic, question.answer])]), [qbankId, filters, progress, questions]);
-  useEffect(() => {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      setPoolError('');
-      void api<{ eligible: number }>('/platform/test-pool', { method: 'POST', signal: controller.signal, body: JSON.stringify({ qbankId, config: JSON.parse(filters), progress }) })
-        .then(result => { if (!controller.signal.aborted) setPoolResult({ key: poolKey, count: result.eligible }); })
-        .catch(error => { if (!controller.signal.aborted) setPoolError(error instanceof Error ? error.message : 'Unable to count eligible questions.'); });
-    }, 150);
-    return () => { clearTimeout(timer); controller.abort(); };
-  }, [qbankId, filters, progress, poolKey]);
-  const eligibleCount = poolResult?.key === poolKey ? poolResult.count : undefined;
+  // The complete accessible question metadata and personal progress are already
+  // hydrated. Eligibility counting is therefore local; only final randomized
+  // selection needs the authoritative server.
+  const eligibleCount = useMemo(() => questions.filter(question => {
+    if (config.randomAll) return true;
+    if (config.specialty && question.specialty !== config.specialty) return false;
+    if (config.topics.length && !config.topics.includes(question.topic)) return false;
+    if (!config.statuses.length) return true;
+    const progress = state.progress[question.id];
+    const attempts = progress?.attempts ?? 0;
+    return config.statuses.some(status =>
+      (status === 'new' && attempts === 0) ||
+      (status === 'previous' && attempts > 0) ||
+      (status === 'flagged' && progress?.flagged === true) ||
+      (status === 'correct' && attempts > 0 && progress?.lastAnswer === question.answer) ||
+      (status === 'incorrect' && attempts > 0 && progress?.lastAnswer !== question.answer),
+    );
+  }).length, [config.randomAll, config.specialty, config.statuses, config.topics, questions, state.progress]);
   const statuses: Array<[QuestionStatus, string]> = [
     ['new', 'New'],
     ['previous', 'Previously tested'],
@@ -1878,7 +1938,6 @@ function CreateTest({
                 className="h-11 w-full rounded-xl border bg-background px-3"
               />
             </label>
-            {poolError && <p role="alert" className="text-sm text-destructive">{poolError}</p>}
             {eligibleCount === 0 && (
               <output className="mt-4 block rounded-xl bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
                 No questions match yet. Choose another status or clear your
@@ -4255,7 +4314,9 @@ function RoleRequestPanel({
 
 function SettingsView({
   state,
-  setState,
+  theme,
+  onThemeChange,
+  onSaveDailyGoal,
   syncStatus,
   onSync,
   onAccountDeleted,
@@ -4264,7 +4325,9 @@ function SettingsView({
   updateCollaboration,
 }: {
   state: AppState;
-  setState: React.Dispatch<React.SetStateAction<AppState>>;
+  theme: LocalTheme;
+  onThemeChange: (theme: LocalTheme) => void;
+  onSaveDailyGoal: (dailyGoal: number) => Promise<void>;
   syncStatus: SyncStatus;
   onSync: () => void;
   onAccountDeleted: () => void;
@@ -4277,6 +4340,10 @@ function SettingsView({
   const [legalLinks, setLegalLinks] = useState({ termsUrl: '', privacyUrl: '' });
   const [personalBackupBusy, setPersonalBackupBusy] = useState(false);
   const [personalBackupMessage, setPersonalBackupMessage] = useState('');
+  const [dailyGoalOverride, setDailyGoalDraft] = useState<number>();
+  const dailyGoalDraft = dailyGoalOverride ?? state.settings.dailyGoal;
+  const [dailyGoalBusy, setDailyGoalBusy] = useState(false);
+  const [dailyGoalMessage, setDailyGoalMessage] = useState('');
   useEffect(() => {
     let active = true;
     void api<{ termsUrl: string; privacyUrl: string }>('/platform/legal-links')
@@ -4324,8 +4391,8 @@ function SettingsView({
             <div>
               <h2 className="font-bold">Cloud sync</h2>
               <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                Cloudflare D1 and R2 are connected. Changes sync
-                automatically and can be forced at any time.
+                Changes stay on this device while you work, then synchronize at
+                save and exit checkpoints or when you choose Sync now.
               </p>
             </div>
             <PrimaryButton onClick={onSync} disabled={syncStatus === 'syncing'}>
@@ -4339,8 +4406,15 @@ function SettingsView({
             </PrimaryButton>
           </div>
           <div className="mt-4 flex items-center gap-2 rounded-xl bg-emerald-50 p-3 text-xs font-bold text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200">
-            <Cloud className="size-4" />
-            {`Cloudflare ready${state.lastSyncAt ? ` · Last manual sync ${new Date(state.lastSyncAt).toLocaleString()}` : ''}`}
+            {syncStatus === 'offline' ? <CloudOff className="size-4" /> : <Cloud className="size-4" />}
+            {{
+              syncing: 'Synchronizing saved changes…',
+              synced: 'All saved changes are synchronized.',
+              local: 'Saved on this device and waiting to synchronize.',
+              offline: 'Saved on this device. Synchronization will resume online.',
+              error: 'Saved locally. Cloud synchronization needs attention.',
+            }[syncStatus]}
+            {state.lastSyncAt ? ` · Last manual sync ${new Date(state.lastSyncAt).toLocaleString()}` : ''}
           </div>
         </section>
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
@@ -4349,29 +4423,24 @@ function SettingsView({
             Light, dark, or follow your device.
           </p>
           <div className="mt-4 grid grid-cols-3 gap-2">
-            {(['light', 'dark', 'system'] as const).map((theme) => (
+            {(['light', 'dark', 'system'] as const).map((option) => (
               <button
-                key={theme}
-                onClick={() =>
-                  setState((current) => ({
-                    ...current,
-                    settings: { ...current.settings, theme },
-                  }))
-                }
+                key={option}
+                onClick={() => onThemeChange(option)}
                 className={cx(
                   'flex h-11 items-center justify-center gap-2 rounded-xl border text-xs font-bold capitalize',
-                  state.settings.theme === theme &&
+                  theme === option &&
                     'border-primary bg-primary text-primary-foreground',
                 )}
               >
-                {theme === 'light' ? (
+                {option === 'light' ? (
                   <Sun className="size-4" />
-                ) : theme === 'dark' ? (
+                ) : option === 'dark' ? (
                   <Moon className="size-4" />
                 ) : (
                   <Settings className="size-4" />
                 )}
-                {theme}
+                {option}
               </button>
             ))}
           </div>
@@ -4388,22 +4457,35 @@ function SettingsView({
               min="5"
               max="100"
               step="5"
-              value={state.settings.dailyGoal}
-              onChange={(event) =>
-                setState((current) => ({
-                  ...current,
-                  settings: {
-                    ...current.settings,
-                    dailyGoal: Number(event.target.value),
-                  },
-                }))
-              }
+              value={dailyGoalDraft}
+              onChange={(event) => {
+                setDailyGoalDraft(Number(event.target.value));
+                setDailyGoalMessage('');
+              }}
               className="flex-1 accent-primary"
             />
             <strong className="min-w-20 rounded-xl bg-primary/10 px-3 py-2 text-center text-primary">
-              {state.settings.dailyGoal}
+              {dailyGoalDraft}
             </strong>
+            <PrimaryButton
+              disabled={dailyGoalBusy || dailyGoalDraft === state.settings.dailyGoal}
+              onClick={() => {
+                setDailyGoalBusy(true);
+                setDailyGoalMessage('');
+                void onSaveDailyGoal(dailyGoalDraft)
+                  .then(() => {
+                    setDailyGoalDraft(undefined);
+                    setDailyGoalMessage('Daily goal saved.');
+                  })
+                  .catch(error => setDailyGoalMessage(error instanceof Error ? error.message : 'Unable to save your daily goal.'))
+                  .finally(() => setDailyGoalBusy(false));
+              }}
+            >
+              <Save className="size-4" />
+              {dailyGoalBusy ? 'Saving…' : 'Save'}
+            </PrimaryButton>
           </div>
+          {dailyGoalMessage && <output className="mt-3 block text-xs font-semibold text-muted-foreground">{dailyGoalMessage}</output>}
         </section>
         <RoleRequestPanel
           user={user}
@@ -4563,21 +4645,30 @@ function QuestionManager({
       images: editingProposal?.payload.images ?? [],
     };
     if (editingProposal) {
+      const isResubmission = editingProposal.status === 'rejected';
+      const nextProposal: QuestionProposal = {
+        ...editingProposal,
+        id: isResubmission ? crypto.randomUUID() : editingProposal.id,
+        payload,
+        rationale: rationale.trim() || 'Updated question contribution.',
+        status: 'pending',
+        proposedAt,
+        reviewedById: undefined,
+        reviewedByName: undefined,
+        reviewedAt: undefined,
+        reviewNote: undefined,
+      };
       updateCollaboration((current) => ({
         ...current,
-        proposals: current.proposals.map((item) =>
-          item.id === editingProposal.id &&
-          item.proposedById === user.uid &&
-          item.status !== 'approved'
-            ? {
-                ...item,
-                payload,
-                rationale: rationale.trim() || 'Updated question contribution.',
-                status: 'pending',
-                proposedAt,
-              }
-            : item,
-        ),
+        proposals: isResubmission
+          ? [nextProposal, ...current.proposals]
+          : current.proposals.map((item) =>
+              item.id === editingProposal.id &&
+              item.proposedById === user.uid &&
+              item.status !== 'approved'
+                ? nextProposal
+                : item,
+            ),
         auditLog: [
           {
             id: crypto.randomUUID(),
@@ -4939,15 +5030,18 @@ function QuestionManager({
           <DialogTitle>Import JSON / Use AI</DialogTitle>
           <QuestionImportReview
             bankId={activeQBankId}
-            onImported={(proposals) =>
+            onImported={(result) =>
               confirmUpdate((current) => ({
                 ...current,
                 proposals: [
-                  ...proposals,
+                  ...result.proposals,
                   ...current.proposals.filter(
-                    (p) => !proposals.some((n) => n.id === p.id),
+                    (p) => !result.proposals.some((n) => n.id === p.id),
                   ),
                 ],
+                specialties: [...current.specialties, ...result.specialties.filter((item) => !current.specialties.some((existing) => existing.id === item.id))],
+                topics: [...current.topics, ...result.topics.filter((item) => !current.topics.some((existing) => existing.id === item.id))],
+                classificationRevisions: result.classificationRevision === undefined ? current.classificationRevisions : { ...current.classificationRevisions, [activeQBankId]: result.classificationRevision },
               }))
             }
           />
@@ -5167,20 +5261,39 @@ function QuestionManager({
 
 export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'superadmin' }) {
   const [user, setUser] = useState<AppUser | null | undefined>(undefined);
-  const [state, setState] = useState<AppState>(initialAppState);
+  const [state, setStateRaw] = useState<AppState>(initialAppState);
+  const setState = useCallback((update: React.SetStateAction<AppState>) => {
+    setStateRaw(current => {
+      const next = typeof update === 'function' ? update(current) : update;
+      if (next === current) return current;
+      const updatedAt = new Date().toISOString();
+      const progress = Object.fromEntries(
+        Object.entries(next.progress).map(([id, value]) => [
+          id,
+          value === current.progress[id] ? value : { ...value, updatedAt },
+        ]),
+      );
+      return { ...next, progress, clientUpdatedAt: updatedAt };
+    });
+  }, []);
+  const [theme, setTheme] = useState<LocalTheme>(loadActiveLocalTheme);
   const [collaboration, setCollaboration] = useState<CollaborationState>(
     initialCollaborationState,
   );
   const [hydrated, setHydrated] = useState(false);
   const [collaborationHydrated, setCollaborationHydrated] = useState(false);
   const [view, setView] = useState<View>('dashboard');
+  const [directTestCode, setDirectTestCode] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return new URL(window.location.href).searchParams.get('join_test')?.trim().toUpperCase() ?? '';
+  });
   const [testError, setTestError] = useState('');
   const creatingTest = useRef(false);
   const [examPool, setExamPool] = useState<Question[]>([]);
   const [activeTestId, setActiveTestId] = useState<string>();
   const [managedBank, setManagedBank] = useState<{
     id: string;
-    section: 'settings' | 'questions';
+    section: 'settings' | 'structure' | 'questions';
   }>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('syncing');
   const online = useSyncExternalStore(
@@ -5200,6 +5313,13 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
   const saveTimer = useRef<number | undefined>(undefined);
   const stateDirty = useRef(false);
   const stateSyncInFlight = useRef(false);
+  const checkpointInFlight = useRef(false);
+  const flashcardReviewActive = useRef(false);
+  const viewSnapshot = useRef<View>('dashboard');
+  const activeTestIdSnapshot = useRef<string | undefined>(undefined);
+  const outboxReplayedFor = useRef('');
+  const lastLeaveCheckpoint = useRef('');
+  const flashcardCrudSnapshot = useRef('');
   const stateSnapshot = useRef(state);
   const cloudStateSnapshot = useRef<AppState | undefined>(undefined);
   const collaborationSaveTimer = useRef<number | undefined>(undefined);
@@ -5214,6 +5334,12 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
   useEffect(() => {
     stateSnapshot.current = state;
   }, [state]);
+  useEffect(() => {
+    viewSnapshot.current = view;
+  }, [view]);
+  useEffect(() => {
+    activeTestIdSnapshot.current = activeTestId;
+  }, [activeTestId]);
   const handledInvitationLink = useRef('');
   const hydratedIdentity = useRef('');
   const cloudLoaded = useRef(false);
@@ -5230,7 +5356,9 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
         .catch(() => undefined);
     };
     refresh();
-    const stop = subscribeLive(refresh, ['announcement']);
+    const stop = subscribeLive((topic) => {
+      if (topic === 'announcement') refresh();
+    }, ['announcement']);
     return () => {
       active = false;
       stop();
@@ -5246,22 +5374,20 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
     (next: CollaborationState) => {
       lastSavedCollaboration.current = next;
       setCollaboration(next);
-      if (user) void saveLocalCollaboration(next, user.uid);
+      if (user) {
+        setApiCache('/collaboration', { collaboration: next }, { cacheScope: user.uid });
+        void saveLocalCollaboration(next, user.uid);
+      }
     },
     [user],
   );
   useEffect(() => {
     if (!user) return;
-    const refresh = () => {
-      void observeCloudflareUser((next) => {
-        if (!next) setUser(null);
-        else if (next.uid === user.uid) setUser(next);
-      }).catch(() => undefined);
-    };
     const changed = (event: Event) => {
       const { userId, tier } = (
-        event as CustomEvent<{ userId: string; tier: AppUser['tier'] }>
+        event as CustomEvent<{ userId: string; tier?: AppUser['tier'] }>
       ).detail;
+      if (!tier) return;
       const patch = (current: CollaborationState) => ({
         ...current,
         members: current.members.map((m) =>
@@ -5270,15 +5396,30 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       });
       lastSavedCollaboration.current = patch(lastSavedCollaboration.current);
       setCollaboration(patch);
-      if (userId === user.uid) refresh();
+      if (userId === user.uid)
+        setUser((current) => {
+          if (!current || current.uid !== userId) return current;
+          const next = { ...current, tier, effectivePlan: tier };
+          setAuthenticatedUserCache(next);
+          return next;
+        });
     };
-    window.addEventListener('focus', refresh);
     window.addEventListener('qraft-account-updated', changed);
     return () => {
-      window.removeEventListener('focus', refresh);
       window.removeEventListener('qraft-account-updated', changed);
     };
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !collaborationHydrated || user.status !== 'approved') return;
+    if (!['library', 'create', 'review', 'manager', 'qbank-management'].includes(view)) return;
+    if (collaborationWriteInFlight.current || collaborationSaveTimer.current) return;
+    let active = true;
+    void loadCollaborationState(user)
+      .then(next => { if (active && next !== lastSavedCollaboration.current) replaceCollaborationFromServer(next); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [collaborationHydrated, replaceCollaborationFromServer, user, view]);
 
   const allQuestions = useMemo(() => {
     const merged = new Map<string, Question>();
@@ -5387,7 +5528,6 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
   }, []);
 
   useEffect(() => {
-    const theme = state.settings.theme;
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const apply = () => {
       const dark = theme === 'dark' || (theme === 'system' && media.matches);
@@ -5411,7 +5551,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
     apply();
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
-  }, [state.settings.theme]);
+  }, [theme]);
 
   useEffect(() => {
     const standalone =
@@ -5502,17 +5642,28 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
             loadCloudState(user!.uid),
             loadCollaborationState(user!),
           ]);
+          const localIsNewer = Boolean(
+            localState &&
+            (!cloud || appStateFreshness(localState) > appStateFreshness(cloud)),
+          );
           if (cloud) {
-            resolved = normalizeAppState(cloud);
-            cloudStateSnapshot.current = resolved;
+            resolved = localState
+              ? mergeAppStates(normalizeAppState(localState), normalizeAppState(cloud))
+              : normalizeAppState(cloud);
+            cloudStateSnapshot.current = normalizeAppState(cloud);
           }
-          shared = remoteCollaboration;
+          shared = localIsNewer && localCollaboration
+            ? preserveNewerLocalAnswers(remoteCollaboration, localCollaboration, user!.uid)
+            : remoteCollaboration;
           cloudLoaded.current = true;
           setSyncStatus('synced');
         }
         if (!cancelled) {
           hydratedIdentity.current = identity;
-          setState(resolved);
+          const accountTheme = loadLocalTheme(user!.uid) ?? resolved.settings.theme;
+          saveLocalTheme(user!.uid, accountTheme);
+          setTheme(accountTheme);
+          setStateRaw(resolved);
           setCollaboration(shared);
           lastSavedCollaboration.current = shared;
           setHydrated(true);
@@ -5523,7 +5674,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
           const shared = normalizeCollaborationState(
             localCollaboration ?? await loadLocalCollaboration(user!.uid),
           );
-          setState(
+          setStateRaw(
             normalizeAppState(
               localState ?? await loadLocalState(user!.uid),
             ),
@@ -5585,13 +5736,15 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
     setLinkInvitationBusy(true);
     setLinkInvitationError('');
     try {
-      await joinCloudflareQBankByLink(
+      const membership = await joinCloudflareQBankByLink(
         user,
         linkInvitation.qbankId,
         linkInvitation.token,
       );
-      const shared = await loadCollaborationState(user);
-      setCollaboration(shared);
+      confirmUpdate((current) => ({
+        ...current,
+        memberships: [membership, ...current.memberships.filter((item) => item.id !== membership.id)],
+      }));
       setState((current) => ({
         ...current,
         settings: {
@@ -5624,11 +5777,39 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       void saveLocalState(user.uid, state);
       if (!alreadySynced)
         setSyncStatus(navigator.onLine ? 'local' : 'offline');
-    }, 200);
+    }, view === 'test' || flashcardReviewActive.current ? 0 : 200);
     return () => {
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
     };
-  }, [state, user, hydrated]);
+  }, [state, user, hydrated, view]);
+
+  useEffect(() => {
+    if (!user || !hydrated || !navigator.onLine || outboxReplayedFor.current === user.uid) return;
+    outboxReplayedFor.current = user.uid;
+    void flushPendingCloudState(user.uid)
+      .then(remote => {
+        if (!remote) return;
+        const merged = mergeAppStates(stateSnapshot.current, remote);
+        cloudStateSnapshot.current = merged;
+        setStateRaw(merged);
+        void saveLocalState(user.uid, merged);
+      })
+      .catch(() => {
+        outboxReplayedFor.current = '';
+        setSyncStatus('local');
+      });
+  }, [hydrated, user]);
+
+  useEffect(() => {
+    if (!user || !hydrated) return;
+    return observeCloudStateSync(user.uid, remote => {
+      const merged = mergeAppStates(stateSnapshot.current, remote);
+      cloudStateSnapshot.current = merged;
+      setStateRaw(merged);
+      void saveLocalState(user.uid, merged);
+      setSyncStatus('synced');
+    });
+  }, [hydrated, user]);
 
   const flushCloudState = useCallback(async () => {
     const account = liveSnapshot.current.user;
@@ -5640,13 +5821,21 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       !snapshot.settings.autoSync ||
       !navigator.onLine ||
       !stateDirty.current ||
-      stateSyncInFlight.current
+      stateSyncInFlight.current ||
+      checkpointInFlight.current ||
+      viewSnapshot.current === 'test' ||
+      flashcardReviewActive.current
     )
       return;
     stateSyncInFlight.current = true;
     setSyncStatus('syncing');
     try {
-      await saveCloudState(account.uid, snapshot);
+      const remote = await saveCloudState(account.uid, snapshot);
+      if (remote && stateSnapshot.current === snapshot) {
+        const merged = mergeAppStates(snapshot, remote);
+        cloudStateSnapshot.current = merged;
+        setStateRaw(merged);
+      }
       if (stateSnapshot.current === snapshot) stateDirty.current = false;
       setSyncStatus('synced');
     } catch {
@@ -5656,28 +5845,70 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
     }
   }, []);
 
+  const flashcardCrudVersion = useMemo(
+    () => JSON.stringify([state.flashcardDecks, state.flashcards]),
+    [state.flashcardDecks, state.flashcards],
+  );
   useEffect(() => {
     if (!user || !hydrated) return;
-    const interval = window.setInterval(() => void flushCloudState(), 15_000);
-    const onlineHandler = () => void flushCloudState();
-    const visibilityHandler = () => {
-      if (document.visibilityState === 'hidden') {
-        void saveLocalState(user.uid, stateSnapshot.current);
-        void flushCloudState();
-      }
+    const previous = flashcardCrudSnapshot.current;
+    flashcardCrudSnapshot.current = flashcardCrudVersion;
+    if (!previous || previous === flashcardCrudVersion || flashcardReviewActive.current) return;
+    // Card/deck CRUD intentionally keeps its established autosave behavior.
+    // Review ratings are excluded because they change only schedules/logs.
+    const timer = window.setTimeout(() => void flushCloudState(), 800);
+    return () => window.clearTimeout(timer);
+  }, [flashcardCrudVersion, flushCloudState, hydrated, user]);
+
+  useEffect(() => {
+    if (!user || !hydrated) return;
+    const onlineHandler = () => {
+      void flushPendingCloudState(user.uid).catch(() => setSyncStatus('local'));
     };
-    const pageHideHandler = () =>
-      void saveLocalState(user.uid, stateSnapshot.current);
+    const saveBeforeLeaving = () => {
+      const snapshot = stateSnapshot.current;
+      void saveLocalState(user.uid, snapshot);
+      if (!snapshot.settings.autoSync || !stateDirty.current) return;
+      const kind = viewSnapshot.current === 'test'
+        ? 'exam'
+        : flashcardReviewActive.current
+          ? 'flashcards'
+          : 'full';
+      const checkpointKey = `${kind}:${snapshot.clientUpdatedAt ?? ''}`;
+      if (lastLeaveCheckpoint.current === checkpointKey) return;
+      lastLeaveCheckpoint.current = checkpointKey;
+      const activeCheckpointTest = kind === 'exam'
+        ? snapshot.tests.find(item => item.id === activeTestIdSnapshot.current) ??
+          snapshot.tests.find(item => item.status === 'active')
+        : undefined;
+      const answerSelections = activeCheckpointTest
+        ? activeCheckpointTest.questionIds.flatMap(questionId => {
+            const question = allQuestions.find(item => item.id === questionId);
+            const qbankId = question?.qbankId ?? activeCheckpointTest.qbankId ?? 'smle-gs';
+            const answer = liveSnapshot.current.collaboration.answerStats[`${qbankId}:${questionId}`]?.selections[user.uid];
+            return Number.isInteger(answer) ? [{ qbankId, questionId, answer }] : [];
+          })
+        : [];
+      saveBestEffortStateCheckpoint(
+        user.uid,
+        snapshot,
+        kind,
+        kind === 'exam' ? { answerSelections } : undefined,
+      );
+    };
+    const visibilityHandler = () => {
+      if (document.visibilityState === 'hidden') saveBeforeLeaving();
+    };
+    const pageHideHandler = () => saveBeforeLeaving();
     window.addEventListener('online', onlineHandler);
     window.addEventListener('pagehide', pageHideHandler);
     document.addEventListener('visibilitychange', visibilityHandler);
     return () => {
-      window.clearInterval(interval);
       window.removeEventListener('online', onlineHandler);
       window.removeEventListener('pagehide', pageHideHandler);
       document.removeEventListener('visibilitychange', visibilityHandler);
     };
-  }, [flushCloudState, hydrated, user]);
+  }, [allQuestions, flushCloudState, hydrated, user]);
 
   useEffect(() => {
     if (!user || !collaborationHydrated || user.status !== 'approved') return;
@@ -5686,6 +5917,15 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       JSON.stringify(lastSavedCollaboration.current)
     )
       return;
+    if (
+      viewSnapshot.current === 'test' &&
+      JSON.stringify({ ...collaboration, answerStats: lastSavedCollaboration.current.answerStats }) ===
+        JSON.stringify(lastSavedCollaboration.current)
+    ) {
+      void saveLocalCollaboration(collaboration, user.uid);
+      setSyncStatus(navigator.onLine ? 'local' : 'offline');
+      return;
+    }
     if (collaborationSaveTimer.current)
       window.clearTimeout(collaborationSaveTimer.current);
     const persist = () => {
@@ -5742,51 +5982,31 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
   useEffect(() => {
     const channels = JSON.parse(liveChannels) as string[];
     if (!channels.length || !collaborationHydrated) return;
-    let stopped = false,
-      fetching = false,
-      pending = false,
-      failures = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = async () => {
-      timer = undefined;
-      if (stopped || !navigator.onLine || document.visibilityState === 'hidden')
-        return;
+    let stopped = false;
+    const refreshAccount = async () => {
+      if (stopped || !navigator.onLine || document.visibilityState === 'hidden') return;
+      await observeCloudflareUser((account) => {
+        if (!stopped) setUser(account ?? null);
+      }).catch(() => undefined);
+    };
+    const refreshCollaboration = async () => {
       if (
-        fetching ||
+        stopped ||
+        !navigator.onLine ||
+        document.visibilityState === 'hidden' ||
         collaborationWriteInFlight.current ||
         collaborationSaveTimer.current
-      ) {
-        timer = setTimeout(() => void refresh(), 150);
-        return;
-      }
-      fetching = true;
-      pending = false;
+      ) return;
       const baseline = lastSavedCollaboration.current;
       try {
         const currentAccount = liveSnapshot.current.user;
-        if (!currentAccount) {
-          setUser(null);
-          return;
-        }
-        const snapshot = await loadCollaborationSnapshot(currentAccount);
-        const account = snapshot.user;
-        if (stopped) return;
-        if (!account) {
-          setUser(null);
-          return;
-        }
-        if (
-          JSON.stringify(account) !== JSON.stringify(liveSnapshot.current.user)
-        )
-          setUser(account);
-        if (account.status !== 'approved') return;
-        const shared = snapshot.collaboration;
+        if (!currentAccount || currentAccount.status !== 'approved') return;
+        const shared = await loadCollaborationState(currentAccount);
         if (stopped) return;
         if (
           collaborationWriteInFlight.current ||
           baseline !== lastSavedCollaboration.current
         ) {
-          pending = true;
           return;
         }
         const merged = mergeLiveState(
@@ -5801,32 +6021,103 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
           JSON.stringify(liveSnapshot.current.collaboration)
         )
           setCollaboration(merged);
-        void saveLocalCollaboration(merged, account.uid);
-        failures = 0;
-      } catch {
-        pending = true;
-        failures++;
-      } finally {
-        fetching = false;
-        if (pending && !stopped && timer === undefined)
-          timer = setTimeout(
-            () => void refresh(),
-            Math.min(30_000, 500 * 2 ** Math.min(failures, 6)),
-          );
-      }
+        void saveLocalCollaboration(merged, currentAccount.uid);
+      } catch { /* The stale entry remains stale and will retry on actual use. */ }
     };
     const disconnect = openLiveChannels(channels, (topic) => {
-      if (!['connected', 'collaboration', 'account'].includes(topic)) return;
-      pending = true;
-      if (timer === undefined && !fetching)
-        timer = setTimeout(() => void refresh(), 80);
+      if (topic === 'account' || topic === 'connected') void refreshAccount();
+      if (topic === 'collaboration' || topic === 'connected') void refreshCollaboration();
     });
     return () => {
       stopped = true;
       disconnect();
-      if (timer) clearTimeout(timer);
     };
   }, [liveChannels, collaborationHydrated]);
+
+  const checkpointPersonalState = useCallback(async (kind: 'exam' | 'flashcards', testId?: string) => {
+    if (!user) return;
+    const snapshot = stateSnapshot.current;
+    const checkpointTest = kind === 'exam'
+      ? snapshot.tests.find(item => item.id === testId) ?? snapshot.tests.find(item => item.status === 'active')
+      : undefined;
+    const answerSelections = checkpointTest
+      ? checkpointTest.questionIds.flatMap(questionId => {
+          const question = allQuestions.find(item => item.id === questionId);
+          const qbankId = question?.qbankId ?? checkpointTest.qbankId ?? 'smle-gs';
+          const answer = liveSnapshot.current.collaboration.answerStats[`${qbankId}:${questionId}`]?.selections[user.uid];
+          return Number.isInteger(answer) ? [{ qbankId, questionId, answer }] : [];
+        })
+      : [];
+    if (kind === 'exam')
+      lastSavedCollaboration.current = {
+        ...lastSavedCollaboration.current,
+        answerStats: liveSnapshot.current.collaboration.answerStats,
+      };
+    void saveLocalState(user.uid, snapshot);
+    stateDirty.current = false;
+    if (!snapshot.settings.autoSync) {
+      setSyncStatus(navigator.onLine ? 'local' : 'offline');
+      return;
+    }
+    checkpointInFlight.current = true;
+    setSyncStatus('syncing');
+    try {
+      const remote = kind === 'exam'
+        ? await saveExamCheckpoint(user.uid, snapshot, answerSelections)
+        : await saveFlashcardCheckpoint(user.uid, snapshot);
+      if (remote) {
+        const merged = mergeAppStates(stateSnapshot.current, remote);
+        cloudStateSnapshot.current = merged;
+        setStateRaw(merged);
+        await saveLocalState(user.uid, merged);
+      }
+      setSyncStatus('synced');
+    } catch {
+      setSyncStatus(navigator.onLine ? 'local' : 'offline');
+    } finally {
+      checkpointInFlight.current = false;
+    }
+  }, [allQuestions, user]);
+  const setFlashcardReviewActivity = useCallback((active: boolean) => {
+    flashcardReviewActive.current = active;
+  }, []);
+  const checkpointFlashcardReview = useCallback(() => {
+    if (document.visibilityState === 'hidden') return;
+    void checkpointPersonalState('flashcards');
+  }, [checkpointPersonalState]);
+  const updateLocalTheme = useCallback((nextTheme: LocalTheme) => {
+    setTheme(nextTheme);
+    if (user) saveLocalTheme(user.uid, nextTheme);
+  }, [user]);
+  const toggleDashboardTheme = useCallback(() => {
+    updateLocalTheme(document.documentElement.classList.contains('dark') ? 'light' : 'dark');
+  }, [updateLocalTheme]);
+  const persistDailyGoal = useCallback(async (dailyGoal: number) => {
+    if (!user) throw new Error('Sign in to save your daily goal.');
+    const next: AppState = {
+      ...stateSnapshot.current,
+      clientUpdatedAt: new Date().toISOString(),
+      settings: { ...stateSnapshot.current.settings, dailyGoal },
+    };
+    cloudStateSnapshot.current = next;
+    setStateRaw(next);
+    await saveLocalState(user.uid, next);
+    stateDirty.current = false;
+    setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
+    try {
+      const remote = await saveDailyGoal(user.uid, next, dailyGoal);
+      if (remote) {
+        const merged = mergeAppStates(next, remote);
+        cloudStateSnapshot.current = merged;
+        setStateRaw(merged);
+        await saveLocalState(user.uid, merged);
+      }
+      setSyncStatus(navigator.onLine ? 'synced' : 'offline');
+    } catch (error) {
+      setSyncStatus(navigator.onLine ? 'local' : 'offline');
+      if (navigator.onLine) throw error;
+    }
+  }, [user]);
 
   async function manualSync() {
     if (!user || !navigator.onLine) {
@@ -5836,18 +6127,19 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
     setSyncStatus('syncing');
     try {
       const next = { ...state, lastSyncAt: new Date().toISOString() };
-      await Promise.all([
+      const [remote] = await Promise.all([
         saveCloudState(user.uid, next),
         saveCollaborationState(collaboration, lastSavedCollaboration.current),
       ]);
+      const synchronized = remote ? mergeAppStates(next, remote) : next;
       await Promise.all([
-        saveLocalState(user.uid, next),
+        saveLocalState(user.uid, synchronized),
         saveLocalCollaboration(collaboration, user.uid),
       ]);
       lastSavedCollaboration.current = collaboration;
       stateDirty.current = false;
-      cloudStateSnapshot.current = next;
-      setState(next);
+      cloudStateSnapshot.current = synchronized;
+      setStateRaw(synchronized);
       setSyncStatus('synced');
     } catch {
       setSyncStatus('error');
@@ -5859,7 +6151,8 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
     setUser(null);
     setHydrated(false);
     setCollaborationHydrated(false);
-    setState(initialAppState());
+    setStateRaw(initialAppState());
+    flashcardCrudSnapshot.current = '';
     setCollaboration(initialCollaborationState());
     setView('dashboard');
   }
@@ -5882,11 +6175,19 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
         return;
       }
       let selected: Question[];
+      let testBaseState = state;
       creatingTest.current = true;
       try {
         // Persist personal questions/overrides before using the same server pool
         // as the counter. Plan rules remain in the existing exam registration.
-        await saveCloudState(user.uid, state);
+        const remote = await saveCloudState(user.uid, state);
+        if (remote) {
+          testBaseState = mergeAppStates(state, remote);
+          stateSnapshot.current = testBaseState;
+          cloudStateSnapshot.current = testBaseState;
+          setStateRaw(testBaseState);
+          await saveLocalState(user.uid, testBaseState);
+        }
         const result = await api<{ questions: Question[] }>('/platform/test-pool', {
           method: 'POST', body: JSON.stringify({ qbankId: activeQBankId, config, select: true }),
         });
@@ -5906,9 +6207,9 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
         'QBank';
       const title =
         config.title?.trim().replace(/\s+/g, ' ') ||
-        nextTestTitle(bankName, state.tests);
+        nextTestTitle(bankName, testBaseState.tests);
       if (
-        state.tests.some(
+        testBaseState.tests.some(
           (item) =>
             normalizedTestTitle(item.title) === normalizedTestTitle(title),
         )
@@ -5937,20 +6238,12 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       creatingTest.current = true;
       try {
         await registerStartedExam(test.id, test.questionIds.length);
-        const nextState = { ...state, tests: [test, ...state.tests] };
         setState((current) => ({
           ...current,
           tests: [test, ...current.tests],
         }));
         setActiveTestId(test.id);
         setView('test');
-        try {
-          await saveCloudState(user.uid, nextState);
-          if (JSON.stringify(stateSnapshot.current) === JSON.stringify(nextState))
-            stateDirty.current = false;
-        } catch {
-          setSyncStatus('error');
-        }
       } catch (error) {
         setTestError(
           error instanceof Error
@@ -5961,7 +6254,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
         creatingTest.current = false;
       }
     },
-    [state, collaboration.qbanks, activeQBankId, user],
+    [state, collaboration.qbanks, activeQBankId, setState, user],
   );
 
   const quickTest = useCallback(() => {
@@ -6081,7 +6374,36 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
         </div>
       </main>
     );
-  if (!user) return <AuthScreen onAuthenticated={setUser} />;
+  if (directTestCode) {
+    const participant = user?.status === 'approved' && !user.suspended ? user : null;
+    return (
+      <PreformedTestRunner
+        user={participant}
+        code={directTestCode}
+        onClose={() => {
+          clearTestLink();
+          setDirectTestCode('');
+          if (participant) setView('preformed');
+        }}
+        onJoinQraft={() => {
+          clearTestLink();
+          setDirectTestCode('');
+        }}
+      />
+    );
+  }
+  if (!user)
+    return (
+      <AuthScreen
+        onAuthenticated={setUser}
+        onJoinTest={(code) => {
+          const url = new URL(window.location.href);
+          url.searchParams.set('join_test', code);
+          window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+          setDirectTestCode(code);
+        }}
+      />
+    );
   if (user.status !== 'approved' || user.suspended)
     return <PendingApproval user={user} onSignOut={() => void signOut()} />;
   if (user.role === 'super_admin' && !user.mfaEnrolled)
@@ -6151,6 +6473,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
             destination ??
               (activeTest.status === 'completed' ? 'history' : 'dashboard'),
           );
+          window.setTimeout(() => void checkpointPersonalState('exam', activeTest.id), 0);
         }}
       />
     );
@@ -6310,6 +6633,8 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
               }
               navigate={setView}
               startQuickTest={quickTest}
+              theme={theme}
+              onToggleTheme={toggleDashboardTheme}
             />
           )}
           {view === 'library' && (
@@ -6362,7 +6687,6 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
           )}
           {view === 'create' && (
             <CreateTest
-              qbankId={activeQBankId}
               key={activeQBankId}
               questions={questions}
               state={state}
@@ -6373,6 +6697,9 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
               }
               onStart={createTest}
             />
+          )}
+          {view === 'preformed' && (
+            <PreformedTestsWorkspace user={user} onUpgrade={openUpgrade} />
           )}
           {view === 'history' && (
             <HistoryView
@@ -6406,13 +6733,17 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
               qbankId={activeQBankId}
               qbankName={activeQBank?.name ?? 'QBank'}
               questions={questions}
+              onReviewActiveChange={setFlashcardReviewActivity}
+              onReviewCheckpoint={checkpointFlashcardReview}
             />
           )}
           {view === 'settings' && (
             <SettingsView
               onAccountDeleted={() => { setUser(null); setState(initialAppState()); setCollaboration(initialCollaborationState()); setView('dashboard'); }}
               state={state}
-              setState={setState}
+              theme={theme}
+              onThemeChange={updateLocalTheme}
+              onSaveDailyGoal={persistDailyGoal}
               syncStatus={syncStatus}
               onSync={() => void manualSync()}
               collaboration={collaboration}
@@ -6434,10 +6765,9 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
           {view === 'contribution-center' && (
             <ContributionCenter
               userId={user.uid}
-              onEntitlementChange={() => {
-                void observeCloudflareUser((next) => {
-                  if (next) setUser(next);
-                });
+              onEntitlementChange={(next) => {
+                setAuthenticatedUserCache(next);
+                setUser(next);
               }}
             />
           )}

@@ -32,6 +32,8 @@ export const metadata: Metadata = {
   },
 };
 
+const themeBootstrap = `(()=>{try{const t=localStorage.getItem('qraft-theme-active')||'system';const d=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light'}catch{}})()`;
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body><div className="q-viewport">{children}</div></body></html>;
+  return <html lang="en" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeBootstrap }} /></head><body><div className="q-viewport">{children}</div></body></html>;
 }

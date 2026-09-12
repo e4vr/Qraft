@@ -38,7 +38,7 @@ export function QBankWorkspace({
   organization: { favoriteIds: string[]; pinnedIds: string[]; categories: string[]; categoryByBankId: Record<string, string> };
   updateOrganization: (next: { favoriteIds: string[]; pinnedIds: string[]; categories: string[]; categoryByBankId: Record<string, string> }) => void;
   onSelect: (id: string) => void;
-  onManageBank: (id: string, section: 'settings' | 'questions') => void;
+  onManageBank: (id: string, section: 'settings' | 'structure' | 'questions') => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState('');

@@ -1,5 +1,5 @@
-const CACHE_NAME = 'qraft-shell-v1.0.3';
-const APP_SHELL = ['/', '/offline', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/icon-maskable-512.png'];
+const CACHE_NAME = 'qraft-shell-v1.0.4';
+const APP_SHELL = ['/offline', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/icon-maskable-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
@@ -10,10 +10,18 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  if (new URL(event.request.url).pathname.startsWith('/api/')) return;
-  if (event.request.method !== 'GET' || new URL(event.request.url).origin !== self.location.origin) return;
-  event.respondWith(fetch(event.request).then((response) => {
-    if (response.ok) void caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response.clone()));
-    return response;
-  }).catch(() => caches.match(event.request).then((cached) => cached || (event.request.mode === 'navigate' ? caches.match('/offline') : Response.error()))));
+  const url = new URL(event.request.url);
+  if (url.pathname.startsWith('/api/')) return;
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
+  const staticAsset = ['script', 'style', 'font', 'image'].includes(event.request.destination);
+  if (staticAsset) {
+    event.respondWith(caches.match(event.request).then(async (cached) => {
+      if (cached) return cached;
+      const response = await fetch(event.request);
+      if (response.ok) void caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response.clone()));
+      return response;
+    }));
+    return;
+  }
+  event.respondWith(fetch(event.request).catch(() => event.request.mode === 'navigate' ? caches.match('/offline') : Response.error()));
 });

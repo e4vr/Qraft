@@ -1,4 +1,4 @@
-import { auditStatement, expireSubscriptions } from './platform-server';
+import { auditStatement } from './platform-server';
 import {
   bankAccessState,
   bankAccessStates,
@@ -16,9 +16,11 @@ import {
   canReviewBank,
   hasAccessManagerRole,
   hasModeratorRole,
+  initialAppState,
   initialCollaborationState,
   isPlatformRole,
   normalizeCollaborationState,
+  normalizeAppState,
   normalizeEmail,
   normalizePhone,
   normalizeUniversityId,
@@ -37,6 +39,22 @@ const SESSION_SECONDS = 60 * 60 * 24 * 7;
 const PBKDF2_ITERATIONS = 100_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+const PREFORMED_MEDIA_PREFIX = 'preformed-';
+
+function preformedMediaTestId(scopeId: string) {
+  return scopeId.startsWith(PREFORMED_MEDIA_PREFIX)
+    ? scopeId.slice(PREFORMED_MEDIA_PREFIX.length)
+    : '';
+}
+
+async function preformedMediaTest(scopeId: string) {
+  const testId = preformedMediaTestId(scopeId);
+  if (!testId) return null;
+  return env.DB.prepare('SELECT owner_id,status FROM preformed_tests WHERE id=?')
+    .bind(testId)
+    .first<{ owner_id: string; status: 'draft' | 'published' | 'paused' | 'hidden' }>();
+}
 
 type RecordOperation = {
   type: 'set' | 'delete';
@@ -309,8 +327,6 @@ async function resolveCurrentUser(
   if (!row || (requireVerified && row.verified !== 1)) return undefined;
   const profile = JSON.parse(row.profile_json) as MemberProfile;
   if (profile.suspended) return undefined;
-  if (row.expires_at && row.expires_at <= new Date().toISOString())
-    await expireSubscriptions();
   return await safeProfile(
     profile,
     Boolean(enrolledTotpSecret(row.totp_secret)),
@@ -739,14 +755,16 @@ export async function loadState(request: Request) {
   const user = await currentUser(request);
   if (!user) return json({ error: 'Authentication required.' }, 401);
   const row = await env.DB.prepare(
-    'SELECT payload FROM app_states WHERE user_id = ?',
+    'SELECT payload,revision,updated_at FROM app_states WHERE user_id = ?',
   )
     .bind(user.uid)
-    .first<{ payload: string }>();
+    .first<{ payload: string; revision: number; updated_at: string }>();
   return json({
     state: row
       ? await cleanDeletedState(JSON.parse(row.payload) as AppState)
       : null,
+    revision: row?.revision ?? 0,
+    updatedAt: row?.updated_at,
   });
 }
 
@@ -755,19 +773,46 @@ export async function saveState(request: Request) {
   const user = await currentUser(request);
   if (!user || user.status !== 'approved')
     return json({ error: 'Approved account required.' }, 403);
-  const input = await readJson<{ state?: AppState }>(request, 2_000_000);
+  const input = await readJson<{
+    state?: AppState;
+    baseRevision?: number;
+    operationId?: string;
+  }>(request, 2_000_000);
   if (!input.state || input.state.version !== 1)
     return json({ error: 'Invalid state payload.' }, 400);
+  const operationId = typeof input.operationId === 'string' && /^[a-f0-9-]{20,80}$/i.test(input.operationId)
+    ? input.operationId
+    : crypto.randomUUID();
   const effectivePlan = user.effectivePlan ?? user.tier;
   const planLimits = getPlanLimits(effectivePlan);
   const storedStateRow = await env.DB.prepare(
-    'SELECT payload FROM app_states WHERE user_id=?',
+    'SELECT payload,revision,last_operation_id,updated_at FROM app_states WHERE user_id=?',
   )
     .bind(user.uid)
-    .first<{ payload: string }>();
+    .first<{ payload: string; revision: number; last_operation_id: string | null; updated_at: string }>();
   const storedState = storedStateRow
     ? (JSON.parse(storedStateRow.payload) as AppState)
     : undefined;
+  const currentRevision = storedStateRow?.revision ?? 0;
+  const alreadyApplied = await env.DB.prepare(
+    'SELECT revision FROM state_sync_operations WHERE user_id=? AND operation_id=?',
+  ).bind(user.uid, operationId).first<{ revision: number }>();
+  if (alreadyApplied)
+    return json({
+      ok: true,
+      state: storedState ?? input.state,
+      revision: currentRevision,
+      updatedAt: storedStateRow?.updated_at ?? new Date().toISOString(),
+      duplicate: true,
+    });
+  if (input.baseRevision !== undefined && input.baseRevision !== currentRevision)
+    return json({
+      error: 'STATE_CONFLICT',
+      state: storedState ?? initialAppState(),
+      revision: currentRevision,
+      updatedAt: storedStateRow?.updated_at,
+    }, 409);
+  input.state.settings.theme = 'system';
   if (
     !Array.isArray(input.state.tests) ||
     input.state.tests.some(
@@ -924,6 +969,15 @@ export async function saveState(request: Request) {
       { error: 'Test titles must be unique. Choose a different title.' },
       409,
     );
+  input.state = await cleanDeletedState(input.state);
+  if (storedState && sameJson(input.state, storedState))
+    return json({
+      ok: true,
+      state: storedState,
+      revision: currentRevision,
+      updatedAt: storedStateRow?.updated_at,
+      unchanged: true,
+    }, 200, { 'x-qraft-unchanged': '1' });
   const oldTests = await env.DB.prepare(
     'SELECT test_id,question_count,started_at FROM test_registry WHERE user_id=?',
   )
@@ -968,48 +1022,140 @@ export async function saveState(request: Request) {
       403,
     );
   const now = new Date().toISOString();
-  input.state = await cleanDeletedState(input.state);
-  const answeredProgress = Object.values(input.state.progress).filter(
-    (item) => item.attempts > 0,
-  );
-  const aggregate = {
-    questionsAnswered: answeredProgress.reduce(
-      (total, item) => total + item.attempts,
-      0,
-    ),
-    correctAnswers: answeredProgress.reduce(
-      (total, item) => total + item.correctAttempts,
-      0,
-    ),
-    incorrectAnswers: answeredProgress.reduce(
-      (total, item) => total + item.incorrectAttempts,
-      0,
-    ),
-    examsCompleted: input.state.tests.filter(
-      (test) => test.status === 'completed',
-    ).length,
-    flashcardsReviewed: flashcardReviewLog.length,
-  };
-  await env.DB.batch([
+  const nextRevision = currentRevision + 1;
+  try {
+    await env.DB.batch([
       env.DB.prepare(
         "INSERT OR IGNORE INTO test_registry(user_id,test_id,question_count,started_at) SELECT ?,json_extract(value,'$.id'),json_array_length(value,'$.questionIds'),coalesce(json_extract(value,'$.startedAt'),?) FROM json_each(?)",
       ).bind(user.uid, now, JSON.stringify(input.state.tests)),
       env.DB.prepare(
-        'INSERT INTO app_states (user_id, payload, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at',
-      ).bind(user.uid, JSON.stringify(input.state), now),
+        'INSERT INTO app_states (user_id,payload,updated_at,revision,last_operation_id) VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at,revision=excluded.revision,last_operation_id=excluded.last_operation_id',
+      ).bind(user.uid, JSON.stringify(input.state), now, nextRevision, operationId),
       env.DB.prepare(
-        'INSERT INTO user_stats(user_id,questions_answered,correct_answers,incorrect_answers,exams_completed,flashcards_reviewed,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET questions_answered=excluded.questions_answered,correct_answers=excluded.correct_answers,incorrect_answers=excluded.incorrect_answers,exams_completed=excluded.exams_completed,flashcards_reviewed=excluded.flashcards_reviewed,updated_at=excluded.updated_at',
-      ).bind(
-        user.uid,
-        aggregate.questionsAnswered,
-        aggregate.correctAnswers,
-        aggregate.incorrectAnswers,
-        aggregate.examsCompleted,
-        aggregate.flashcardsReviewed,
-        now,
-      ),
+        'INSERT INTO state_sync_operations(user_id,operation_id,revision,created_at) VALUES(?,?,?,?)',
+      ).bind(user.uid, operationId, nextRevision, now),
+    ]);
+  } catch (error) {
+    const duplicate = await env.DB.prepare(
+      'SELECT revision FROM state_sync_operations WHERE user_id=? AND operation_id=?',
+    ).bind(user.uid, operationId).first<{ revision: number }>();
+    const latest = await env.DB.prepare(
+      'SELECT payload,revision,updated_at FROM app_states WHERE user_id=?',
+    ).bind(user.uid).first<{ payload: string; revision: number; updated_at: string }>();
+    if (duplicate && latest)
+      return json({ ok: true, state: JSON.parse(latest.payload), revision: latest.revision, updatedAt: latest.updated_at, duplicate: true });
+    if (String(error).includes('APP_STATE_CONFLICT') && latest)
+      return json({ error: 'STATE_CONFLICT', state: JSON.parse(latest.payload), revision: latest.revision, updatedAt: latest.updated_at }, 409);
+    throw error;
+  }
+  return json({ ok: true, state: input.state, revision: nextRevision, updatedAt: now });
+}
+
+export async function saveStatePatch(
+  request: Request,
+  kind: 'exam' | 'flashcards' | 'daily-goal',
+) {
+  assertSameOrigin(request);
+  const user = await currentUser(request);
+  if (!user || user.status !== 'approved')
+    return json({ error: 'Approved account required.' }, 403);
+  const input = await readJson<Record<string, unknown>>(request, 2_000_000);
+  const row = await env.DB.prepare('SELECT payload FROM app_states WHERE user_id=?')
+    .bind(user.uid)
+    .first<{ payload: string }>();
+  const state = row ? normalizeAppState(JSON.parse(row.payload) as AppState) : initialAppState();
+  if (kind === 'exam') {
+    if (!Array.isArray(input.tests) || !isRecord(input.progress))
+      return json({ error: 'Invalid exam checkpoint.' }, 400);
+    Object.assign(state, {
+      tests: input.tests,
+      progress: input.progress,
+      reports: Array.isArray(input.reports) ? input.reports : state.reports,
+      revisions: Array.isArray(input.revisions) ? input.revisions : state.revisions,
+      questionOverrides: isRecord(input.questionOverrides) ? input.questionOverrides : state.questionOverrides,
+      customQuestions: Array.isArray(input.customQuestions) ? input.customQuestions : state.customQuestions,
+      flashcardDecks: Array.isArray(input.flashcardDecks) ? input.flashcardDecks : state.flashcardDecks,
+      flashcards: Array.isArray(input.flashcards) ? input.flashcards : state.flashcards,
+      clientUpdatedAt: typeof input.clientUpdatedAt === 'string' ? input.clientUpdatedAt : state.clientUpdatedAt,
+    });
+  } else if (kind === 'flashcards') {
+    if (!isRecord(input.flashcardSchedules) || !Array.isArray(input.flashcardReviewLog))
+      return json({ error: 'Invalid flashcard checkpoint.' }, 400);
+    Object.assign(state, {
+      flashcardSchedules: input.flashcardSchedules,
+      flashcardReviewLog: input.flashcardReviewLog,
+      clientUpdatedAt: typeof input.clientUpdatedAt === 'string' ? input.clientUpdatedAt : state.clientUpdatedAt,
+    });
+  } else if (kind === 'daily-goal') {
+    const dailyGoal = Number(input.dailyGoal);
+    if (!Number.isInteger(dailyGoal) || dailyGoal < 5 || dailyGoal > 100 || dailyGoal % 5 !== 0)
+      return json({ error: 'Choose a daily goal between 5 and 100.' }, 400);
+    state.settings = { ...state.settings, dailyGoal };
+    state.clientUpdatedAt = new Date().toISOString();
+  }
+  const forwarded = new Request(request.url, {
+    method: 'PUT',
+    headers: request.headers,
+    body: JSON.stringify({
+      state,
+      baseRevision: input.baseRevision,
+      operationId: input.operationId,
+    }),
+  });
+  shareCurrentUserRequest(request, forwarded);
+  const stateResponse = await saveState(forwarded);
+  if (!stateResponse.ok || kind !== 'exam' || !Array.isArray(input.answerSelections))
+    return stateResponse;
+  const selections = input.answerSelections
+    .filter(isRecord)
+    .map(item => ({
+      qbankId: typeof item.qbankId === 'string' ? item.qbankId : '',
+      questionId: typeof item.questionId === 'string' ? item.questionId : '',
+      answer: Number(item.answer),
+    }));
+  if (
+    selections.length > 500 ||
+    selections.some(item => !item.qbankId || !item.questionId || !Number.isInteger(item.answer) || item.answer < 0 || item.answer > 25)
+  ) return json({ error: 'Invalid answer statistics checkpoint.' }, 400);
+  if (!selections.length) return stateResponse;
+  const ids = selections.map(item => `${item.qbankId}:${item.questionId}`);
+  const rows = await env.DB.prepare(
+    "SELECT id,payload FROM records WHERE type='answerStats' AND id IN (SELECT value FROM json_each(?))",
+  ).bind(JSON.stringify(ids)).all<{ id: string; payload: string }>();
+  const existing = new Map(rows.results.map(row => [row.id, JSON.parse(row.payload) as { selections?: Record<string, number> }]));
+  const operations = selections.map(item => {
+    const id = `${item.qbankId}:${item.questionId}`;
+    return {
+      collection: 'answerStats',
+      id,
+      type: 'set',
+      value: {
+        id,
+        qbankId: item.qbankId,
+        questionId: item.questionId,
+        selections: { ...existing.get(id)?.selections, [user.uid]: item.answer },
+      },
+    };
+  });
+  const collaborationRequest = new Request(request.url, {
+    method: 'PUT',
+    headers: request.headers,
+    body: JSON.stringify({ operations }),
+  });
+  shareCurrentUserRequest(request, collaborationRequest);
+  const collaborationResponse = await saveCollaboration(collaborationRequest);
+  return collaborationResponse.ok ? stateResponse : collaborationResponse;
+}
+
+export async function cleanStateSyncOperations() {
+  await env.DB.batch([
+    env.DB.prepare(
+      "DELETE FROM state_sync_operations WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days')",
+    ),
+    env.DB.prepare(
+      "DELETE FROM classification_operations WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days')",
+    ),
   ]);
-  return json({ ok: true });
 }
 
 function recordData(value: Record<string, unknown>) {
@@ -1042,21 +1188,19 @@ async function recordsByTypes(types: string[]) {
   }));
 }
 
-async function allRecords(
+async function scopedRecordsByTypes(
   qbankIds: Iterable<string>,
-  excludedTypes: string[] = [],
+  types: string[],
 ) {
   const ids = [...new Set([...qbankIds].filter(Boolean))];
   const scope = ids.length
     ? `qbank_id IS NULL OR qbank_id IN (${ids.map(() => '?').join(',')})`
     : 'qbank_id IS NULL';
-  const exclusions = excludedTypes.length
-    ? ` AND type NOT IN (${excludedTypes.map(() => '?').join(',')})`
-    : '';
+  const requestedTypes = types.map(() => '?').join(',');
   const result = await env.DB.prepare(
-    `SELECT type,id,payload FROM records WHERE (${scope})${exclusions}`,
+    `SELECT type,id,payload FROM records WHERE (${scope}) AND type IN (${requestedTypes})`,
   )
-    .bind(...ids, ...excludedTypes)
+    .bind(...ids, ...types)
     .all<StoredRecord>();
   return result.results.map((row) => ({
     collection: row.type,
@@ -1066,7 +1210,7 @@ async function allRecords(
 }
 
 function recordsToState(
-  rows: Awaited<ReturnType<typeof allRecords>>,
+  rows: Awaited<ReturnType<typeof scopedRecordsByTypes>>,
   profilesRows: MemberProfile[] = [],
 ) {
   const state = initialCollaborationState();
@@ -1113,6 +1257,9 @@ function recordsToState(
     values<CollaborationState['roleApplications'][number]>('roleApplications');
   state.approvedQuestions =
     values<CollaborationState['approvedQuestions'][number]>('sharedQuestions');
+  state.specialties =
+    values<CollaborationState['specialties'][number]>('qbankSpecialties');
+  state.topics = values<CollaborationState['topics'][number]>('qbankTopics');
   state.answerStats = Object.fromEntries(
     values<CollaborationState['answerStats'][string]>('answerStats').map(
       (item) => [item.id, item],
@@ -1295,6 +1442,15 @@ export async function updateOwnProfile(request: Request) {
     displayName,
     phone: user.role === 'super_admin' && !phone ? profile.phone : phone,
   };
+  if (next.displayName === profile.displayName && next.phone === profile.phone)
+    return json({
+      user: await safeProfile(
+        profile,
+        Boolean(enrolledTotpSecret(row.totp_secret)),
+        user.mfaVerified,
+      ),
+      unchanged: true,
+    }, 200, { 'x-qraft-unchanged': '1' });
   const now = new Date().toISOString();
   await env.DB.batch([
     env.DB.prepare(
@@ -1405,7 +1561,20 @@ export async function loadCollaboration(request: Request) {
   allowedBankIds.add('smle-gs');
   const rows = [
     ...catalogRows.filter((row) => row.collection === 'qbanks'),
-    ...(await allRecords(allowedBankIds, ['qbanks', 'auditLog'])),
+    ...(await scopedRecordsByTypes(allowedBankIds, [
+      'qbankMemberships',
+      'qbankInvitations',
+      'universityIds',
+      'adminInvites',
+      'questionProposals',
+      'roleApplications',
+      'sharedQuestions',
+      'qbankSpecialties',
+      'qbankTopics',
+      'answerStats',
+      'sharedNotes',
+      'system',
+    ])),
   ];
   const profileResult =
     hasAccessManagerRole(user)
@@ -1418,6 +1587,13 @@ export async function loadCollaboration(request: Request) {
     profileResult.results.map(
       (row) => JSON.parse(row.profile_json) as MemberProfile,
     ),
+  );
+  const revisions = await env.DB.prepare(
+    `SELECT qbank_id,revision FROM qbank_classification_revisions
+     WHERE qbank_id IN (SELECT value FROM json_each(?))`,
+  ).bind(JSON.stringify([...allowedBankIds])).all<{ qbank_id: string; revision: number }>();
+  state.classificationRevisions = Object.fromEntries(
+    revisions.results.map((item) => [item.qbank_id, item.revision]),
   );
   const accessibleIds = new Set(
     state.qbanks
@@ -1454,6 +1630,12 @@ export async function loadCollaboration(request: Request) {
       accessibleIds.has(item.qbankId ?? 'smle-gs') ||
       reviewIds.has(item.qbankId ?? 'smle-gs'),
   );
+  state.specialties = state.specialties.filter((item) =>
+    accessibleIds.has(item.qbankId) || reviewIds.has(item.qbankId),
+  );
+  state.topics = state.topics.filter((item) =>
+    accessibleIds.has(item.qbankId) || reviewIds.has(item.qbankId),
+  );
   state.answerStats = Object.fromEntries(
     Object.entries(state.answerStats).filter(([, item]) =>
       accessibleIds.has(item.qbankId),
@@ -1482,11 +1664,7 @@ export async function loadCollaboration(request: Request) {
     );
     state.blockedAccess.phones = [];
   }
-  return json(
-    new URL(request.url).searchParams.get('includeUser') === '1'
-      ? { collaboration: state, user }
-      : { collaboration: state },
-  );
+  return json({ collaboration: state });
 }
 
 function bankIdForOperation(
@@ -1507,6 +1685,10 @@ function bankIdForOperation(
       state.approvedQuestions.find((item) => item.id === operation.id)
         ?.qbankId ?? 'smle-gs'
     );
+  if (operation.collection === 'qbankSpecialties')
+    return state.specialties.find((item) => item.id === operation.id)?.qbankId;
+  if (operation.collection === 'qbankTopics')
+    return state.topics.find((item) => item.id === operation.id)?.qbankId;
   if (operation.collection === 'answerStats')
     return state.answerStats[operation.id]?.qbankId;
   if (operation.collection === 'sharedNotes')
@@ -1862,6 +2044,8 @@ function recordAllowed(
   if (operation.collection === 'qbankInvitations')
     return canManage || invitedUserChangeAllowed(user, operation, value, state);
   if (operation.collection === 'qbankShareLinks') return canManage;
+  if (operation.collection === 'qbankSpecialties' || operation.collection === 'qbankTopics')
+    return canManage;
   if (operation.collection === 'questionProposals')
     return (
       (canAccess || canReview) &&
@@ -1938,6 +2122,28 @@ function reviewedQuestionWriteAllowed(
       candidate.value.qbankId === question.qbankId
     );
   });
+}
+
+function collaborationValue(state: CollaborationState, collection: string, id: string): unknown {
+  const arrays: Record<string, unknown[]> = {
+    qbanks: state.qbanks,
+    qbankMemberships: state.memberships,
+    qbankInvitations: state.invitations,
+    profiles: state.members,
+    universityIds: state.allowedUniversityIds,
+    adminInvites: state.adminInvites,
+    questionProposals: state.proposals,
+    roleApplications: state.roleApplications,
+    sharedQuestions: state.approvedQuestions,
+    qbankSpecialties: state.specialties,
+    qbankTopics: state.topics,
+    auditLog: state.auditLog,
+  };
+  if (collection === 'answerStats') return state.answerStats[id];
+  if (collection === 'sharedNotes') return state.sharedNotes[id];
+  if (collection === 'system' && id === 'accessControl') return state.blockedAccess;
+  if (collection === 'system' && id === 'security') return state.security;
+  return arrays[collection]?.find(value => isRecord(value) && (value.id === id || value.uid === id));
 }
 
 export async function saveCollaboration(request: Request) {
@@ -2021,6 +2227,11 @@ export async function saveCollaboration(request: Request) {
     )
   )
     return json({ error: 'One or more changes are not permitted.' }, 403);
+  input.operations = input.operations.filter(operation => {
+    const current = collaborationValue(state, operation.collection, operation.id);
+    return operation.type === 'delete' ? current !== undefined : !sameJson(operation.value, current);
+  });
+  if (!input.operations.length) return json({ ok: true, unchanged: true, operations: [] }, 200, { 'x-qraft-unchanged': '1' });
   for (const operation of input.operations.filter(
     (o) => o.collection === 'sharedQuestions' && o.type === 'set',
   )) {
@@ -2143,37 +2354,6 @@ export async function saveCollaboration(request: Request) {
         JSON.stringify(recordSets),
       ),
     );
-  const affectedQbanks = [
-    ...new Set(
-      input.operations
-        .filter((operation) =>
-          [
-            'qbanks',
-            'questionProposals',
-            'sharedQuestions',
-          ].includes(operation.collection),
-        )
-        .map((operation) =>
-          bankIdForOperation(
-            operation,
-            isRecord(operation.value) ? operation.value : {},
-            state,
-          ),
-        )
-        .filter((id): id is string => Boolean(id)),
-    ),
-  ];
-  if (affectedQbanks.length)
-    statements.push(
-      env.DB.prepare(`INSERT INTO qbank_stats(qbank_id,total_questions,pending_questions,approved_questions,updated_at)
-        SELECT value,
-          (SELECT count(*) FROM records WHERE qbank_id=value AND type='sharedQuestions'),
-          (SELECT count(*) FROM records WHERE qbank_id=value AND type='questionProposals' AND json_extract(payload,'$.status')='pending'),
-          (SELECT count(*) FROM records WHERE qbank_id=value AND type='sharedQuestions'), ?
-        FROM json_each(?) WHERE 1
-        ON CONFLICT(qbank_id) DO UPDATE SET total_questions=excluded.total_questions,pending_questions=excluded.pending_questions,approved_questions=excluded.approved_questions,updated_at=excluded.updated_at`)
-        .bind(now, JSON.stringify(affectedQbanks)),
-    );
   for (const operation of input.operations.filter(
     (o) => o.collection !== 'auditLog',
   ))
@@ -2189,7 +2369,7 @@ export async function saveCollaboration(request: Request) {
       ),
     );
   if (statements.length) await env.DB.batch(statements);
-  return json({ ok: true });
+  return json({ ok: true, operations: input.operations });
 }
 
 export async function reserveIds(request: Request) {
@@ -2275,7 +2455,7 @@ export async function joinBank(request: Request) {
       createdAt,
     )
     .run();
-  return json({ ok: true });
+  return json({ membership });
 }
 
 export async function previewBankInvite(request: Request) {
@@ -2391,11 +2571,12 @@ export async function uploadMedia(
       { error: 'Upload a JPEG, PNG, WebP, or GIF image smaller than 10 MB.' },
       400,
     );
-  const state = await bankAccessState(qbankId);
-  const bank = state.qbanks.find((item) => item.id === qbankId);
-  const permitted =
-    bank &&
-    (kind === 'questions'
+  const readyMadeTest = await preformedMediaTest(qbankId);
+  const state = readyMadeTest ? null : await bankAccessState(qbankId);
+  const bank = state?.qbanks.find((item) => item.id === qbankId);
+  const permitted = readyMadeTest
+    ? kind === 'questions' && readyMadeTest.owner_id === user.uid
+    : bank && state && (kind === 'questions'
       ? canReviewBank(user, bank, state.memberships)
       : canAccessBank(user, bank, state.memberships));
   if (!permitted)
@@ -2553,17 +2734,23 @@ export async function uploadMedia(
 
 export async function serveMedia(request: Request, key: string) {
   const user = await currentUser(request);
-  if (!user) return new Response('Authentication required.', { status: 401 });
   const metadata = await env.DB.prepare(
     'SELECT qbank_id,provider,storage_key,status FROM media WHERE key = ?',
   )
     .bind(key)
     .first<{ qbank_id: string; provider: string; storage_key: string | null; status: string }>();
   if (!metadata || metadata.status === 'account_deleted') return new Response('Not found.', { status: 404 });
-  const state = await bankAccessState(metadata.qbank_id);
-  const bank = state.qbanks.find((item) => item.id === metadata.qbank_id);
-  if (!bank || !canAccessBank(user, bank, state.memberships))
-    return new Response('Forbidden.', { status: 403 });
+  const readyMadeTest = await preformedMediaTest(metadata.qbank_id);
+  if (readyMadeTest) {
+    if (readyMadeTest.status !== 'published' && (!user || readyMadeTest.owner_id !== user.uid))
+      return new Response('Forbidden.', { status: 403 });
+  } else {
+    if (!user) return new Response('Authentication required.', { status: 401 });
+    const state = await bankAccessState(metadata.qbank_id);
+    const bank = state.qbanks.find((item) => item.id === metadata.qbank_id);
+    if (!bank || !canAccessBank(user, bank, state.memberships))
+      return new Response('Forbidden.', { status: 403 });
+  }
   if (metadata.provider !== 'r2' || !metadata.storage_key)
     return new Response('This legacy asset is served by its original URL.', {
       status: 410,
@@ -2591,10 +2778,11 @@ export async function serveMedia(request: Request, key: string) {
 export async function deleteBankMedia(request: Request, qbankId: string) {
   assertSameOrigin(request);
   const user = await currentUser(request);
-  const state = await bankAccessState(qbankId);
-  const bank = state.qbanks.find((item) => item.id === qbankId);
-  if (!user || !bank || !canManageBank(user, bank))
-    return json({ error: 'QBank management access required.' }, 403);
+  const readyMadeTest = await preformedMediaTest(qbankId);
+  const state = readyMadeTest ? null : await bankAccessState(qbankId);
+  const bank = state?.qbanks.find((item) => item.id === qbankId);
+  if (!user || (readyMadeTest ? readyMadeTest.owner_id !== user.uid : !bank || !canManageBank(user, bank)))
+    return json({ error: readyMadeTest ? 'Test owner access required.' : 'QBank management access required.' }, 403);
   const rows = await env.DB.prepare(
     'SELECT key,provider,storage_key,size FROM media WHERE qbank_id = ?',
   )

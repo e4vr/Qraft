@@ -132,7 +132,6 @@ export async function deleteOwnAccount(request: Request) {
     env.DB.prepare('UPDATE subscription_events SET admin_id=? WHERE admin_id=?').bind(anonymousId, user.uid),
     bindUser('DELETE FROM university_claims WHERE user_id=?'), bindUser('DELETE FROM import_batches WHERE user_id=?'),
     env.DB.prepare('UPDATE question_ids SET created_by_id=? WHERE created_by_id=?').bind(anonymousId, user.uid),
-    env.DB.prepare('DELETE FROM qbank_stats WHERE qbank_id IN (SELECT value FROM json_each(?))').bind(JSON.stringify([...deletedBanks])),
     // Durable cleanup markers survive object storage failures after D1 commits.
     env.DB.prepare("UPDATE media SET status=CASE WHEN purpose IN ('note','notes') OR qbank_id IN (SELECT value FROM json_each(?)) THEN 'account_deleted' ELSE status END,expires_at=CASE WHEN purpose IN ('note','notes') OR qbank_id IN (SELECT value FROM json_each(?)) THEN ? ELSE expires_at END,owner_id=?,original_name=NULL WHERE owner_id=?")
       .bind(JSON.stringify([...deletedBanks]), JSON.stringify([...deletedBanks]), now, anonymousId, user.uid),

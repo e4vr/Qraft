@@ -1,18 +1,20 @@
 'use client';
 
 import { memo } from 'react';
-import { ArrowRight, BookOpenCheck, Check, CheckCircle2, ChevronRight, ClipboardPlus, Flag, Library, Menu, Play, Target, TrendingUp } from 'lucide-react';
+import { ArrowRight, BookOpenCheck, Check, CheckCircle2, ChevronRight, ClipboardPlus, Flag, Library, Menu, Moon, Play, Sun, Target, TrendingUp } from 'lucide-react';
 import { emptyProgress, type AppState, type Question } from '@/lib/medguard-types';
 
 type Destination = 'create' | 'test' | 'library' | 'progress' | 'history';
 
-export const StudyDashboard = memo(function StudyDashboard({ state, questions, name, bankName, navigate, startQuickTest }: {
+export const StudyDashboard = memo(function StudyDashboard({ state, questions, name, bankName, navigate, startQuickTest, theme, onToggleTheme }: {
   state: AppState;
   questions: Question[];
   name?: string;
   bankName?: string;
   navigate: (view: Destination) => void;
   startQuickTest: () => void;
+  theme: AppState['settings']['theme'];
+  onToggleTheme: () => void;
 }) {
   const progress = questions.map((question) => ({ question, progress: state.progress[question.id] ?? emptyProgress() }));
   const completed = progress.filter(({ progress: item }) => item.attempts > 0).length;
@@ -41,7 +43,12 @@ export const StudyDashboard = memo(function StudyDashboard({ state, questions, n
         <button aria-label="Open navigation" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))} className="q-icon lg:hidden"><Menu className="size-5" /></button>
         <div><p className="q-eyebrow">Your workspace</p><h1 className="text-lg font-bold tracking-tight">Study overview</h1></div>
       </div>
-      <span className="hidden text-sm text-muted-foreground sm:block">{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}</span>
+      <div className="flex items-center gap-2">
+        <span className="hidden text-sm text-muted-foreground sm:block">{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}</span>
+        <button className="q-icon" aria-label="Toggle light and dark mode" title="Toggle theme" onClick={onToggleTheme}>
+          {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        </button>
+      </div>
     </header>
     <div className="q-page q-enter">
       <div className="mb-6 flex flex-wrap items-end justify-between gap-3">

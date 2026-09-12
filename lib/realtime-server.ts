@@ -4,7 +4,7 @@ import { bankAccessState } from './qbank-access-repository';
 import { canAccessBank, canReviewBank, hasAccessManagerRole, hasModeratorRole } from './medguard-types';
 
 type RealtimeStub = DurableObjectStub & {
-  publish(topic: string): Promise<void>;
+  publish(resources: string[], originClientId?: string): Promise<void>;
 };
 
 function realtimeStub(channel: string): RealtimeStub {
@@ -32,12 +32,16 @@ export async function connectRealtime(request: Request) {
   if (!allowed) return json({ error: 'Channel not available.' }, 403);
   if (!env.REALTIME) return json({ error: 'Live connection is temporarily unavailable.' }, 503);
   // Do not forward cookies or accept client-selected publishing actions.
-  return realtimeStub(channel).fetch(new Request('https://channel/connect', { headers: { Upgrade: 'websocket' } }));
+  const clientId = url.searchParams.get('client') ?? '';
+  const headers = new Headers({ Upgrade: 'websocket' });
+  if (/^[a-f0-9-]{20,80}$/i.test(clientId)) headers.set('x-qraft-client-id', clientId);
+  return realtimeStub(channel).fetch(new Request('https://channel/connect', { headers }));
 }
 
-export async function publishChanges(channels: Iterable<string>, topic = 'collaboration') {
+export async function publishChanges(channels: Iterable<string>, topics: Iterable<string> = ['collaboration'], originClientId = '') {
   if (!env.REALTIME) return;
-  const results = await Promise.allSettled([...new Set(channels)].map(channel => realtimeStub(channel).publish(topic)));
+  const resources = [...new Set(topics)];
+  const results = await Promise.allSettled([...new Set(channels)].map(channel => realtimeStub(channel).publish(resources, originClientId)));
   if (results.some(result => result.status === 'rejected')) console.error(JSON.stringify({ event: 'realtime_publish_failed' }));
 }
 
@@ -46,7 +50,7 @@ export async function publishChanges(channels: Iterable<string>, topic = 'collab
 export async function notifyMutation(request: Request) {
   const path = new URL(request.url).pathname.split('/').slice(3);
   if (
-    ['state', 'media', 'ids'].includes(path[0]) ||
+    (['state', 'media', 'ids'].includes(path[0]) && !(path[0] === 'state' && path[1] === 'exam')) ||
     (path[0] === 'auth' && path[1] !== 'register') ||
     (path[0] === 'platform' && ['exam-start', 'quote'].includes(path[1]))
   )
@@ -59,9 +63,12 @@ export async function notifyMutation(request: Request) {
   const addBank = (id: unknown) => { if (typeof id === 'string' && id) channels.add(`bank:${id}`); };
   addUser(input.userId);
   addBank(input.qbankId ?? input.bankId);
-  let topic = 'collaboration';
-  if (path[0] === 'contact') {
-    topic = 'contact';
+  const topics = new Set<string>();
+  if (path[0] === 'state' && path[1] === 'exam' && Array.isArray(input.answerSelections)) {
+    for (const selection of input.answerSelections as Array<{ qbankId?: string }>) addBank(selection.qbankId);
+    topics.add('question-stats');
+  } else if (path[0] === 'contact') {
+    topics.add('contact');
     const ticketId = typeof input.id === 'string' ? input.id : '';
     const ticket = await env.DB.prepare('SELECT user_id FROM tickets WHERE id=?').bind(ticketId).first<{ user_id: string }>();
     addUser(ticket?.user_id);
@@ -78,27 +85,45 @@ export async function notifyMutation(request: Request) {
       if (operation.collection === 'profiles') { addUser(operation.id); channels.add('access'); }
       if (operation.collection === 'qbanks') { addBank(operation.id); channels.add('catalog'); }
       if (operation.type === 'delete' || ['qbankMemberships', 'qbankInvitations', 'system'].includes(operation.collection)) channels.add('catalog');
+      if (operation.collection === 'questionProposals') { topics.add('review-queue'); topics.add('contributions'); }
+      else if (['sharedQuestions', 'qbankSpecialties', 'qbankTopics'].includes(operation.collection)) topics.add('question-catalog');
+      else if (operation.collection === 'answerStats') topics.add('question-stats');
+      else if (operation.collection === 'sharedNotes') topics.add('shared-notes');
+      else topics.add('collaboration');
     }
   } else if (path[0] === 'platform' && path[1] === 'review-history') {
-    topic = 'review-history';
+    topics.add('review-history');
   } else if (path[0] === 'platform' && path[1] === 'discounts') {
-    topic = 'pricing'; channels.add('catalog');
+    topics.add('pricing'); topics.add('discounts'); channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'subscriptions') {
-    topic = 'account'; channels.add('access');
+    topics.add('account'); topics.add('subscriptions'); channels.add('access');
   } else if (path[0] === 'platform' && path[1] === 'announcement') {
-    topic = 'announcement'; channels.add('catalog');
+    topics.add('announcement'); channels.add('catalog');
+  } else if (path[0] === 'platform' && path[1] === 'legal-links') {
+    topics.add('legal-links'); channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'economy-admin') {
-    if (input.operation === 'grant-reward') topic = 'reward-gift';
-    else if (input.operation === 'adjust-credits') topic = 'reward';
+    topics.add('economy');
+    topics.add(input.operation === 'grant-reward' ? 'reward-gift' : 'reward');
+  } else if (path[0] === 'platform' && path[1] === 'classification') {
+    addBank(input.qbankId);
+    topics.add('question-catalog'); topics.add('collaboration');
   } else if (path[0] === 'platform' && path[1] === 'bulk-review' && Array.isArray(input.proposalIds)) {
     const rows = await env.DB.prepare("SELECT qbank_id,owner_id FROM records WHERE type='questionProposals' AND id IN (SELECT value FROM json_each(?))")
       .bind(JSON.stringify(input.proposalIds)).all<{ qbank_id: string; owner_id: string }>();
     rows.results.forEach(row => { addBank(row.qbank_id); addUser(row.owner_id); });
-    if (input.status === 'approved') topic = 'reward';
+    topics.add('review-queue'); topics.add('reviewer-performance'); topics.add('question-catalog');
+    if (input.status === 'approved') { topics.add('reward'); topics.add('contributions'); }
+  } else if (path[0] === 'preformed') {
+    topics.add('preformed-tests');
+    channels.add('catalog');
   } else if (path[0] === 'auth') {
+    topics.add('account');
     channels.add('access');
   } else if (path[0] === 'qbanks' || path[1] === 'question') {
+    topics.add('collaboration'); topics.add('question-catalog');
     channels.add('catalog');
   }
-  await publishChanges(channels, topic);
+  if (!topics.size) topics.add('collaboration');
+  topics.add('audit');
+  await publishChanges(channels, topics, request.headers.get('x-qraft-client-id') ?? '');
 }

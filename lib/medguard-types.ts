@@ -33,6 +33,8 @@ export interface Question {
   number: number;
   specialty: string;
   topic: string;
+  specialtyId?: string;
+  topicId?: string;
   stem: string;
   options: string[];
   answer: number;
@@ -75,6 +77,7 @@ export interface QuestionProgress {
   highlightSections?: Record<string, HighlightRange[]>;
   note: string;
   noteImages: NoteImage[];
+  updatedAt?: string;
 }
 
 export interface TestSession {
@@ -202,6 +205,7 @@ export interface AppSettings {
 
 export interface AppState {
   version: 1;
+  clientUpdatedAt?: string;
   progress: Record<string, QuestionProgress>;
   tests: TestSession[];
   reports: ErrorReport[];
@@ -337,6 +341,8 @@ export interface QuestionProposalPayload {
   answer: number;
   specialty: string;
   topic: string;
+  specialtyId?: string;
+  topicId?: string;
   explanation: string;
   sourceReference: string;
   sourceFile?: string;
@@ -451,6 +457,9 @@ export interface CollaborationState {
   proposals: QuestionProposal[];
   roleApplications: RoleApplication[];
   approvedQuestions: Question[];
+  specialties: QBankSpecialty[];
+  topics: QBankTopic[];
+  classificationRevisions: Record<string, number>;
   answerStats: Record<string, AnswerStat>;
   sharedNotes: Record<string, SharedQuestionNote>;
   auditLog: AuditEntry[];
@@ -541,6 +550,9 @@ export function initialCollaborationState(): CollaborationState {
     proposals: [],
     roleApplications: [],
     approvedQuestions: [],
+    specialties: [],
+    topics: [],
+    classificationRevisions: {},
     answerStats: {},
     sharedNotes: {},
     auditLog: [],
@@ -565,6 +577,27 @@ export function normalizeCollaborationState(
       viewerIds: bank.viewerIds ?? [],
     }),
   );
+  const specialties = input.specialties ?? [];
+  const topics = input.topics ?? [];
+  const specialtyById = new Map(specialties.map((item) => [item.id, item]));
+  const topicById = new Map(topics.map((item) => [item.id, item]));
+  const resolveClassification = <T extends Question | QuestionProposalPayload>(
+    value: T,
+  ): T => {
+    const topic = value.topicId ? topicById.get(value.topicId) : undefined;
+    const specialty = topic
+      ? specialtyById.get(topic.specialtyId)
+      : value.specialtyId
+        ? specialtyById.get(value.specialtyId)
+        : undefined;
+    return {
+      ...value,
+      specialtyId: specialty?.id ?? value.specialtyId,
+      topicId: topic?.id ?? value.topicId,
+      specialty: specialty?.name ?? value.specialty,
+      topic: topic?.name ?? value.topic,
+    };
+  };
   return {
     ...base,
     ...input,
@@ -613,7 +646,7 @@ export function normalizeCollaborationState(
           ? ['question_text']
           : ['typo_formatting']),
       payload: {
-        ...proposal.payload,
+        ...resolveClassification(proposal.payload),
         explanation: proposal.payload.explanation ?? '',
         sourceReference:
           proposal.payload.sourceReference ?? proposal.rationale ?? '',
@@ -627,9 +660,12 @@ export function normalizeCollaborationState(
         : undefined,
     })),
     roleApplications: input.roleApplications ?? [],
+    specialties,
+    topics,
+    classificationRevisions: input.classificationRevisions ?? {},
     approvedQuestions: (input.approvedQuestions ?? []).map(
       (question, index) => ({
-        ...question,
+        ...resolveClassification(question),
         questionId: question.questionId ?? String(218 + index).padStart(5, '0'),
         images: question.images ?? [],
       }),
@@ -643,6 +679,25 @@ export function normalizeCollaborationState(
 
 export function normalizePhone(value: string): string {
   return (value ?? '').replace(/\D/g, '');
+}
+
+export interface QBankSpecialty {
+  id: string;
+  qbankId: string;
+  name: string;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QBankTopic {
+  id: string;
+  qbankId: string;
+  specialtyId: string;
+  name: string;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export function normalizeUniversityId(value: string): string {

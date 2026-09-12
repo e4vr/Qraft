@@ -1,5 +1,15 @@
-import type { AppState, AppUser, CollaborationState } from './medguard-types';
-import { api } from './api-client';
+import { normalizeAppState, type AppState, type AppUser, type CollaborationState } from './medguard-types';
+import { ApiError, api, clearResourceCache, setApiCache } from './api-client';
+import { mergeAppStates } from './merge-app-state';
+import {
+  enqueueStateSync,
+  loadStateSyncOutbox,
+  noteStateSyncAttempt,
+  removeStateSync,
+  type StateSyncKind,
+  type StateSyncOperation,
+} from './local-db';
+import { publishStateSync, subscribeStateSync, withStateSyncLock } from './tab-sync';
 export { api } from './api-client';
 
 export async function observeCloudflareUser(callback: (user?: AppUser) => void): Promise<() => void> {
@@ -8,9 +18,16 @@ export async function observeCloudflareUser(callback: (user?: AppUser) => void):
   return () => undefined;
 }
 
+export function setAuthenticatedUserCache(user: AppUser) {
+  setApiCache('/auth/session', { user });
+}
+
 export async function signInCloudflare(email: string, password: string): Promise<AppUser> {
+  clearResourceCache();
   try {
-    return (await api<{ user: AppUser }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) })).user;
+    const result = await api<{ user: AppUser }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    setAuthenticatedUserCache(result.user);
+    return result.user;
   } catch (error) {
     if (error instanceof Error && error.message === 'MFA_REQUIRED') throw error;
     throw error;
@@ -18,19 +35,27 @@ export async function signInCloudflare(email: string, password: string): Promise
 }
 
 export async function completeCloudflareMfaSignIn(code: string): Promise<AppUser> {
-  return (await api<{ user: AppUser }>('/auth/mfa', { method: 'POST', body: JSON.stringify({ code }) })).user;
+  const result = await api<{ user: AppUser }>('/auth/mfa', { method: 'POST', body: JSON.stringify({ code }) });
+  setAuthenticatedUserCache(result.user);
+  return result.user;
 }
 
 export async function createCloudflareAccount(name: string, email: string, password: string, universityId: string, phone: string, setupToken?: string): Promise<AppUser> {
-  return (await api<{ user: AppUser }>('/auth/register', { method: 'POST', body: JSON.stringify({ name, email, password, universityId, phone, setupToken }) })).user;
+  clearResourceCache();
+  const result = await api<{ user: AppUser }>('/auth/register', { method: 'POST', body: JSON.stringify({ name, email, password, universityId, phone, setupToken }) });
+  setAuthenticatedUserCache(result.user);
+  return result.user;
 }
 
 export async function signOutCloudflare(): Promise<void> {
   await api('/auth/logout', { method: 'POST', body: '{}' });
+  clearResourceCache();
 }
 
 export async function updateCloudflareProfile(displayName: string, phone: string): Promise<AppUser> {
-  return (await api<{ user: AppUser }>('/auth/profile', { method: 'PUT', body: JSON.stringify({ displayName, phone }) })).user;
+  const result = await api<{ user: AppUser }>('/auth/profile', { method: 'PUT', body: JSON.stringify({ displayName, phone }) });
+  setAuthenticatedUserCache(result.user);
+  return result.user;
 }
 
 export async function changeCloudflarePassword(currentPassword: string, newPassword: string): Promise<void> {
@@ -45,12 +70,205 @@ export async function completeTotpEnrollment(code: string): Promise<void> {
   await api('/auth/mfa-complete', { method: 'POST', body: JSON.stringify({ code }) });
 }
 
-export async function loadCloudState(_uid: string): Promise<AppState | undefined> {
-  return (await api<{ state: AppState | null }>('/state')).state ?? undefined;
+type StateSyncResponse = {
+  ok: true;
+  state: AppState;
+  revision: number;
+  updatedAt: string;
+  duplicate?: boolean;
+  unchanged?: boolean;
+};
+
+const lastSavedState = new Map<string, string>();
+const stateRevision = new Map<string, number>();
+
+function cloudState(state: AppState): AppState {
+  return {
+    ...normalizeAppState(state),
+    settings: { ...state.settings, theme: 'system' },
+  };
 }
 
-export async function saveCloudState(_uid: string, state: AppState): Promise<void> {
-  await api('/state', { method: 'PUT', body: JSON.stringify({ state }) });
+function operationPayload(
+  kind: StateSyncKind,
+  state: AppState,
+  dailyGoal?: number,
+  extra?: Record<string, unknown>,
+) {
+  if (kind === 'exam')
+    return {
+      tests: state.tests,
+      progress: state.progress,
+      reports: state.reports,
+      revisions: state.revisions,
+      questionOverrides: state.questionOverrides,
+      customQuestions: state.customQuestions,
+      flashcardDecks: state.flashcardDecks,
+      flashcards: state.flashcards,
+      clientUpdatedAt: state.clientUpdatedAt,
+      ...extra,
+    };
+  if (kind === 'flashcards')
+    return {
+      flashcardSchedules: state.flashcardSchedules,
+      flashcardReviewLog: state.flashcardReviewLog,
+      clientUpdatedAt: state.clientUpdatedAt,
+    };
+  if (kind === 'daily-goal') return { dailyGoal };
+  return { state: cloudState(state) };
+}
+
+function operationPath(kind: StateSyncKind) {
+  return kind === 'full' ? '/state' : `/state/${kind}`;
+}
+
+function operationMatchesSaved(uid: string, kind: StateSyncKind, payload: Record<string, unknown>) {
+  const raw = lastSavedState.get(uid);
+  if (!raw) return false;
+  const saved = JSON.parse(raw) as AppState;
+  if (kind === 'full') return JSON.stringify(cloudState(saved)) === JSON.stringify(payload.state);
+  if (kind === 'daily-goal') return saved.settings.dailyGoal === payload.dailyGoal;
+  return JSON.stringify(operationPayload(kind, saved)) === JSON.stringify(payload);
+}
+
+async function sendStateOperation(operation: StateSyncOperation): Promise<StateSyncResponse> {
+  const path = operationPath(operation.kind);
+  const request = (baseRevision: number, payload: Record<string, unknown>) =>
+    api<StateSyncResponse>(path, {
+      method: 'PUT',
+      body: JSON.stringify({ ...payload, baseRevision, operationId: operation.id }),
+    });
+  try {
+    return await request(operation.baseRevision, operation.payload);
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 409) throw error;
+    const remote = error.payload.state as AppState | undefined;
+    const revision = Number(error.payload.revision);
+    if (!remote || !Number.isInteger(revision)) throw error;
+    stateRevision.set(operation.uid, revision);
+    let payload = operation.payload;
+    const localUpdatedAt = typeof operation.payload.clientUpdatedAt === 'string'
+      ? operation.payload.clientUpdatedAt
+      : '';
+    if (operation.kind === 'full') {
+      payload = { state: cloudState(mergeAppStates(operation.payload.state as AppState, remote)) };
+    } else if (
+      operation.kind !== 'daily-goal' &&
+      localUpdatedAt < (remote.clientUpdatedAt ?? '')
+    ) {
+      payload = {
+        ...operationPayload(operation.kind, remote),
+        ...(operation.kind === 'exam' ? { answerSelections: operation.payload.answerSelections } : {}),
+      };
+    }
+    return request(revision, payload);
+  }
+}
+
+async function flushOutboxUnlocked(uid: string): Promise<StateSyncResponse | undefined> {
+  let latest: StateSyncResponse | undefined;
+  for (const operation of await loadStateSyncOutbox(uid)) {
+    await noteStateSyncAttempt(uid, operation.id);
+    const result = await sendStateOperation(operation);
+    stateRevision.set(uid, result.revision);
+    lastSavedState.set(uid, JSON.stringify(cloudState(result.state)));
+    setApiCache('/state', { state: result.state, revision: result.revision, updatedAt: result.updatedAt }, { cacheScope: uid });
+    await removeStateSync(uid, operation.id);
+    publishStateSync({ uid, state: result.state, revision: result.revision, updatedAt: result.updatedAt });
+    latest = result;
+  }
+  return latest;
+}
+
+export async function loadCloudState(uid: string): Promise<AppState | undefined> {
+  const result = await api<{ state: AppState | null; revision: number; updatedAt?: string }>('/state', { cacheScope: uid });
+  const state = result.state ?? undefined;
+  stateRevision.set(uid, result.revision ?? 0);
+  if (state) lastSavedState.set(uid, JSON.stringify(cloudState(state)));
+  return state;
+}
+
+export async function flushPendingCloudState(uid: string): Promise<AppState | undefined> {
+  const result = await withStateSyncLock(uid, () => flushOutboxUnlocked(uid));
+  return result?.state;
+}
+
+export function observeCloudStateSync(uid: string, callback: (state: AppState) => void) {
+  return subscribeStateSync(notice => {
+    if (notice.uid !== uid) return;
+    stateRevision.set(uid, notice.revision);
+    lastSavedState.set(uid, JSON.stringify(cloudState(notice.state)));
+    setApiCache('/state', { state: notice.state, revision: notice.revision, updatedAt: notice.updatedAt }, { cacheScope: uid });
+    callback(notice.state);
+  });
+}
+
+async function queueStateOperation(
+  uid: string,
+  kind: StateSyncKind,
+  state: AppState,
+  dailyGoal?: number,
+  extra?: Record<string, unknown>,
+): Promise<StateSyncResponse | undefined> {
+  const payload = operationPayload(kind, state, dailyGoal, extra);
+  if (operationMatchesSaved(uid, kind, payload)) return undefined;
+  const operation: StateSyncOperation = {
+    id: crypto.randomUUID(),
+    uid,
+    kind,
+    payload,
+    baseRevision: stateRevision.get(uid) ?? 0,
+    createdAt: new Date().toISOString(),
+    attempts: 0,
+  };
+  await enqueueStateSync(operation);
+  return withStateSyncLock(uid, () => flushOutboxUnlocked(uid));
+}
+
+export async function saveCloudState(uid: string, state: AppState): Promise<AppState | undefined> {
+  return (await queueStateOperation(uid, 'full', state))?.state;
+}
+
+export async function saveExamCheckpoint(
+  uid: string,
+  state: AppState,
+  answerSelections: Array<{ qbankId: string; questionId: string; answer: number }>,
+): Promise<AppState | undefined> {
+  return (await queueStateOperation(uid, 'exam', state, undefined, { answerSelections }))?.state;
+}
+
+export async function saveFlashcardCheckpoint(uid: string, state: AppState): Promise<AppState | undefined> {
+  return (await queueStateOperation(uid, 'flashcards', state))?.state;
+}
+
+export async function saveDailyGoal(uid: string, state: AppState, dailyGoal: number): Promise<AppState | undefined> {
+  return (await queueStateOperation(uid, 'daily-goal', state, dailyGoal))?.state;
+}
+
+export function saveBestEffortStateCheckpoint(
+  uid: string,
+  state: AppState,
+  kind: Exclude<StateSyncKind, 'daily-goal'>,
+  extra?: Record<string, unknown>,
+) {
+  const operation: StateSyncOperation = {
+    id: crypto.randomUUID(),
+    uid,
+    kind,
+    payload: operationPayload(kind, state, undefined, extra),
+    baseRevision: stateRevision.get(uid) ?? 0,
+    createdAt: new Date().toISOString(),
+    attempts: 0,
+  };
+  void enqueueStateSync(operation);
+  const body = JSON.stringify({ ...operation.payload, baseRevision: operation.baseRevision, operationId: operation.id });
+  void fetch(`/api/cloudflare${operationPath(kind)}`, {
+    method: 'PUT',
+    credentials: 'same-origin',
+    keepalive: true,
+    headers: { 'content-type': 'application/json' },
+    body,
+  }).catch(() => undefined);
 }
 
 export async function registerStartedExam(
@@ -89,8 +307,8 @@ export async function reserveQuestionIds(count: number, qbankId: string, _user: 
   return (await api<{ ids: string[] }>('/ids/reserve', { method: 'POST', body: JSON.stringify({ count, qbankId, highestKnown }) })).ids;
 }
 
-export async function joinCloudflareQBankByLink(_user: AppUser, qbankId: string, token: string): Promise<void> {
-  await api('/qbanks/join', { method: 'POST', body: JSON.stringify({ qbankId, token }) });
+export async function joinCloudflareQBankByLink(_user: AppUser, qbankId: string, token: string): Promise<CollaborationState['memberships'][number]> {
+  return (await api<{ membership: CollaborationState['memberships'][number] }>('/qbanks/join', { method: 'POST', body: JSON.stringify({ qbankId, token }) })).membership;
 }
 
 export interface QBankLinkInvitation {
@@ -101,30 +319,20 @@ export interface QBankLinkInvitation {
   role: 'viewer';
 }
 
-type CollaborationResponse = {
-  collaboration: CollaborationState;
-  user?: AppUser;
-};
+type CollaborationResponse = { collaboration: CollaborationState };
 
-const collaborationRequests = new Map<
-  string,
-  Promise<CollaborationResponse>
->();
+let collaborationScope = '';
 
-function collaborationRequest(user: AppUser, includeUser: boolean) {
-  const key = `${user.uid}:${includeUser}`;
-  const existing = collaborationRequests.get(key);
-  if (existing) return existing;
-  const request = api<CollaborationResponse>(
-    `/collaboration${includeUser ? '?includeUser=1' : ''}`,
+function collaborationRequest(user: AppUser, force = false) {
+  collaborationScope = user.uid;
+  return api<CollaborationResponse>(
+    '/collaboration',
+    {
+      cacheScope: user.uid,
+      forceRefresh: force,
+      requestReason: force ? 'explicit-refresh' : undefined,
+    },
   );
-  collaborationRequests.set(key, request);
-  const cleanup = () => {
-    if (collaborationRequests.get(key) === request)
-      collaborationRequests.delete(key);
-  };
-  void request.then(cleanup, cleanup);
-  return request;
 }
 
 export async function previewCloudflareQBankInvitation(qbankId: string, token: string): Promise<QBankLinkInvitation> {
@@ -139,15 +347,8 @@ function changed<T>(next: T[], previous: T[], key: (item: T) => string) {
   return next.filter((item) => old.get(key(item)) !== JSON.stringify(item));
 }
 
-export async function loadCollaborationState(user: AppUser): Promise<CollaborationState> {
-  return (await collaborationRequest(user, false)).collaboration;
-}
-
-export async function loadCollaborationSnapshot(
-  user: AppUser,
-): Promise<{ collaboration: CollaborationState; user: AppUser }> {
-  const result = await collaborationRequest(user, true);
-  return { collaboration: result.collaboration, user: result.user! };
+export async function loadCollaborationState(user: AppUser, force = false): Promise<CollaborationState> {
+  return (await collaborationRequest(user, force)).collaboration;
 }
 
 export async function saveCollaborationState(next: CollaborationState, previous: CollaborationState): Promise<void> {
@@ -177,9 +378,15 @@ export async function saveCollaborationState(next: CollaborationState, previous:
   collect('questionProposals', next.proposals, previous.proposals, (item) => item.id, true);
   collect('roleApplications', next.roleApplications, previous.roleApplications, (item) => item.id);
   collect('sharedQuestions', next.approvedQuestions, previous.approvedQuestions, (item) => item.id, true);
+  collect('qbankSpecialties', next.specialties, previous.specialties, (item) => item.id, true);
+  collect('qbankTopics', next.topics, previous.topics, (item) => item.id, true);
   collect('answerStats', Object.values(next.answerStats), Object.values(previous.answerStats), (item) => item.id, true);
   collect('sharedNotes', Object.values(next.sharedNotes), Object.values(previous.sharedNotes), (item) => item.id, true);
   collect('auditLog', next.auditLog, previous.auditLog, (item) => item.id);
   const operations = [...deletes, ...writes];
-  if (operations.length) await api('/collaboration', { method: 'PUT', body: JSON.stringify({ operations }) });
+  if (operations.length) {
+    await api('/collaboration', { method: 'PUT', body: JSON.stringify({ operations }) });
+    if (collaborationScope)
+      setApiCache('/collaboration', { collaboration: next }, { cacheScope: collaborationScope });
+  }
 }

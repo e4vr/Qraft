@@ -1,6 +1,6 @@
 'use client';
 
-import { Activity, BarChart3, CreditCard, FileText, LayoutDashboard, Coins, Ticket, Users, ArrowLeft, ArrowRight, BookOpen, ChevronDown, Clock3, Command, Database, Download, Fingerprint, Inbox, LogOut, Megaphone, Menu, MessageSquareText, Save, Search, ShieldCheck, Upload, UserCheck, UserRoundX } from 'lucide-react';
+import { Activity, BarChart3, CreditCard, FileText, Flag, LayoutDashboard, Coins, Ticket, Users, ArrowLeft, ArrowRight, BookOpen, ChevronDown, Clock3, Command, Database, Download, Fingerprint, Inbox, LogOut, Megaphone, Menu, MessageSquareText, RefreshCw, Save, Search, ShieldCheck, Upload, UserCheck, UserRoundX } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { administrativeRoleLabels, canReviewBank, hasAccessManagerRole, hasModeratorRole, hasReviewerRole, isPlatformRole, normalizeEmail, normalizePhone, normalizeUniversityId, type AccessBlocklist, type AccountStatus, type AppUser, type AuditEntry, type CollaborationState, type MemberProfile, type PlatformRole } from '@/lib/medguard-types';
@@ -11,13 +11,14 @@ import { EconomyAdmin } from '@/components/economy-admin';
 import { ContactWorkspace } from '@/components/contact-workspace';
 import { QuestionPreview } from '@/components/question-tools';
 import { ReviewWorkspace } from '@/components/review-workspace';
-import { api } from '@/lib/api-client';
+import { PreformedReportsAdmin } from '@/components/preformed-tests-workspace';
+import { api, invalidateApiResources, setApiCache } from '@/lib/api-client';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 
-type Tab = 'reviewer-performance' | 'discounts' | 'subscriptions' | 'economy' | 'contact' | 'question-preview' | 'overview' | 'registrations' | 'blocked' | 'roles' | 'qbanks' | 'proposals' | 'student-ids' | 'announcement' | 'backups' | 'legal' | 'audit';
+type Tab = 'reviewer-performance' | 'discounts' | 'subscriptions' | 'economy' | 'contact' | 'question-preview' | 'overview' | 'registrations' | 'blocked' | 'roles' | 'qbanks' | 'proposals' | 'ready-tests' | 'student-ids' | 'announcement' | 'backups' | 'legal' | 'audit';
 const adminGroups: Array<{ label: string; ids: Tab[] }> = [
   { label: 'OVERVIEW', ids: ['overview', 'reviewer-performance'] },
-  { label: 'OPERATIONS', ids: ['proposals', 'contact', 'registrations'] },
+  { label: 'OPERATIONS', ids: ['proposals', 'ready-tests', 'contact', 'registrations'] },
   { label: 'USERS & ACCESS', ids: ['student-ids', 'roles', 'blocked'] },
   { label: 'BILLING', ids: ['subscriptions', 'discounts', 'economy'] },
   { label: 'QBANK', ids: ['qbanks', 'question-preview'] },
@@ -36,6 +37,7 @@ const adminSections: Record<Tab, { icon: typeof ShieldCheck; description: string
   contact: { icon: MessageSquareText, description: 'Respond to support requests and follow up with members.' },
   qbanks: { icon: BookOpen, description: 'Inspect the question banks available across your platform.' },
   proposals: { icon: Inbox, description: 'Review proposed questions and changes before publication.' },
+  'ready-tests': { icon: Flag, description: 'Review reported public tests and hide unsafe content directly.' },
   'question-preview': { icon: Search, description: 'Find and inspect questions in the learner experience.' },
   announcement: { icon: Megaphone, description: 'Manage the announcement shown across the learner workspace.' },
   backups: { icon: Database, description: 'Export platform data and manage recovery operations.' },
@@ -126,13 +128,14 @@ function memberMatchesBlocklist(member: MemberProfile, blockedAccess: AccessBloc
 
 function LegalLinksAdmin() {
   const [links, setLinks] = useState({ termsUrl: '', privacyUrl: '' });
+  const original = useRef(links);
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState('');
   useEffect(() => {
     let active = true;
     void api<typeof links>('/platform/legal-links')
       .then((value) => {
-        if (active) setLinks(value);
+        if (active) { setLinks(value); original.current = value; }
       })
       .catch((error) => {
         if (active) setMessage(error instanceof Error ? error.message : 'Unable to load links.');
@@ -145,14 +148,20 @@ function LegalLinksAdmin() {
     };
   }, []);
   const save = async () => {
+    const normalized = { termsUrl: links.termsUrl.trim(), privacyUrl: links.privacyUrl.trim() };
+    if (JSON.stringify(normalized) === JSON.stringify(original.current)) {
+      setMessage('No changes to save.');
+      return;
+    }
     setBusy(true);
     setMessage('');
     try {
       const saved = await api<typeof links>('/platform/legal-links', {
         method: 'PUT',
-        body: JSON.stringify(links),
+        body: JSON.stringify(normalized),
       });
-      setLinks(saved);
+      setLinks(saved); original.current = saved;
+      setApiCache('/platform/legal-links', saved);
       setMessage('Legal links saved.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to save links.');
@@ -187,12 +196,13 @@ function LegalLinksAdmin() {
 
 function AnnouncementAdmin() {
   const [value, setValue] = useState({ enabled: false, content: '', href: '' });
+  const original = useRef(value);
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState('');
   useEffect(() => {
     let active = true;
     void api<typeof value>('/platform/announcement').then((next) => {
-      if (active) setValue(next);
+      if (active) { setValue(next); original.current = next; }
     }).catch((error) => {
       if (active) setMessage(error instanceof Error ? error.message : 'Unable to load announcement.');
     }).finally(() => {
@@ -201,10 +211,15 @@ function AnnouncementAdmin() {
     return () => { active = false; };
   }, []);
   const save = async () => {
+    const normalized = { enabled: value.enabled, content: value.content.trim(), href: value.href.trim() };
+    if (JSON.stringify(normalized) === JSON.stringify(original.current)) {
+      setMessage('No changes to save.');
+      return;
+    }
     setBusy(true); setMessage('');
     try {
-      const saved = await api<typeof value>('/platform/announcement', { method: 'PUT', body: JSON.stringify(value) });
-      setValue(saved); setMessage('Announcement saved and published.');
+      const saved = await api<typeof value>('/platform/announcement', { method: 'PUT', body: JSON.stringify(normalized) });
+      setValue(saved); original.current = saved; setApiCache('/platform/announcement', saved); setMessage('Announcement saved and published.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to save announcement.');
     } finally { setBusy(false); }
@@ -277,6 +292,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
             ['contact', 'Contact tickets'],
             ['qbanks', 'All QBanks'],
             ['proposals', 'Review queue'],
+            ['ready-tests', 'Reported tests'],
             ['question-preview', 'Question preview'],
             ['announcement', 'Announcement bar'],
             ['backups', 'Backup & restore'],
@@ -297,6 +313,8 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
     ],
   );
   const [tab, setTab] = useState<Tab>('overview');
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const [refreshBusy, setRefreshBusy] = useState(false);
   const adminContentRef = useRef<HTMLDivElement>(null);
   useEffect(() => { adminContentRef.current?.scrollTo({ top: 0 }); }, [tab]);
   const [dashboardNow] = useState(() => Date.now());
@@ -332,7 +350,31 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
         .finally(() => { if (active) setAuditBusy(false); });
     }, 0);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [auditWeek, isRoot, tab]);
+  }, [auditWeek, isRoot, refreshRevision, tab]);
+
+  async function refreshAdministration() {
+    if (!isSuperadminWorkspace || refreshBusy) return;
+    setRefreshBusy(true);
+    invalidateApiResources([
+      'collaboration', 'question-catalog', 'review-queue', 'reviewer-performance',
+      'subscriptions', 'discounts', 'pricing', 'economy', 'contributions',
+      'contact', 'announcement', 'legal-links', 'audit', 'review-history',
+      'preformed-tests',
+    ], 'explicit-refresh');
+    try {
+      const result = await api<{ collaboration: CollaborationState }>('/collaboration', {
+        cacheScope: user.uid,
+        forceRefresh: true,
+        requestReason: 'explicit-refresh',
+      });
+      replaceFromServer(result.collaboration);
+      setRefreshRevision(value => value + 1);
+    } catch {
+      // Each workspace keeps its last valid snapshot if an explicit refresh fails.
+    } finally {
+      setRefreshBusy(false);
+    }
+  }
   const filteredMembers = useMemo(() => {
     const query = memberSearch.trim().toLowerCase();
     return collaboration.members.filter(m =>
@@ -713,6 +755,9 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
           <span className="q-admin-toolbar-section">{tabs.find(([id]) => id === tab)?.[1]}</span>
         </div>
         {isSuperadminWorkspace && <div className="q-admin-toolbar-actions">
+          <button disabled={refreshBusy} aria-label="Refresh administration data" title="Refresh current data" onClick={() => void refreshAdministration()} className="q-admin-icon-button">
+            <RefreshCw className={cx('size-4', refreshBusy && 'animate-spin')} />
+          </button>
           <button ref={adminSearchTriggerRef} aria-label="Search administration" onClick={() => setAdminSearchOpen(true)} className="q-admin-search-trigger"><Search className="size-4" /><span>Search anything</span><kbd>⌘ K</kbd></button>
           <details className="q-admin-quick-actions group relative">
             <summary className="q-button q-button-primary cursor-pointer list-none [&::-webkit-details-marker]:hidden">Quick actions <ChevronDown className="size-4" /></summary>
@@ -767,13 +812,13 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
             {isSuperadminWorkspace && (tab === 'overview' || tab === 'proposals') && <label className="q-admin-scope"><span>Content scope</span><select aria-label="QBank scope" value={qbankScope} onChange={event => setQbankScope(event.target.value)}><option value="all">All QBanks</option>{collaboration.qbanks.filter(bank => !bank.archived).map(bank => <option key={bank.id} value={bank.id}>{bank.name}</option>)}</select></label>}
           </div>
           <div className="q-admin-panels">
-        {isRoot && (tab === 'discounts' || tab === 'subscriptions') && <SubscriptionAdmin key={tab} section={tab} />}
-        {isRoot && tab === 'economy' && <EconomyAdmin members={collaboration.members} />}
-        {isRoot && tab === 'contact' && <ContactWorkspace admin />}
+        {isRoot && (tab === 'discounts' || tab === 'subscriptions') && <SubscriptionAdmin key={`${tab}:${refreshRevision}`} section={tab} />}
+        {isRoot && tab === 'economy' && <EconomyAdmin key={refreshRevision} members={collaboration.members} />}
+        {isRoot && tab === 'contact' && <ContactWorkspace key={refreshRevision} admin />}
         {isRoot && tab === 'question-preview' && <QuestionPreview />}
-        {isRoot && tab === 'announcement' && <AnnouncementAdmin />}
+        {isRoot && tab === 'announcement' && <AnnouncementAdmin key={refreshRevision} />}
         {isRoot && tab === 'backups' && <BackupAdmin />}
-        {isRoot && tab === 'legal' && <LegalLinksAdmin />}
+        {isRoot && tab === 'legal' && <LegalLinksAdmin key={refreshRevision} />}
         {tab === 'overview' && (
           <div className="q-admin-overview">
             {isSuperadminWorkspace && <section aria-label="Platform summary" className="q-admin-metrics">
@@ -782,7 +827,7 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
             <section className="q-admin-priorities" aria-labelledby="attention-heading">
               <div className="q-admin-section-heading"><div><h2 id="attention-heading">Needs your attention</h2><p>A clear starting point for your next action.</p></div><span className="q-admin-chip">{pendingMembers.length + roleRequests.length + reviewable.length} pending</span></div>
               <div className="q-admin-priority-grid">
-                {([{ id: 'proposals', label: 'Question reviews', value: reviewable.length, oldest: oldestReview, detail: 'Review submitted changes', icon: Clock3 }, { id: 'registrations', label: 'Registrations', value: pendingMembers.length, oldest: oldestRegistration, detail: `${pendingManualIdChecks.length} IDs need verification`, icon: UserCheck }, { id: 'roles', label: 'Access requests', value: roleRequests.length, oldest: oldestRoleRequest, detail: 'Review permission requests', icon: ShieldCheck }, { id: 'contact', label: 'Support inbox', value: null, oldest: undefined, detail: 'Read and respond to tickets', icon: MessageSquareText }] as Array<{ id: Tab; label: string; value: number | null; oldest?: string; detail: string; icon: typeof Clock3 }>).filter(item => tabs.some(([id]) => id === item.id)).map(item => <button key={item.id} onClick={() => { setTab(item.id); if (item.id === 'registrations') { setMemberStatus('pending'); setMemberSearch(''); setMemberPage(0); } }} className="q-admin-priority" data-pending={Boolean(item.value)}><span className="q-admin-priority-icon"><item.icon className="size-5" /></span><div><h3>{item.label}</h3><p>{item.value === 0 ? 'All caught up' : item.detail}</p>{item.oldest && <small>Oldest request · {relativeAge(item.oldest, dashboardNow)}</small>}</div><strong>{item.value ?? <ArrowRight className="size-5" />}</strong></button>)}
+                {([{ id: 'proposals', label: 'Question reviews', value: reviewable.length, oldest: oldestReview, detail: 'Review submitted changes', icon: Clock3 }, { id: 'registrations', label: 'Registrations', value: pendingMembers.length, oldest: oldestRegistration, detail: `${pendingManualIdChecks.length} IDs need manual verification`, icon: UserCheck }, { id: 'roles', label: 'Access requests', value: roleRequests.length, oldest: oldestRoleRequest, detail: 'Review permission requests', icon: ShieldCheck }, { id: 'contact', label: 'Support inbox', value: null, oldest: undefined, detail: 'Read and respond to tickets', icon: MessageSquareText }] as Array<{ id: Tab; label: string; value: number | null; oldest?: string; detail: string; icon: typeof Clock3 }>).filter(item => tabs.some(([id]) => id === item.id)).map(item => <button key={item.id} onClick={() => { setTab(item.id); if (item.id === 'registrations') { setMemberStatus('pending'); setMemberSearch(''); setMemberPage(0); } }} className="q-admin-priority" data-pending={Boolean(item.value)}><span className="q-admin-priority-icon"><item.icon className="size-5" /></span><div><h3>{item.label}</h3><p>{item.value === 0 ? 'All caught up' : item.detail}</p>{item.oldest && <small>Oldest request · {relativeAge(item.oldest, dashboardNow)}</small>}</div><strong>{item.value ?? <ArrowRight className="size-5" />}</strong></button>)}
               </div>
             </section>
             <div className="q-admin-overview-columns">
@@ -1106,7 +1151,8 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
           </section>
         )}
         {tab === 'proposals' && <ReviewWorkspace user={user} collaboration={collaboration} update={update} replaceFromServer={replaceFromServer} embedded />}
-        {tab === 'reviewer-performance' && user.isAdmin && <ReviewerPerformance />}
+        {isRoot && tab === 'ready-tests' && <PreformedReportsAdmin key={refreshRevision} />}
+        {tab === 'reviewer-performance' && user.isAdmin && <ReviewerPerformance key={refreshRevision} />}
         {tab === 'audit' && (
           <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
             <div className="border-b p-4">

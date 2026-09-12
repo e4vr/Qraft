@@ -26,9 +26,9 @@ export async function contactApi(request: Request) {
     typeof input[key] === 'string' ? (input[key] as string).trim() : '';
   const id = url.searchParams.get('id') || text('id');
   const ticket = id
-    ? await env.DB.prepare('SELECT * FROM tickets WHERE id=?')
+    ? await env.DB.prepare('SELECT id,user_id,title,status,question_uuid,question_linked,created_at,updated_at FROM tickets WHERE id=?')
         .bind(id)
-        .first<{ id: string; user_id: string; status: string; question_linked: number }>()
+        .first<{ id: string; user_id: string; title: string; status: string; question_uuid: string | null; question_linked: number; created_at: string; updated_at: string }>()
     : null;
   if (id && (!ticket || (!root && ticket.user_id !== user.uid)))
     return json({ error: 'Ticket not found.' }, 404);
@@ -36,7 +36,7 @@ export async function contactApi(request: Request) {
     const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
     if (ticket) {
       const messages = await env.DB.prepare(
-        "SELECT m.*,json_extract(p.profile_json,'$.displayName') AS name,json_extract(p.profile_json,'$.role') AS role FROM ticket_messages m JOIN profiles p ON p.uid=m.user_id WHERE ticket_id=? ORDER BY m.created_at,m.id LIMIT 51 OFFSET ?",
+        "SELECT m.id,json_extract(p.profile_json,'$.displayName') AS name,json_extract(p.profile_json,'$.role') AS role,m.body,m.attachment,m.created_at FROM ticket_messages m JOIN profiles p ON p.uid=m.user_id WHERE ticket_id=? ORDER BY m.created_at,m.id LIMIT 51 OFFSET ?",
       )
         .bind(id, offset)
         .all();
@@ -45,7 +45,7 @@ export async function contactApi(request: Request) {
     const search = `%${(url.searchParams.get('search') || '').replace(/^#/, '').slice(0, 100)}%`,
       status = url.searchParams.get('status') || '';
     const rows = await env.DB.prepare(
-      `SELECT t.*,p.email,json_extract(p.profile_json,'$.displayName') AS name,CASE WHEN t.question_linked=1 THEN coalesce(q.question_id,'deleted') END AS question_id FROM tickets t JOIN profiles p ON p.uid=t.user_id LEFT JOIN question_registry q ON q.uuid=t.question_uuid WHERE (?=1 OR t.user_id=?) AND (?='' OR t.status=?) AND (t.title LIKE ? OR t.id LIKE ? OR p.email LIKE ? OR q.question_id LIKE ?) ORDER BY t.updated_at DESC,t.id LIMIT 51 OFFSET ?`,
+      `SELECT t.id,t.title,t.status,t.user_id,p.email,json_extract(p.profile_json,'$.displayName') AS name,CASE WHEN t.question_linked=1 THEN coalesce(q.question_id,'deleted') END AS question_id,t.created_at,t.updated_at FROM tickets t JOIN profiles p ON p.uid=t.user_id LEFT JOIN question_registry q ON q.uuid=t.question_uuid WHERE (?=1 OR t.user_id=?) AND (?='' OR t.status=?) AND (t.title LIKE ? OR t.id LIKE ? OR p.email LIKE ? OR q.question_id LIKE ?) ORDER BY t.updated_at DESC,t.id LIMIT 51 OFFSET ?`,
     )
       .bind(
         root ? 1 : 0,
@@ -69,7 +69,7 @@ export async function contactApi(request: Request) {
       env.DB.prepare('DELETE FROM tickets WHERE id=?').bind(id),
       auditStatement(user, 'ticket_deleted', id, { ownerId: ticket.user_id, status: ticket.status }, null),
     ]);
-    return json({ ok: true });
+    return json({ deletedId: id });
   }
   if (input.attachment != null && input.attachment !== '')
     return json({ error: 'Image attachments are no longer supported. Describe the issue in text.' }, 400);
@@ -77,6 +77,8 @@ export async function contactApi(request: Request) {
     if (!root || !ticket) return json({ error: 'Superadmin required.' }, 403);
     if (!['open', 'in_progress', 'resolved', 'closed'].includes(text('status')))
       return json({ error: 'Invalid status.' }, 400);
+    if (text('status') === ticket.status)
+      return json({ ticket, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
     const statements = [
       env.DB.prepare(
         'UPDATE tickets SET status=?,updated_at=? WHERE id=?',
@@ -114,7 +116,7 @@ export async function contactApi(request: Request) {
         ),
       );
     await env.DB.batch(statements);
-    return json({ ok: true });
+    return json({ ticket: { ...ticket, status: text('status'), updated_at: now } });
   }
   const body = text('body'),
     title = text('title');
@@ -141,7 +143,7 @@ export async function contactApi(request: Request) {
   let questionUuid: string | null = null;
   if (!ticket && text('questionId')) {
     const q = await env.DB.prepare(
-      'SELECT * FROM question_registry WHERE question_id=?',
+      'SELECT uuid,qbank_id FROM question_registry WHERE question_id=?',
     )
       .bind(text('questionId').replace(/^#/, '').padStart(5, '0'))
       .first<{ uuid: string; qbank_id: string }>();
@@ -210,5 +212,30 @@ export async function contactApi(request: Request) {
     ),
   );
   await env.DB.batch(statements);
-  return json({ ok: true, id: ticketId });
+  return json({
+    id: ticketId,
+    ticket: ticket
+      ? { ...ticket, updated_at: now }
+      : {
+          id: ticketId,
+          title,
+          status: 'open',
+          user_id: user.uid,
+          email: user.email,
+          name: user.displayName,
+          question_id: text('questionId')
+            ? text('questionId').replace(/^#/, '').padStart(5, '0')
+            : null,
+          created_at: now,
+          updated_at: now,
+        },
+    message: {
+      id: messageId,
+      name: user.displayName,
+      role: user.role,
+      body,
+      attachment: null,
+      created_at: now,
+    },
+  });
 }

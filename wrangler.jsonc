@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "qraft",
   "main": "./worker.ts",
-  "compatibility_date": "2026-09-07",
+  "compatibility_date": "2026-09-09",
   "compatibility_flags": ["nodejs_compat"],
   "triggers": { "crons": ["30 1 * * *"] },
   "observability": {

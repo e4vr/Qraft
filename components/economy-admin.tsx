@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { api } from '@/lib/api-client';
+import { api, setApiCache } from '@/lib/api-client';
 import type { MemberProfile } from '@/lib/medguard-types';
 import type { PlanId } from '@/lib/plan-config';
 
@@ -48,14 +48,37 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
     setError('');
     setMessage('');
     try {
-      await api('/platform/economy-admin', {
+      const result = await api<{
+        accountDelta?: number;
+        transaction?: EconomyData['ledger'][number];
+        pass?: EconomyData['rewardHistory'][number];
+        suspension?: EconomyData['duplicateAbuse'][number];
+        removedAt?: string;
+      }>('/platform/economy-admin', {
         method: 'POST',
         body: JSON.stringify({ operation, userId, reason, ...extra }),
       });
       setMessage('Action saved with an audit trail.');
       setAmount('');
       setReason('');
-      await load();
+      setData(current => {
+        if (!current) return current;
+        const next: EconomyData = {
+          ...current,
+          account: result.accountDelta === undefined
+            ? current.account
+            : { credits_balance: (current.account?.credits_balance ?? 0) + result.accountDelta, lifetime_score: current.account?.lifetime_score ?? 0, trust_score: current.account?.trust_score ?? 100 },
+          ledger: result.transaction ? [result.transaction, ...current.ledger] : current.ledger,
+          rewardHistory: result.pass ? [result.pass, ...current.rewardHistory] : current.rewardHistory,
+          duplicateAbuse: result.suspension
+            ? [result.suspension, ...current.duplicateAbuse]
+            : result.removedAt
+              ? current.duplicateAbuse.map(item => item.removed_at ? item : { ...item, removed_at: result.removedAt! })
+              : current.duplicateAbuse,
+        };
+        setApiCache(`/platform/economy-admin?userId=${encodeURIComponent(userId)}`, next);
+        return next;
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to save this action.');
     } finally {

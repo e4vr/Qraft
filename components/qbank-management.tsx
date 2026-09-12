@@ -2,8 +2,10 @@
 
 /* oxlint-disable next/no-img-element */
 
-import { ArrowLeft, Check, Clipboard, Copy, FileJson, ImagePlus, Link2, LockKeyhole, Pencil, Plus, RefreshCw, Save, Search, Settings, Trash2, Unlink, Users, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { ArrowLeft, Check, Clipboard, Copy, FileJson, ImagePlus, Layers3, Link2, LockKeyhole, Pencil, Plus, RefreshCw, Save, Search, Settings, Trash2, Unlink, Users, X } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { ClassificationFields } from '@/components/classification-fields';
+import { ClassificationManager } from '@/components/classification-manager';
 import { QuestionImportReview } from '@/components/question-import-review';
 import { QuestionId } from '@/components/question-tools';
 import { ReviewerSearch } from '@/components/reviewer-search';
@@ -14,7 +16,7 @@ import { cn } from '@/lib/utils';
 import { hasFeature } from '@/lib/plan-config';
 import { openUpgrade } from '@/components/subscription-workspace';
 
-type Section = 'settings' | 'questions' | 'import';
+type Section = 'settings' | 'structure' | 'questions' | 'import';
 
 
 
@@ -40,6 +42,8 @@ const emptyDraft = (): QuestionDraft => ({
   sourceReference: '',
   images: [],
 });
+
+const classificationKey = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
 
 export function QBankManagement({
   user,
@@ -77,6 +81,15 @@ export function QBankManagement({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [specialtyFilter, setSpecialtyFilter] = useState('');
+  const [topicFilter, setTopicFilter] = useState('');
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
+  const [bulkSpecialty, setBulkSpecialty] = useState('');
+  const [bulkTopic, setBulkTopic] = useState('');
+  const [structureDirty, setStructureDirty] = useState(false);
+  const bankSpecialties = useMemo(() => collaboration.specialties.filter((item) => item.qbankId === bankId), [bankId, collaboration.specialties]);
+  const bankTopics = useMemo(() => collaboration.topics.filter((item) => item.qbankId === bankId), [bankId, collaboration.topics]);
+  const noteStructureDirty = useCallback((dirty: boolean) => setStructureDirty(dirty), []);
   const members = useMemo(
     () =>
       collaboration.memberships.filter((item) => item.qbankId === bankId),
@@ -85,7 +98,15 @@ export function QBankManagement({
   const plan = user.effectivePlan ?? user.tier;
   const canAddQuestions = hasFeature(plan, 'addQuestions');
   const canImport = hasFeature(plan, 'jsonImport');
-  const filteredQuestions = useMemo(() => questions.filter((question) => `${question.questionId} ${question.stem} ${question.topic}`.toLowerCase().includes(search.trim().replace(/^#/, '').toLowerCase())), [questions, search]);
+  const filteredQuestions = useMemo(() => {
+    const raw = search.trim().replace(/^#/, '').toLowerCase();
+    const padded = /^\d+$/.test(raw) ? raw.padStart(5, '0') : raw;
+    return questions.filter((question) =>
+      (!specialtyFilter || question.specialtyId === specialtyFilter) &&
+      (!topicFilter || question.topicId === topicFilter) &&
+      (!raw || `${question.questionId} ${question.stem} ${question.specialty} ${question.topic}`.toLowerCase().includes(raw) || question.questionId.includes(padded)),
+    );
+  }, [questions, search, specialtyFilter, topicFilter]);
 
   if (!bank || !canManageBank(user, bank))
     return (
@@ -100,6 +121,23 @@ export function QBankManagement({
       </main>
     );
   const bankName = bank.name;
+
+  function changeSection(next: Section) {
+    if (section === 'structure' && structureDirty && next !== 'structure') {
+      setError('Save structure or discard the draft before leaving this section.');
+      return;
+    }
+    setError('');
+    setSection(next);
+  }
+
+  function leaveManagement() {
+    if (section === 'structure' && structureDirty) {
+      setError('Save structure or discard the draft before leaving this page.');
+      return;
+    }
+    onBack();
+  }
 
   function updateBank(updater: (current: QBank) => QBank) {
     update((current) => ({
@@ -160,6 +198,8 @@ export function QBankManagement({
         invitations: current.invitations.filter((item) => item.qbankId !== bankId),
         proposals: current.proposals.filter((item) => item.qbankId !== bankId),
         approvedQuestions: current.approvedQuestions.filter((item) => item.qbankId !== bankId),
+        specialties: current.specialties.filter((item) => item.qbankId !== bankId),
+        topics: current.topics.filter((item) => item.qbankId !== bankId),
         answerStats: Object.fromEntries(Object.entries(current.answerStats).filter(([, item]) => item.qbankId !== bankId)),
         sharedNotes: Object.fromEntries(Object.entries(current.sharedNotes).filter(([, item]) => item.qbankId !== bankId)),
         auditLog: [
@@ -217,6 +257,59 @@ export function QBankManagement({
     );
   }
 
+  async function ensureQuestionClassification(specialtyValue: string, topicValue: string, questionIds: string[] = []) {
+    const specialtyName = specialtyValue.trim().replace(/\s+/g, ' ') || 'General';
+    const topicName = topicValue.trim().replace(/\s+/g, ' ') || 'General';
+    const now = new Date().toISOString();
+    const nextSpecialties = [...bankSpecialties];
+    const nextTopics = [...bankTopics];
+    let specialty = nextSpecialties.find((item) => item.name === specialtyName)
+      ?? nextSpecialties.find((item) => classificationKey(item.name) === classificationKey(specialtyName));
+    let changed = false;
+    if (!specialty) {
+      specialty = { id: crypto.randomUUID(), qbankId: bankId, name: specialtyName, order: nextSpecialties.length, createdAt: now, updatedAt: now };
+      nextSpecialties.push(specialty);
+      changed = true;
+    }
+    let topic = nextTopics.find((item) => item.specialtyId === specialty!.id && item.name === topicName)
+      ?? nextTopics.find((item) => item.specialtyId === specialty!.id && classificationKey(item.name) === classificationKey(topicName));
+    if (!topic) {
+      topic = { id: crypto.randomUUID(), qbankId: bankId, specialtyId: specialty.id, name: topicName, order: nextTopics.length, createdAt: now, updatedAt: now };
+      nextTopics.push(topic);
+      changed = true;
+    }
+    const changedQuestionIds = questionIds.filter((id) => questions.find((item) => item.id === id)?.topicId !== topic.id);
+    const assignmentChanged = changedQuestionIds.length > 0;
+    if (changed || assignmentChanged) {
+      const result = await api<{
+        revision: number;
+        specialties: typeof nextSpecialties;
+        topics: typeof nextTopics;
+        assignments: Array<{ questionId: string; topicId: string; specialtyId: string; specialty: string; topic: string }>;
+      }>('/platform/classification', {
+        method: 'PUT',
+        body: JSON.stringify({
+          qbankId: bankId,
+          operationId: crypto.randomUUID(),
+          baseRevision: collaboration.classificationRevisions[bankId] ?? 0,
+          specialties: nextSpecialties,
+          topics: nextTopics,
+          assignments: changedQuestionIds.map((questionId) => ({ questionId, topicId: topic!.id })),
+        }),
+      });
+      confirmUpdate((current) => ({
+        ...current,
+        specialties: [...current.specialties.filter((item) => item.qbankId !== bankId), ...result.specialties],
+        topics: [...current.topics.filter((item) => item.qbankId !== bankId), ...result.topics],
+        classificationRevisions: { ...current.classificationRevisions, [bankId]: result.revision },
+        approvedQuestions: current.approvedQuestions.map((item) => changedQuestionIds.includes(item.id)
+          ? { ...item, specialtyId: specialty!.id, specialty: specialty!.name, topicId: topic!.id, topic: topic!.name }
+          : item),
+      }));
+    }
+    return { specialty, topic, assignmentChanged };
+  }
+
   async function saveQuestion(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editing || !draft.stem.trim() || draft.options.length < 2 || draft.options.length > 10 || draft.answer >= draft.options.length || draft.options.some((item) => !item.trim()) || !draft.explanation.trim() || !draft.sourceReference.trim()) return;
@@ -224,6 +317,21 @@ export function QBankManagement({
     setError('');
     try {
       const existing = editing === 'new' ? undefined : editing;
+      const classification = await ensureQuestionClassification(draft.specialty, draft.topic, existing ? [existing.id] : []);
+      const contentChanged = !existing ||
+        existing.stem !== draft.stem.trim() ||
+        JSON.stringify(existing.options) !== JSON.stringify(draft.options.map((item) => item.trim())) ||
+        existing.answer !== draft.answer ||
+        (existing.explanation ?? '') !== draft.explanation.trim() ||
+        (existing.sourceReference ?? existing.sourceFile) !== draft.sourceReference.trim() ||
+        JSON.stringify(existing.images ?? []) !== JSON.stringify(draft.images) ||
+        imageFiles.length > 0;
+      if (existing && !contentChanged) {
+        setEditing(undefined);
+        setDraft(emptyDraft());
+        setMessage(classification.assignmentChanged ? 'Question classification updated for everyone.' : 'No changes to save.');
+        return;
+      }
       const proposalId = crypto.randomUUID();
       const uploaded = await uploadImages(existing?.questionId ?? `proposal-${proposalId}`);
       const proposedAt = new Date().toISOString();
@@ -231,8 +339,10 @@ export function QBankManagement({
         stem: draft.stem.trim(),
         options: draft.options.map((item) => item.trim()),
         answer: draft.answer,
-        specialty: draft.specialty.trim() || 'General',
-        topic: draft.topic.trim() || 'General',
+        specialtyId: classification.specialty.id,
+        specialty: classification.specialty.name,
+        topicId: classification.topic.id,
+        topic: classification.topic.name,
         explanation: draft.explanation.trim(),
         sourceReference: draft.sourceReference.trim(),
         images: [...draft.images, ...uploaded],
@@ -250,8 +360,10 @@ export function QBankManagement({
               stem: existing.stem,
               options: existing.options,
               answer: existing.answer,
-              specialty: existing.specialty,
-              topic: existing.topic,
+              specialty: classification.specialty.name,
+              topic: classification.topic.name,
+              specialtyId: classification.specialty.id,
+              topicId: classification.topic.id,
               explanation: existing.explanation ?? '',
               sourceReference: existing.sourceReference ?? existing.sourceFile,
               images: existing.images ?? [],
@@ -291,6 +403,19 @@ export function QBankManagement({
     }
   }
 
+  async function applyBulkClassification() {
+    if (!selectedQuestionIds.length || selectedQuestionIds.length > 500 || !bulkSpecialty.trim() || !bulkTopic.trim()) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await ensureQuestionClassification(bulkSpecialty, bulkTopic, selectedQuestionIds);
+      setMessage(`Classification updated for ${selectedQuestionIds.length} questions in one atomic change.`);
+      setSelectedQuestionIds([]);
+      setBulkSpecialty(''); setBulkTopic('');
+    } catch (caught) {
+      setError(`${caught instanceof Error ? caught.message : 'Unable to update the selected questions.'} Your selection was kept. Choose Try again.`);
+    } finally { setBusy(false); }
+  }
+
 
   const shareUrl = bank.shareEnabled && bank.shareToken && typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}?join_qbank=${encodeURIComponent(bank.id)}&token=${encodeURIComponent(bank.shareToken)}` : '';
 
@@ -298,7 +423,7 @@ export function QBankManagement({
     <main className="min-h-screen overflow-x-hidden bg-background text-foreground">
       <header className="sticky top-0 z-30 border-b bg-card/90 px-4 py-4 backdrop-blur-xl sm:px-7">
         <div className="mx-auto flex max-w-[1180px] items-center gap-3">
-          <button onClick={onBack} className="grid size-10 place-items-center rounded-xl border" aria-label="Back to My QBanks">
+          <button onClick={leaveManagement} className="grid size-10 place-items-center rounded-xl border" aria-label="Back to My QBanks">
             <ArrowLeft className="size-5" />
           </button>
           <div className="min-w-0 flex-1">
@@ -313,11 +438,12 @@ export function QBankManagement({
           {(
             [
               ['settings', Settings, 'Properties & access'],
+              ['structure', Layers3, 'Specialties & Topics'],
               ['questions', Clipboard, 'Questions'],
               ['import', FileJson, 'Import questions'],
             ] as const
           ).map(([id, Icon, label]) => (
-            <button key={id} aria-pressed={section === id} onClick={() => (id === 'import' && !canImport ? openUpgrade() : setSection(id))} className={cn('inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border px-4 text-sm font-bold', section === id && 'border-primary bg-primary text-primary-foreground')}>
+            <button key={id} aria-pressed={section === id} onClick={() => (id === 'import' && !canImport ? openUpgrade() : changeSection(id))} className={cn('inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border px-4 text-sm font-bold', section === id && 'border-primary bg-primary text-primary-foreground')}>
               <Icon className="size-4" />
               {label}
               {id === 'import' && !canImport && <LockKeyhole className="size-3" />}
@@ -449,6 +575,41 @@ export function QBankManagement({
           </div>
         )}
 
+        {section === 'structure' && (
+          <ClassificationManager
+            user={user}
+            qbankId={bankId}
+            revision={collaboration.classificationRevisions[bankId] ?? 0}
+            specialties={bankSpecialties}
+            topics={bankTopics}
+            questions={questions}
+            onDirtyChange={noteStructureDirty}
+            onRemoteConflict={(result) => confirmUpdate((current) => ({
+              ...current,
+              specialties: [...current.specialties.filter((item) => item.qbankId !== bankId), ...result.specialties],
+              topics: [...current.topics.filter((item) => item.qbankId !== bankId), ...result.topics],
+              classificationRevisions: { ...current.classificationRevisions, [bankId]: result.revision },
+            }))}
+            onSaved={(result) => confirmUpdate((current) => {
+              const topicById = new Map(result.topics.map((item) => [item.id, item]));
+              const specialtyById = new Map(result.specialties.map((item) => [item.id, item]));
+              const assignmentByQuestion = new Map(result.assignments.map((item) => [item.questionId, item.topicId]));
+              return {
+                ...current,
+                specialties: [...current.specialties.filter((item) => item.qbankId !== bankId), ...result.specialties],
+                topics: [...current.topics.filter((item) => item.qbankId !== bankId), ...result.topics],
+                classificationRevisions: { ...current.classificationRevisions, [bankId]: result.revision },
+                approvedQuestions: current.approvedQuestions.map((question) => {
+                  const topicId = assignmentByQuestion.get(question.id) ?? question.topicId;
+                  const topic = topicId ? topicById.get(topicId) : undefined;
+                  const specialty = topic ? specialtyById.get(topic.specialtyId) : undefined;
+                  return topic && specialty ? { ...question, topicId: topic.id, topic: topic.name, specialtyId: specialty.id, specialty: specialty.name } : question;
+                }),
+              };
+            })}
+          />
+        )}
+
         {section === 'questions' && (
           <>
             <div className="mb-5 flex flex-col gap-3 sm:flex-row">
@@ -461,18 +622,43 @@ export function QBankManagement({
                 {canAddQuestions ? 'Add question manually' : 'Add questions · Pro'}
               </button>
             </div>
+            <div className="mb-5 grid gap-3 sm:grid-cols-2">
+              <select value={specialtyFilter} onChange={(event) => { setSpecialtyFilter(event.target.value); setTopicFilter(''); }} className="h-11 rounded-xl border bg-card px-3 text-sm">
+                <option value="">All specialties</option>
+                {bankSpecialties.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+              <select value={topicFilter} onChange={(event) => setTopicFilter(event.target.value)} className="h-11 rounded-xl border bg-card px-3 text-sm">
+                <option value="">All topics</option>
+                {bankTopics.filter((item) => !specialtyFilter || item.specialtyId === specialtyFilter).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </div>
+            {selectedQuestionIds.length > 0 && (
+              <section className="mb-5 rounded-2xl border border-primary/30 bg-primary/5 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <strong>{selectedQuestionIds.length} selected</strong>
+                  <button onClick={() => setSelectedQuestionIds([])} className="text-sm font-bold text-muted-foreground">Clear</button>
+                </div>
+                <ClassificationFields specialties={bankSpecialties} topics={bankTopics} specialty={bulkSpecialty} topic={bulkTopic} onChange={(value) => { setBulkSpecialty(value.specialty); setBulkTopic(value.topic); }} disabled={busy} />
+                <button disabled={busy || !bulkSpecialty.trim() || !bulkTopic.trim()} onClick={() => void applyBulkClassification()} className="q-button mt-4 bg-primary text-primary-foreground">
+                  {busy ? <RefreshCw className="size-4 animate-spin" /> : <Save className="size-4" />}{error ? 'Try again' : 'Apply to selected'}
+                </button>
+              </section>
+            )}
             <section className="overflow-x-auto rounded-2xl bg-card ring-1 ring-border">
-              <div className="min-w-[640px]">
-                <div className="grid grid-cols-[90px_1fr_140px_48px] gap-3 border-b bg-muted/35 px-4 py-3 text-xs font-bold uppercase text-muted-foreground">
+              <div className="min-w-[760px]">
+                <div className="grid grid-cols-[36px_90px_1fr_150px_72px_48px] gap-3 border-b bg-muted/35 px-4 py-3 text-xs font-bold uppercase text-muted-foreground">
+                  <input type="checkbox" aria-label="Select visible questions" checked={filteredQuestions.length > 0 && filteredQuestions.every((item) => selectedQuestionIds.includes(item.id))} onChange={(event) => setSelectedQuestionIds(event.target.checked ? [...new Set([...selectedQuestionIds, ...filteredQuestions.map((item) => item.id)])].slice(0, 500) : selectedQuestionIds.filter((id) => !filteredQuestions.some((item) => item.id === id)))} />
                   <span>Question ID</span>
                   <span>Question</span>
                   <span>Topic</span>
-                  <span />
+                  <span>Delete</span>
+                  <span>Edit</span>
                 </div>
                 {filteredQuestions.length ? (
                   <div className="divide-y">
                     {filteredQuestions.map((question) => (
-                      <div key={question.id} className="grid grid-cols-[90px_1fr_140px_48px] items-center gap-3 px-4 py-4">
+                      <div key={question.id} className="grid grid-cols-[36px_90px_1fr_150px_72px_48px] items-center gap-3 px-4 py-4">
+                        <input type="checkbox" aria-label={`Select Question ID ${question.questionId}`} checked={selectedQuestionIds.includes(question.id)} onChange={(event) => setSelectedQuestionIds((current) => event.target.checked ? [...current, question.id].slice(0, 500) : current.filter((id) => id !== question.id))} />
                         <QuestionId value={question.questionId} />
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold">{question.stem}</p>
@@ -485,7 +671,7 @@ export function QBankManagement({
                             </span>
                           )}
                         </div>
-                        <span className="truncate text-sm text-muted-foreground">{question.topic}</span>
+                        <span className="truncate text-sm text-muted-foreground">{question.specialty} / {question.topic}</span>
                         <button aria-label={`Delete Question ID ${question.questionId}`} className="q-button text-destructive" disabled={busy} onClick={async () => { if (!window.confirm('Permanently delete this question? Tickets and history will be retained as #deleted.')) return; setBusy(true); setError(''); try { await api('/platform/question', { method: 'DELETE', body: JSON.stringify({id:question.questionId}) }); confirmUpdate(current=>({...current,approvedQuestions:current.approvedQuestions.filter(q=>q.id!==question.id),proposals:current.proposals.map(p=>p.questionId===question.id?{...p,questionId:'#deleted'}:p)})); setMessage('Question permanently deleted.'); } catch (e) { setError(e instanceof Error?e.message:'Unable to delete.'); } finally {setBusy(false);} }}>Delete</button>
                         <button onClick={() => openQuestion(question)} className="grid size-9 place-items-center rounded-lg border" aria-label={`Edit Question ID ${question.questionId}`}>
                           <Pencil className="size-4" />
@@ -504,7 +690,13 @@ export function QBankManagement({
         {section === 'import' && (
           <section className="min-w-0 rounded-2xl bg-card p-3 ring-1 ring-border sm:p-6">
             <h2 className="mb-4 text-lg font-bold">Import JSON / Use AI</h2>
-            <QuestionImportReview bankId={bankId} onImported={proposals=>confirmUpdate(current=>({...current,proposals:[...proposals,...current.proposals.filter(p=>!proposals.some(n=>n.id===p.id))]}))} />
+            <QuestionImportReview bankId={bankId} onImported={result=>confirmUpdate(current=>({
+              ...current,
+              proposals:[...result.proposals,...current.proposals.filter(p=>!result.proposals.some(n=>n.id===p.id))],
+              specialties:[...current.specialties,...result.specialties.filter(item=>!current.specialties.some(existing=>existing.id===item.id))],
+              topics:[...current.topics,...result.topics.filter(item=>!current.topics.some(existing=>existing.id===item.id))],
+              classificationRevisions: result.classificationRevision === undefined ? current.classificationRevisions : { ...current.classificationRevisions, [bankId]: result.classificationRevision },
+            }))} />
           </section>
         )}
       </div>
@@ -572,15 +764,15 @@ export function QBankManagement({
                 Add option
               </button>
             </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <label>
-                <span className="mb-1.5 block text-sm font-bold">Specialty</span>
-                <input value={draft.specialty} onChange={(event) => setDraft({ ...draft, specialty: event.target.value })} className="h-11 w-full rounded-xl border bg-card px-3" />
-              </label>
-              <label>
-                <span className="mb-1.5 block text-sm font-bold">Topic</span>
-                <input value={draft.topic} onChange={(event) => setDraft({ ...draft, topic: event.target.value })} className="h-11 w-full rounded-xl border bg-card px-3" />
-              </label>
+            <div className="mt-4">
+              <ClassificationFields
+                specialties={bankSpecialties}
+                topics={bankTopics}
+                specialty={draft.specialty}
+                topic={draft.topic}
+                onChange={(classification) => setDraft({ ...draft, ...classification })}
+                disabled={busy}
+              />
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <label>

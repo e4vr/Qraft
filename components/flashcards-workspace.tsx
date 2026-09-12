@@ -25,6 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -724,12 +725,16 @@ export function FlashcardsWorkspace({
   qbankId,
   qbankName,
   questions,
+  onReviewActiveChange,
+  onReviewCheckpoint,
 }: {
   state: AppState;
   setState: UpdateState;
   qbankId: string;
   qbankName: string;
   questions: Question[];
+  onReviewActiveChange?: (active: boolean) => void;
+  onReviewCheckpoint?: () => void;
 }) {
   const [selectedDeckId, setSelectedDeckId] = useState('all');
   const [deleteDeckId, setDeleteDeckId] = useState<string>();
@@ -743,6 +748,15 @@ export function FlashcardsWorkspace({
   const [selectedCards, setSelectedCards] = useState<string[]>([]);
   const [moveDeckId, setMoveDeckId] = useState('');
   const [reviewCards, setReviewCards] = useState<Flashcard[]>();
+
+  useEffect(() => {
+    if (!reviewCards) return;
+    onReviewActiveChange?.(true);
+    return () => {
+      onReviewActiveChange?.(false);
+      onReviewCheckpoint?.();
+    };
+  }, [onReviewActiveChange, onReviewCheckpoint, reviewCards]);
   const [importing, setImporting] = useState(false);
   const [importReport, setImportReport] = useState<ImportReport>();
   const [currentTime] = useState(() => Date.now());

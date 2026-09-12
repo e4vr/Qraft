@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Award, Check, Coins, Gift, LoaderCircle, PartyPopper, Play, Sparkles, Trophy, WalletCards } from 'lucide-react';
-import { api } from '@/lib/api-client';
+import { api, setApiCache } from '@/lib/api-client';
 import { PLAN_LIMITS, type PlanId } from '@/lib/plan-config';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { subscribeLive } from '@/lib/realtime-client';
+import type { AppUser } from '@/lib/medguard-types';
 
 type CreditTransaction = {
   id: string;
@@ -162,7 +163,7 @@ export function ContributionCenter({
   onEntitlementChange,
 }: {
   userId: string;
-  onEntitlementChange: () => void;
+  onEntitlementChange: (user: AppUser) => void;
 }) {
   const [data, setData] = useState<CenterData>();
   const [busy, setBusy] = useState('');
@@ -211,9 +212,20 @@ export function ContributionCenter({
     setError('');
     setMessage('');
     try {
-      const result = await api<{ pass: RewardPass; duplicate?: boolean }>('/platform/rewards', {
+      const result = await api<{ pass: RewardPass; creditsBalance: number; duplicate?: boolean }>('/platform/rewards', {
         method: 'POST',
         body: JSON.stringify({ operation: 'redeem', rewardId, requestId: crypto.randomUUID() }),
+      });
+      setData(current => {
+        if (!current) return current;
+        const next = {
+          ...current,
+          creditsBalance: result.creditsBalance,
+          rewardPasses: [result.pass, ...current.rewardPasses.filter(pass => pass.id !== result.pass.id)],
+          transactions: current.transactions,
+        };
+        setApiCache('/platform/contributions', next);
+        return next;
       });
       setMessage('Reward added to your wallet. Activate it whenever you are ready.');
       if (!result.duplicate) {
@@ -225,7 +237,6 @@ export function ContributionCenter({
           rewardLabel: rewardLabel(result.pass),
         }, ...current.filter((item) => item.id !== `redeemed:${result.pass.id}`)]);
       }
-      await load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to redeem this reward.');
     } finally {
@@ -238,13 +249,18 @@ export function ContributionCenter({
     setError('');
     setMessage('');
     try {
-      await api('/platform/rewards', {
+      const result = await api<{ pass: RewardPass; effectivePlan: PlanId; user: AppUser }>('/platform/rewards', {
         method: 'POST',
         body: JSON.stringify({ operation: 'activate', passId }),
       });
+      setData(current => {
+        if (!current) return current;
+        const next = { ...current, rewardPasses: current.rewardPasses.map(pass => pass.id === passId ? result.pass : pass) };
+        setApiCache('/platform/contributions', next);
+        return next;
+      });
       setMessage('Reward Pass activated. Your effective plan has been refreshed.');
-      await load();
-      onEntitlementChange();
+      onEntitlementChange(result.user);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to activate this reward.');
     } finally {

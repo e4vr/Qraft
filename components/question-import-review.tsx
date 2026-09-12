@@ -13,6 +13,8 @@ import {
   optionLabel,
   type QuestionProposal,
   type QuestionProposalPayload,
+  type QBankSpecialty,
+  type QBankTopic,
 } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 export function QuestionImportReview({
@@ -20,7 +22,7 @@ export function QuestionImportReview({
   onImported,
 }: {
   bankId: string;
-  onImported: (proposals: QuestionProposal[]) => void;
+  onImported: (result: { proposals: QuestionProposal[]; specialties: QBankSpecialty[]; topics: QBankTopic[]; classificationRevision?: number }) => void;
 }) {
   const [drafts, setDrafts] = useState<QuestionProposalPayload[]>([]),
     [index, setIndex] = useState(0),
@@ -148,6 +150,9 @@ export function QuestionImportReview({
         repaired: boolean;
         skippedDuplicates?: number;
         pendingReview?: number;
+        specialties: QBankSpecialty[];
+        topics: QBankTopic[];
+        classificationRevision?: number;
       }>('/platform/import', {
         method: 'POST',
         body: JSON.stringify({
@@ -162,7 +167,7 @@ export function QuestionImportReview({
           rightsConfirmed,
         }),
       });
-      onImported(result.proposals);
+      onImported({ proposals: result.proposals, specialties: result.specialties ?? [], topics: result.topics ?? [], classificationRevision: result.classificationRevision });
       setSkipped(result.skipped);
       setMessage(
         `Imported: ${result.successful} · Skipped duplicates: ${result.skippedDuplicates ?? 0} · Invalid: ${result.failed - (result.skippedDuplicates ?? 0)} · Pending review: ${result.pendingReview ?? result.successful}`,

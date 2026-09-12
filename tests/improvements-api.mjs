@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 export async function improvementsApiTests(t, db, call) {
   const now = new Date().toISOString();
@@ -43,6 +43,77 @@ export async function improvementsApiTests(t, db, call) {
     assert.equal((await call('pool-learner', '/platform/test-pool', { qbankId: 'inaccessible-bank', config })).status, 403);
   });
 
+  await t.test('Checkpoint state sync is partial, idempotent, and rejects stale versions', async () => {
+    const uid = 'checkpoint-learner';
+    await account(uid);
+    const bank = makeBank('checkpoint-bank', 'admin');
+    const approvedQuestion = question('checkpoint-question', bank.id, '79001');
+    await record('qbanks', bank, 'admin');
+    await record('sharedQuestions', approvedQuestion, 'admin');
+    const firstTime = '2026-09-12T08:00:00.000Z';
+    const initialState = {
+      version: 1,
+      clientUpdatedAt: firstTime,
+      tests: [], progress: {}, reports: [], revisions: [], customQuestions: [], questionOverrides: {},
+      flashcardDecks: [], flashcards: [], flashcardSchedules: {}, flashcardReviewLog: [],
+      settings: { dailyGoal: 20, theme: 'dark' },
+    };
+    const first = await call(uid, '/state', {
+      state: initialState,
+      baseRevision: 0,
+      operationId: randomUUID(),
+    }, 'PUT');
+    assert.equal(first.status, 200, JSON.stringify(first));
+    assert.equal(first.data.revision, 1);
+    assert.equal(first.data.state.settings.theme, 'system');
+
+    const goalOperation = randomUUID();
+    const goal = await call(uid, '/state/daily-goal', {
+      dailyGoal: 35,
+      baseRevision: 1,
+      operationId: goalOperation,
+    }, 'PUT');
+    assert.equal(goal.status, 200, JSON.stringify(goal));
+    assert.equal(goal.data.revision, 2);
+    assert.equal(goal.data.state.settings.dailyGoal, 35);
+    const duplicate = await call(uid, '/state/daily-goal', {
+      dailyGoal: 35,
+      baseRevision: 1,
+      operationId: goalOperation,
+    }, 'PUT');
+    assert.equal(duplicate.status, 200, JSON.stringify(duplicate));
+    assert.equal(duplicate.data.revision, 2);
+    assert.equal(duplicate.data.duplicate, true);
+
+    const stale = await call(uid, '/state', {
+      state: { ...initialState, clientUpdatedAt: '2026-09-12T07:00:00.000Z' },
+      baseRevision: 1,
+      operationId: randomUUID(),
+    }, 'PUT');
+    assert.equal(stale.status, 409);
+    assert.equal(stale.data.state.settings.dailyGoal, 35);
+
+    const examTime = '2026-09-12T09:00:00.000Z';
+    const exam = await call(uid, '/state/exam', {
+      tests: [{
+        id: 'checkpoint-test', qbankId: bank.id, questionIds: [approvedQuestion.id],
+        currentIndex: 0, answers: { [approvedQuestion.id]: 1 }, revealed: [approvedQuestion.id],
+        graded: [approvedQuestion.id], status: 'active', createdAt: examTime, updatedAt: examTime,
+      }],
+      progress: { [approvedQuestion.id]: { attempts: 1, lastAnswer: 1, updatedAt: examTime } },
+      clientUpdatedAt: examTime,
+      answerSelections: [{ qbankId: bank.id, questionId: approvedQuestion.id, answer: 1 }],
+      baseRevision: 2,
+      operationId: randomUUID(),
+    }, 'PUT');
+    assert.equal(exam.status, 200, JSON.stringify(exam));
+    assert.equal(exam.data.revision, 3);
+    assert.equal(exam.data.state.settings.dailyGoal, 35);
+    const statistic = await db.prepare("SELECT payload FROM records WHERE type='answerStats' AND id=?")
+      .bind(`${bank.id}:${approvedQuestion.id}`).first();
+    assert.equal(JSON.parse(statistic.payload).selections[uid], 1);
+  });
+
   await t.test('Reviewer aggregation counts decisions once, including legacy completion, and refuses students', async () => {
     await account('performance-reviewer', ['reviewer']);
     await account('performance-author');
@@ -65,6 +136,73 @@ export async function improvementsApiTests(t, db, call) {
     assert.equal((await call('admin','/platform/reviewer-performance?timeZone=invalid')).status, 400);
   });
 
+  await t.test('Ready-made tests stay separate, rank atomically, reset on question edits, and support moderation', async () => {
+    await account('preformed-owner');
+    assert.equal((await call('free', '/preformed/create', {})).status, 403);
+    const created = await call('preformed-owner', '/preformed/create', {});
+    assert.equal(created.status, 201, JSON.stringify(created));
+    const base = created.data.test;
+    const settings = {
+      mode: 'exam', durationMinutes: null, maxAttempts: 3,
+      attemptResultPolicy: 'highest', randomizeQuestions: true,
+      randomizeOptions: true, opensAt: null, closesAt: null,
+      passingPercent: 60, allowBackNavigation: true,
+    };
+    const questions = [{
+      id: randomUUID(), stem: 'Which option is correct?', options: ['Correct', 'Wrong'],
+      answer: 0, explanation: 'A short explanation.', sourceReference: 'Fixture', images: [],
+    }];
+    const published = await call('preformed-owner', '/preformed/save', {
+      test: { ...base, title: 'Independent test', visibility: 'public', status: 'published', settings, questions },
+    }, 'PUT');
+    assert.equal(published.status, 200, JSON.stringify(published));
+    assert.equal(published.data.resultsReset, true);
+    const test = published.data.test;
+    assert.match(test.code, /^QF-[A-Z0-9]{6}$/);
+    assert.ok((await call('free', '/preformed/catalog')).data.tests.some(item => item.id === test.id));
+
+    const opened = await call('free', `/preformed/open?code=${test.code}`);
+    assert.equal(opened.status, 200, JSON.stringify(opened));
+    const submissionId = randomUUID();
+    const submitted = await call('free', '/preformed/submit', {
+      submissionId, attemptToken: opened.data.test.attemptToken,
+      answers: { [questions[0].id]: 0 }, durationSeconds: 12,
+    });
+    assert.equal(submitted.status, 200, JSON.stringify(submitted));
+    assert.equal(submitted.data.score, 1);
+    const duplicate = await call('free', '/preformed/submit', {
+      submissionId, attemptToken: opened.data.test.attemptToken,
+      answers: { [questions[0].id]: 0 }, durationSeconds: 12,
+    });
+    assert.equal(duplicate.status, 200, JSON.stringify(duplicate));
+    assert.equal(duplicate.data.duplicate, true);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM preformed_leaderboard WHERE test_id=?').bind(test.id).first()).n, 1);
+
+    const settingsOnly = await call('preformed-owner', '/preformed/save', {
+      test: { ...test, description: 'Settings do not erase scores.', settings: { ...settings, passingPercent: 70 }, questions },
+    }, 'PUT');
+    assert.equal(settingsOnly.status, 200, JSON.stringify(settingsOnly));
+    assert.equal(settingsOnly.data.resultsReset, false);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM preformed_leaderboard WHERE test_id=?').bind(test.id).first()).n, 1);
+
+    const changedQuestions = [{ ...questions[0], stem: 'Changed question content?' }];
+    const reset = await call('preformed-owner', '/preformed/save', {
+      test: { ...settingsOnly.data.test, questions: changedQuestions },
+    }, 'PUT');
+    assert.equal(reset.status, 200, JSON.stringify(reset));
+    assert.equal(reset.data.resultsReset, true);
+    for (const table of ['preformed_leaderboard', 'preformed_question_stats', 'preformed_participation', 'preformed_submission_receipts'])
+      assert.equal((await db.prepare(`SELECT count(*) AS n FROM ${table} WHERE test_id=?`).bind(test.id).first()).n, 0);
+
+    assert.equal((await call('free', '/preformed/report', { id: test.id, reason: 'Please review this fixture.' })).status, 200);
+    const reports = await call('admin', '/preformed/reports');
+    assert.equal(reports.status, 200, JSON.stringify(reports));
+    assert.ok(reports.data.reports.some(item => item.test_id === test.id));
+    assert.equal((await call('admin', '/preformed/moderate', { id: test.id, hidden: true }, 'PUT')).status, 200);
+    assert.equal((await call('free', `/preformed/open?code=${test.code}`)).status, 403);
+    assert.equal((await db.prepare('PRAGMA foreign_key_check').all()).results.length, 0);
+  });
+
   await t.test('Account deletion is atomic, preserves shared/public content and anonymizes reviewer history', async () => {
     const uid = 'account-to-delete';
     const profile = await account(uid, ['reviewer']);
@@ -82,7 +220,7 @@ export async function improvementsApiTests(t, db, call) {
     await db.prepare('INSERT INTO contribution_reviews VALUES(?,?,?,?,?,?,?,?)').bind('preserved-review', proposal.id, uid, uid, 'approved', 0, now, '{}').run();
     await record('auditLog', { id: 'preserved-audit', actorId: uid, actorName: profile.displayName, detail: JSON.stringify({ previous: profile }), createdAt: now }, uid);
     const personal = { version: 1, tests: [], customQuestions: [], progress: {}, reports: [], revisions: [], questionOverrides: {}, flashcards: [{ id: 'personal-card', deckId: 'personal-deck' }], flashcardDecks: [{ id: 'personal-deck' }], flashcardSchedules: {}, flashcardReviewLog: [], settings: {} };
-    await db.prepare('INSERT INTO app_states VALUES(?,?,?)').bind(uid, JSON.stringify(personal), now).run();
+    await db.prepare('INSERT INTO app_states(user_id,payload,updated_at) VALUES(?,?,?)').bind(uid, JSON.stringify(personal), now).run();
     await db.prepare('INSERT INTO test_registry VALUES(?,?,?,?)').bind(uid, 'personal-test', 10, now).run();
     await db.prepare('INSERT INTO tickets(id,user_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?)').bind('personal-ticket', uid, 'Personal ticket', 'open', now, now).run();
     await db.prepare('INSERT INTO ticket_messages VALUES(?,?,?,?,?,?)').bind('personal-message', 'personal-ticket', uid, 'Private text', null, now).run();
