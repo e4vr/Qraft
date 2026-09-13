@@ -13,7 +13,6 @@ import {
   FolderPlus,
   ImagePlus,
   Layers3,
-  Menu,
   Pencil,
   Play,
   Plus,
@@ -24,6 +23,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { WorkspaceHeader } from '@/components/workspace-header';
 import {
   useEffect,
   useMemo,
@@ -1124,7 +1124,40 @@ export function FlashcardsWorkspace({
     );
 
   return (
-    <div className="min-h-full p-4 sm:p-6 lg:p-8">
+    <>
+      <WorkspaceHeader
+        eyebrow="Active recall"
+        title="Flashcards"
+        subtitle={`Private decks for ${qbankName} · ${questions.length} bank questions available`}
+        actions={<>
+          <Button variant="outline" onClick={() => setDeckDialogOpen(true)}>
+            <FolderPlus /> New deck
+          </Button>
+          <Button
+            variant="outline"
+            disabled={importing}
+            onClick={() => importInput.current?.click()}
+          >
+            {importing ? <Sparkles className="animate-pulse" /> : <Upload />}
+            {importing ? 'Importing…' : 'Import Anki'}
+          </Button>
+          <input
+            ref={importInput}
+            type="file"
+            accept=".apkg,application/zip"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void importAnki(file);
+              event.target.value = '';
+            }}
+          />
+          <Button onClick={openNewCard}>
+            <Plus /> New card
+          </Button>
+        </>}
+      />
+      <div className="min-h-full p-4 sm:p-6 lg:p-8">
       <AlertDialog open={Boolean(deleteDeckId)} onOpenChange={(open) => { if (!open) setDeleteDeckId(undefined); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1144,60 +1177,6 @@ export function FlashcardsWorkspace({
         </AlertDialogContent>
       </AlertDialog>
       <div className="mx-auto max-w-[1440px]">
-        <header className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="mb-4 lg:hidden"
-              aria-label="Open navigation"
-              onClick={() =>
-                window.dispatchEvent(new Event('medguard-open-menu'))
-              }
-            >
-              <Menu />
-            </Button>
-            <p className="text-xs font-black uppercase tracking-[0.18em] text-primary">
-              Active recall
-            </p>
-            <h1 className="mt-2 text-3xl font-black tracking-tight">
-              Flashcards
-            </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Private decks for {qbankName}, scheduled around your memory with
-              FSRS. {questions.length} bank questions can be converted into
-              cards while you study.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => setDeckDialogOpen(true)}>
-              <FolderPlus /> New deck
-            </Button>
-            <Button
-              variant="outline"
-              disabled={importing}
-              onClick={() => importInput.current?.click()}
-            >
-              {importing ? <Sparkles className="animate-pulse" /> : <Upload />}
-              {importing ? 'Importing…' : 'Import Anki'}
-            </Button>
-            <input
-              ref={importInput}
-              type="file"
-              accept=".apkg,application/zip"
-              hidden
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void importAnki(file);
-                event.target.value = '';
-              }}
-            />
-            <Button onClick={openNewCard}>
-              <Plus /> New card
-            </Button>
-          </div>
-        </header>
-
         {importReport && (
           <section
             className={cn(
@@ -1660,6 +1639,7 @@ export function FlashcardsWorkspace({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+      </div>
+    </>
   );
 }

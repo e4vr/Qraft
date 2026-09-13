@@ -11,12 +11,12 @@ import {
   History,
   Layers3,
   ListChecks,
-  Menu,
   UserRound,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { QuestionPreview } from '@/components/question-tools';
+import { WorkspaceHeader } from '@/components/workspace-header';
 import { api } from '@/lib/api-client';
 import { loadCollaborationState } from '@/lib/application-services';
 import { subscribeLive } from '@/lib/realtime-client';
@@ -370,28 +370,10 @@ export function ReviewWorkspace({
   return (
     <>
       {!embedded && (
-        <header className="workspace-header">
-          <div className="flex min-w-0 items-center gap-3">
-            <button
-              aria-label="Open navigation"
-              onClick={() =>
-                window.dispatchEvent(new Event('medguard-open-menu'))
-              }
-              className="grid size-10 place-items-center rounded-xl border lg:hidden"
-            >
-              <Menu className="size-5" />
-            </button>
-            <div className="min-w-0">
-              <h1 className="truncate text-lg font-bold tracking-tight">
-                Review
-              </h1>
-              <p className="mt-1 text-sm leading-5 text-muted-foreground">
-                Compare each change, check its source, then approve or return
-                it.
-              </p>
-            </div>
-          </div>
-        </header>
+        <WorkspaceHeader
+          title="Review"
+          subtitle="Compare each change, check its source, then approve or return it."
+        />
       )}
       <div
         className={cn('mx-auto max-w-[1180px]', embedded ? '' : 'p-4 sm:p-7')}

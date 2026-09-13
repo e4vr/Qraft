@@ -9,12 +9,12 @@ import {
   KeyRound,
   LoaderCircle,
   Mail,
-  Menu,
   Phone,
   Save,
   ShieldCheck,
   UserRound,
 } from 'lucide-react';
+import { WorkspaceHeader } from '@/components/workspace-header';
 import {
   changeCloudflarePassword,
   updateCloudflareProfile,
@@ -103,27 +103,10 @@ export function AccountProfile({
 
   return (
     <>
-      <header className="workspace-header">
-        <div className="flex min-w-0 items-center gap-3">
-          <button
-            aria-label="Open navigation"
-            onClick={() =>
-              window.dispatchEvent(new Event('medguard-open-menu'))
-            }
-            className="grid size-10 shrink-0 place-items-center rounded-xl border lg:hidden"
-          >
-            <Menu className="size-5" />
-          </button>
-          <div className="min-w-0">
-            <h1 className="truncate text-lg font-bold tracking-tight">
-              My profile
-            </h1>
-            <p className="mt-1 text-sm leading-5 text-muted-foreground">
-              Personal information and account security
-            </p>
-          </div>
-        </div>
-      </header>
+      <WorkspaceHeader
+        title="My profile"
+        subtitle="Personal information and account security"
+      />
       <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-7">
         <section className="overflow-hidden rounded-3xl border bg-card shadow-sm">
           <div className="bg-gradient-to-br from-primary/15 via-card to-violet-500/10 p-6 sm:p-8">

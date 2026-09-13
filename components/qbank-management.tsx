@@ -9,6 +9,7 @@ import { ClassificationManager } from '@/components/classification-manager';
 import { QuestionImportReview } from '@/components/question-import-review';
 import { QuestionId } from '@/components/question-tools';
 import { ReviewerSearch } from '@/components/reviewer-search';
+import { WorkspaceHeader } from '@/components/workspace-header';
 import { api } from '@/lib/api-client';
 import { deleteQBankImages, uploadQuestionImage } from '@/lib/application-services';
 import { canManageBank, optionLabel, type AppUser, type CollaborationState, type NoteImage, type QBank, type Question, type QBankVisibility } from '@/lib/medguard-types';
@@ -421,18 +422,15 @@ export function QBankManagement({
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-background text-foreground">
-      <header className="sticky top-0 z-30 border-b bg-card/90 px-4 py-4 backdrop-blur-xl sm:px-7">
-        <div className="mx-auto flex max-w-[1180px] items-center gap-3">
-          <button onClick={leaveManagement} className="grid size-10 place-items-center rounded-xl border" aria-label="Back to My QBanks">
+      <WorkspaceHeader
+        eyebrow="QBank management"
+        title={bank.name}
+        showMenu={false}
+        leading={<button onClick={leaveManagement} className="q-icon" aria-label="Back to My QBanks">
             <ArrowLeft className="size-5" />
-          </button>
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-bold uppercase tracking-wider text-primary">QBank management</p>
-            <h1 className="truncate text-lg font-bold">{bank.name}</h1>
-          </div>
-          <span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">{bank.essential ? 'ESSENTIAL · SUPERADMIN' : 'OWNER'}</span>
-        </div>
-      </header>
+          </button>}
+        actions={<span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">{bank.essential ? 'ESSENTIAL · SUPERADMIN' : 'OWNER'}</span>}
+      />
       <div className="mx-auto max-w-[1180px] p-4 sm:p-7">
         <nav className="mb-6 flex gap-2 overflow-x-auto" aria-label="QBank management sections">
           {(

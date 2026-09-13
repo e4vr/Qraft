@@ -194,8 +194,8 @@ export function Subscribe({
                 <tr>
                   <th className="w-[25%] p-4 align-bottom font-semibold text-muted-foreground">المميزات</th>
                   {PLAN_ORDER.map((plan) => (
-                    <th key={plan} className={`relative p-4 text-center align-bottom ${plan === 'pro' ? 'border-x-2 border-t-2 border-[#18b39f] bg-[#effcf9] dark:bg-[#123b3b]' : ''}`}>
-                      {plan === 'pro' && <span className="absolute -top-0.5 left-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-[#18b39f] px-3 py-1 text-[10px] font-bold text-white shadow-sm">الأكثر شيوعًا</span>}
+                    <th key={plan} className={`p-4 text-center align-bottom ${plan === 'pro' ? 'border-x-2 border-t-2 border-[#18b39f] bg-[#effcf9] dark:bg-[#123b3b]' : ''}`}>
+                      {plan === 'pro' && <span className="mx-auto mb-2 flex w-fit items-center justify-center whitespace-nowrap rounded-full bg-[#18b39f] px-3 py-1 text-[10px] font-bold leading-4 text-white shadow-sm">الأكثر شيوعًا</span>}
                       <span className="block text-lg font-black text-[#07233d] dark:text-white">{PLAN_LIMITS[plan].name}</span>
                       <span className="mt-1 block text-xs font-normal text-muted-foreground">{PLAN_LIMITS[plan].priceSarYear ? `${PLAN_LIMITS[plan].priceSarYear} SAR / سنة` : 'ابدأ مجانًا'}</span>
                     </th>

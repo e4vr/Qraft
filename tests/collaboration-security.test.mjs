@@ -172,6 +172,10 @@ void test('study experience includes persistent marker, answer statistics, dark 
   assert.match(app, /answerStats/);
   assert.match(app, /prefers-color-scheme:\s*dark/);
   assert.match(app, /<details\s+key=\{topic\.topic\}/);
+  assert.match(app, /className="q-question-drawer/);
+  assert.match(app, /aria-labelledby="question-navigator-title"/);
+  assert.match(app, /\{item\.stem\}/);
+  assert.match(app, /q-question-drawer-list/);
 });
 
 void test('QBank switching, review counters, random tests, private notes, labs, and grouped progress are integrated', async () => {
@@ -569,7 +573,9 @@ void test('QBank library uses Superadmin folders, personal shortcuts, and bookma
   assert.match(workspace, /Start test/);
   assert.match(workspace, /toggleList\('favoriteIds'/);
   assert.match(workspace, /toggleList\('pinnedIds'/);
-  assert.match(workspace, /draggable=\{sortable\}/);
+  assert.match(workspace, /draggable=\{sortable && !coarsePointer\}/);
+  assert.match(workspace, /function moveBank\(bankId: string, direction: -1 \| 1\)/);
+  assert.match(workspace, /q-coarse-pointer-only/);
   assert.match(workspace, /by \{bank\.ownerName\}/);
   assert.match(folderManager, /One global structure, up to two levels/);
   assert.match(folderManager, /Type حذف to confirm/);
@@ -579,6 +585,23 @@ void test('QBank library uses Superadmin folders, personal shortcuts, and bookma
     /Essential QBanks must be moved or removed independently/,
   );
   assert.match(server, /input\.confirmation !== 'حذف'/);
+});
+
+void test('touch input uses one event path, forgiving targets, and touch-safe scrolling', async () => {
+  const app = await readFile(
+    new URL('components/medguard-app.tsx', root),
+    'utf8',
+  );
+  const styles = await readFile(new URL('app/globals.css', root), 'utf8');
+  assert.doesNotMatch(app, /onTouchEnd=/);
+  assert.doesNotMatch(app, /user-scalable=no/);
+  assert.doesNotMatch(app, /gesturestart/);
+  assert.match(app, /onPointerDown=\{\(event\) => \{/);
+  assert.match(styles, /\(hover: none\) and \(pointer: coarse\)/);
+  assert.match(styles, /min-width: 44px;/);
+  assert.match(styles, /min-height: 44px;/);
+  assert.match(styles, /touch-action: pan-y pinch-zoom;/);
+  assert.match(styles, /q-viewport:has\(> \.q-shell\).*overflow-y: hidden/);
 });
 
 void test('shared QBank links require an explicit accept or decline decision', async () => {

@@ -305,11 +305,7 @@ export function ContributionCenter({
           )}
         </DialogContent>
       </Dialog>
-      <header>
-        <p className="q-eyebrow">Contribution Center</p>
-        <h1 className="mt-2 text-2xl font-bold sm:text-3xl">Your contribution wallet</h1>
-        <p className="mt-2 text-muted-foreground">Credits can be redeemed. Lifetime contribution never decreases.</p>
-      </header>
+      <p className="text-sm text-muted-foreground">Credits can be redeemed. Lifetime contribution never decreases.</p>
       {error && <p role="alert" className="rounded-xl bg-destructive/10 p-4 text-sm text-destructive">{error}</p>}
       {message && <output className="flex items-center gap-2 rounded-xl bg-emerald-500/10 p-4 text-sm text-emerald-700 dark:text-emerald-300"><Check className="size-4" />{message}</output>}
       {data && (

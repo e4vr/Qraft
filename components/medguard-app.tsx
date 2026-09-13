@@ -10,6 +10,7 @@ import {
   UpgradeDialog,
 } from '@/components/subscription-workspace';
 import { ContactWorkspace } from '@/components/contact-workspace';
+import { WorkspaceHeader } from '@/components/workspace-header';
 import { ContributionCenter } from '@/components/contribution-center';
 import { AccountProfile } from '@/components/account-profile';
 import { SystemStatePage } from '@/components/system-state-page';
@@ -61,7 +62,6 @@ import {
   LockKeyhole,
   List,
   LogOut,
-  Menu,
   Moon,
   Pencil,
   Pause,
@@ -1509,28 +1509,7 @@ function PageHeader({
   openMenu: () => void;
   actions?: React.ReactNode;
 }) {
-  return (
-    <header className="workspace-header">
-      <div className="flex min-w-0 items-center gap-3">
-        <button
-          aria-label="Open navigation"
-          onClick={openMenu}
-          className="grid size-10 place-items-center rounded-xl border lg:hidden"
-        >
-          <Menu className="size-5" />
-        </button>
-        <div className="min-w-0">
-          <h1 className="truncate text-lg font-bold tracking-tight">{title}</h1>
-          {subtitle && (
-            <p className="mt-1 text-sm leading-5 text-muted-foreground">
-              {subtitle}
-            </p>
-          )}
-        </div>
-      </div>
-      {actions && <div className="workspace-header-actions">{actions}</div>}
-    </header>
-  );
+  return <WorkspaceHeader title={title} subtitle={subtitle} actions={actions} onOpenMenu={openMenu} />;
 }
 
 function StatCard({
@@ -2136,6 +2115,8 @@ function TestView({
   const [uploading, setUploading] = useState(false);
   const isMobile = useIsMobile();
   const stemRef = useRef<HTMLParagraphElement>(null);
+  const navigatorRef = useRef<HTMLDialogElement>(null);
+  const navigatorCurrentRef = useRef<HTMLButtonElement>(null);
   const activeQuestions = useMemo(() => {
     const questionsById = new Map(
       questions.map((question) => [question.id, question]),
@@ -2153,6 +2134,46 @@ function TestView({
   const progress = question
     ? getQuestionProgress(state, question.id)
     : emptyProgress();
+  useEffect(() => {
+    if (!navigatorOpen) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const frame = window.requestAnimationFrame(() => {
+      navigatorCurrentRef.current?.scrollIntoView({ block: 'center' });
+      (
+        navigatorCurrentRef.current ??
+        navigatorRef.current?.querySelector<HTMLButtonElement>('button')
+      )?.focus();
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setNavigatorOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const controls = Array.from(
+        navigatorRef.current?.querySelectorAll<HTMLButtonElement>(
+          'button:not([disabled])',
+        ) ?? [],
+      );
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [navigatorOpen]);
   useEffect(() => {
     stemRef.current
       ?.closest('.q-viewport')
@@ -2850,9 +2871,6 @@ function TestView({
             onPointerUp={(event) =>
               copySelectionAndMark('explanation', event.currentTarget)
             }
-            onTouchEnd={(event) =>
-              copySelectionAndMark('explanation', event.currentTarget)
-            }
             className="select-text whitespace-pre-wrap break-words leading-7"
           >
             <HighlightedText
@@ -3023,49 +3041,6 @@ function TestView({
         </div>
       </header>
       <div className="q-test-body flex w-full min-w-0 flex-1">
-        <aside
-          className="hidden w-[240px] shrink-0 border-r bg-white p-4 dark:bg-card xl:block"
-          aria-label="Question navigator"
-        >
-          <div className="mb-3 flex items-center justify-between">
-            <strong className="text-xs">Questions</strong>
-            <span className="text-xs text-muted-foreground">
-              {Object.keys(test.answers).length}/{test.questionIds.length}
-            </span>
-          </div>
-          <div
-            className="grid grid-cols-[repeat(auto-fit,minmax(44px,1fr))] gap-2"
-            dir="ltr"
-          >
-            {activeQuestions.map((item, index) => {
-              const itemProgress = getQuestionProgress(state, item.id);
-              const answered = test.answers[item.id] !== undefined;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => move(index)}
-                  aria-label={`Question ${index + 1}${itemProgress.flagged ? ', flagged' : ''}`}
-                  aria-current={
-                    index === test.currentIndex ? 'step' : undefined
-                  }
-                  className={cx(
-                    'grid min-h-11 min-w-0 place-items-center rounded-lg border px-1 py-2 text-xs font-bold tabular-nums',
-                    index === test.currentIndex
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : answered
-                        ? 'border-primary/25 bg-primary/8 text-primary'
-                        : 'bg-white dark:bg-card',
-                    itemProgress.flagged &&
-                      index !== test.currentIndex &&
-                      'border-amber-400 text-amber-700 dark:text-amber-300',
-                  )}
-                >
-                  {index + 1}
-                </button>
-              );
-            })}
-          </div>
-        </aside>
         <section className="min-w-0 flex-1 p-3 sm:p-6 lg:p-8">
           <div
             className={cx(
@@ -3086,7 +3061,7 @@ function TestView({
               </div>
               <button
                 onClick={() => setNavigatorOpen(true)}
-                className="text-xs font-bold text-primary xl:hidden"
+                className="min-h-11 rounded-xl px-3 text-xs font-bold text-primary hover:bg-primary/5"
               >
                 Question {test.currentIndex + 1} of {test.questionIds.length}
               </button>
@@ -3162,9 +3137,6 @@ function TestView({
                     ref={stemRef}
                     dir="auto"
                     onPointerUp={(event) =>
-                      copySelectionAndMark('stem', event.currentTarget)
-                    }
-                    onTouchEnd={(event) =>
                       copySelectionAndMark('stem', event.currentTarget)
                     }
                     className="select-text whitespace-pre-wrap break-words text-base leading-[1.85] text-[#1d2e40] touch-pan-y dark:text-foreground sm:text-base"
@@ -3321,12 +3293,6 @@ function TestView({
                       </div>
                       <p
                         onPointerUp={(event) =>
-                          copySelectionAndMark(
-                            'explanation',
-                            event.currentTarget,
-                          )
-                        }
-                        onTouchEnd={(event) =>
                           copySelectionAndMark(
                             'explanation',
                             event.currentTarget,
@@ -3573,7 +3539,7 @@ function TestView({
       {finishConfirmOpen && (
         <div
           className="q-safe-overlay fixed inset-0 z-[70] grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm"
-          onMouseDown={(event) => {
+          onPointerDown={(event) => {
             if (event.target === event.currentTarget)
               setFinishConfirmOpen(false);
           }}
@@ -3677,47 +3643,124 @@ function TestView({
       )}
       {navigatorOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-end bg-slate-950/35"
-          onClick={() => setNavigatorOpen(false)}
+          className="fixed inset-0 z-50 flex items-stretch justify-start bg-slate-950/40 backdrop-blur-[1px]"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setNavigatorOpen(false);
+          }}
         >
-          <div
-            onClick={(event) => event.stopPropagation()}
-            className="max-h-[70vh] w-full rounded-t-3xl bg-white p-5 dark:bg-card"
+          <dialog
+            open
+            ref={navigatorRef}
+            aria-modal="true"
+            aria-labelledby="question-navigator-title"
+            className="q-question-drawer relative m-0 flex min-w-0 max-w-none flex-col border-0 border-r bg-card p-0 text-foreground shadow-[20px_0_60px_rgba(2,12,27,.22)]"
           >
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <strong>Questions</strong>
-              <button onClick={() => setNavigatorOpen(false)}>
-                <X className="size-5" />
-              </button>
-            </div>
+            <header className="shrink-0 border-b px-5 pb-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0" dir="auto">
+                  <h2
+                    id="question-navigator-title"
+                    className="truncate text-lg font-bold tracking-tight"
+                  >
+                    {test.title}
+                  </h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {answeredCount} of {test.questionIds.length} answered
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close question navigator"
+                  onClick={() => setNavigatorOpen(false)}
+                  className="q-icon -mr-2 -mt-1 border-0 bg-transparent"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+              <div
+                className="mt-4 h-1 overflow-hidden rounded-full bg-muted"
+                aria-hidden="true"
+              >
+                <span
+                  className="block h-full rounded-full bg-primary transition-[width] duration-200"
+                  style={{
+                    width: `${test.questionIds.length ? (answeredCount / test.questionIds.length) * 100 : 0}%`,
+                  }}
+                />
+              </div>
+            </header>
             <div
-              className="grid max-h-[50dvh] grid-cols-[repeat(auto-fill,minmax(44px,1fr))] gap-2 overflow-y-auto p-1 pb-[max(4px,env(safe-area-inset-bottom))]"
+              className="q-question-drawer-list min-h-0 flex-1 overflow-y-auto py-2"
               dir="ltr"
             >
-              {activeQuestions.map((item, index) => (
-                <button
-                  key={item.id}
-                  onClick={() => {
-                    move(index);
-                    setNavigatorOpen(false);
-                  }}
-                  aria-label={`Question ${index + 1}${getQuestionProgress(state, item.id).flagged ? ', flagged' : ''}`}
-                  className={cx(
-                    'grid min-h-11 place-items-center rounded-lg border text-xs font-bold',
-                    index === test.currentIndex
-                      ? 'bg-primary text-white'
-                      : test.answers[item.id] !== undefined
-                        ? 'bg-primary/10 text-primary'
-                        : '',
-                    getQuestionProgress(state, item.id).flagged &&
-                      'ring-2 ring-amber-400',
-                  )}
-                >
-                  {index + 1}
-                </button>
-              ))}
+              {activeQuestions.map((item, index) => {
+                const itemProgress = getQuestionProgress(state, item.id);
+                const answered = test.answers[item.id] !== undefined;
+                const current = index === test.currentIndex;
+                return (
+                  <button
+                    ref={current ? navigatorCurrentRef : undefined}
+                    type="button"
+                    key={item.id}
+                    onClick={() => {
+                      move(index);
+                      setNavigatorOpen(false);
+                    }}
+                    aria-label={`Question ${index + 1}: ${item.stem}${answered ? ', answered' : ', unanswered'}${itemProgress.flagged ? ', flagged' : ''}`}
+                    aria-current={current ? 'step' : undefined}
+                    className={cx(
+                      'group grid min-h-14 w-full grid-cols-[24px_32px_minmax(0,1fr)_20px] items-center gap-2 border-l-[3px] border-transparent px-5 py-2.5 text-left transition-colors',
+                      current
+                        ? 'border-l-primary bg-primary/8 text-foreground'
+                        : 'hover:bg-muted/60',
+                    )}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={cx(
+                        'grid size-5 place-items-center rounded-full border-2 transition-colors',
+                        answered
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : current
+                            ? 'border-primary text-primary'
+                            : itemProgress.flagged
+                              ? 'border-amber-500'
+                              : 'border-muted-foreground/70',
+                      )}
+                    >
+                      {answered ? (
+                        <Check className="size-3" strokeWidth={3} />
+                      ) : current ? (
+                        <span className="size-1.5 rounded-full bg-current" />
+                      ) : null}
+                    </span>
+                    <span
+                      className={cx(
+                        'text-sm font-bold tabular-nums',
+                        current ? 'text-primary' : 'text-muted-foreground',
+                      )}
+                    >
+                      {index + 1}
+                    </span>
+                    <span
+                      dir="auto"
+                      className="block min-w-0 truncate text-sm font-medium text-foreground/85"
+                    >
+                      {item.stem}
+                    </span>
+                    {itemProgress.flagged ? (
+                      <Flag
+                        aria-hidden="true"
+                        className="size-4 fill-amber-400 text-amber-500"
+                      />
+                    ) : (
+                      <span aria-hidden="true" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
-          </div>
+          </dialog>
         </div>
       )}
       {reportOpen && (
@@ -5682,59 +5725,13 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       // Safari may use the first matching server-rendered theme entry.
       document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach((meta) => {
         meta.removeAttribute('media');
-        meta.content = dark ? '#0d1b2a' : '#ffffff';
+        meta.content = dark ? '#07111d' : '#f4f7fb';
       });
     };
     apply();
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
   }, [theme]);
-
-  useEffect(() => {
-    const standalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (navigator as Navigator & { standalone?: boolean }).standalone === true;
-    if (!standalone) return;
-
-    let viewport = document.querySelector<HTMLMetaElement>(
-      'meta[name="viewport"]',
-    );
-    const created = !viewport;
-    if (!viewport) {
-      viewport = document.createElement('meta');
-      viewport.name = 'viewport';
-      document.head.appendChild(viewport);
-    }
-    const previousContent = viewport.content || 'width=device-width, initial-scale=1';
-    const content = previousContent
-      .split(',')
-      .map((item) => item.trim())
-      .filter(
-        (item) =>
-          !/^(minimum-scale|maximum-scale|user-scalable)=/i.test(item),
-      );
-    content.push('minimum-scale=1', 'maximum-scale=1', 'user-scalable=no');
-    viewport.content = content.join(', ');
-
-    const preventGestureZoom = (event: Event) => event.preventDefault();
-    document.addEventListener('gesturestart', preventGestureZoom, {
-      passive: false,
-    });
-    document.addEventListener('gesturechange', preventGestureZoom, {
-      passive: false,
-    });
-    document.addEventListener('gestureend', preventGestureZoom, {
-      passive: false,
-    });
-    return () => {
-      document.removeEventListener('gesturestart', preventGestureZoom);
-      document.removeEventListener('gesturechange', preventGestureZoom);
-      document.removeEventListener('gestureend', preventGestureZoom);
-      if (created) viewport?.remove();
-      else if (viewport?.content === content.join(', '))
-        viewport.content = previousContent;
-    };
-  }, []);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -6746,8 +6743,26 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
               )}
             </output>
           )}
-          {view === 'subscribe' && <Subscribe user={user} onUser={setUser} />}
-          {view === 'contact' && <ContactWorkspace />}
+          {view === 'subscribe' && (
+            <>
+              <PageHeader
+                title="Subscription"
+                subtitle="Plans and account access"
+                openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
+              />
+              <Subscribe user={user} onUser={setUser} />
+            </>
+          )}
+          {view === 'contact' && (
+            <>
+              <PageHeader
+                title="Contact Us"
+                subtitle="Private support for technical, account, and question issues"
+                openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
+              />
+              <ContactWorkspace />
+            </>
+          )}
           {view === 'account' && (
             <AccountProfile user={user} onUser={setUser} />
           )}
@@ -6952,13 +6967,20 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
             />
           )}
           {view === 'contribution-center' && (
-            <ContributionCenter
-              userId={user.uid}
-              onEntitlementChange={(next) => {
-                setAuthenticatedUserCache(next);
-                setUser(next);
-              }}
-            />
+            <>
+              <PageHeader
+                title="Contribution Center"
+                subtitle="Credits, rewards, and contribution activity"
+                openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
+              />
+              <ContributionCenter
+                userId={user.uid}
+                onEntitlementChange={(next) => {
+                  setAuthenticatedUserCache(next);
+                  setUser(next);
+                }}
+              />
+            </>
           )}
           {view === 'admin' && user.isAdmin && (
             <AdminDashboard

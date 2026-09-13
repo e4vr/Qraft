@@ -1,6 +1,7 @@
 'use client';
 
 import { ReviewerSearch } from '@/components/reviewer-search';
+import { WorkspaceHeader } from '@/components/workspace-header';
 import {
   openUpgrade,
   UpgradeButton,
@@ -8,6 +9,8 @@ import {
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowDown,
+  ArrowUp,
   Bookmark,
   Check,
   Crown,
@@ -17,7 +20,6 @@ import {
   Heart,
   ListChecks,
   LockKeyhole,
-  Menu,
   Pin,
   Plus,
   Search,
@@ -27,7 +29,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   bankRoleFor,
   canAccessBank,
@@ -114,6 +116,16 @@ export function QBankWorkspace({
   const [activeFolderId, setActiveFolderId] = useState('');
   const [quickAccessOpen, setQuickAccessOpen] = useState(false);
   const [draggingId, setDraggingId] = useState('');
+  const [coarsePointer, setCoarsePointer] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia(
+      '(hover: none) and (pointer: coarse), (any-pointer: coarse) and (max-width: 1023px)',
+    );
+    const updatePointerMode = () => setCoarsePointer(media.matches);
+    updatePointerMode();
+    media.addEventListener('change', updatePointerMode);
+    return () => media.removeEventListener('change', updatePointerMode);
+  }, []);
   const accessible = useMemo(
     () =>
       collaboration.qbanks.filter(
@@ -289,6 +301,34 @@ export function QBankWorkspace({
     setDraggingId('');
   }
 
+  function moveBank(bankId: string, direction: -1 | 1) {
+    if (activeSection !== 'mine' && activeSection !== 'shared') return;
+    const bankPinned = organization.pinnedIds.includes(bankId);
+    const peers = displayedBanks.filter(
+      (bank) => organization.pinnedIds.includes(bank.id) === bankPinned,
+    );
+    const from = peers.findIndex((bank) => bank.id === bankId);
+    const target = peers[from + direction];
+    if (from < 0 || !target) return;
+
+    const savedOrder = organization.orderBySection[activeSection].filter((id) =>
+      sectionBanks.some((bank) => bank.id === id),
+    );
+    const unsavedIds = sectionBanks
+      .filter((bank) => !savedOrder.includes(bank.id))
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((bank) => bank.id);
+    const ids = [...savedOrder, ...unsavedIds];
+    const sourceIndex = ids.indexOf(bankId);
+    const targetIndex = ids.indexOf(target.id);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    [ids[sourceIndex], ids[targetIndex]] = [ids[targetIndex], ids[sourceIndex]];
+    updateOrganization({
+      ...organization,
+      orderBySection: { ...organization.orderBySection, [activeSection]: ids },
+    });
+  }
+
   function createBank(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const id = `${slug(shortName || name)}-${crypto.randomUUID().slice(0, 6)}`;
@@ -412,25 +452,10 @@ export function QBankWorkspace({
 
   return (
     <>
-      <header className="workspace-header">
-        <div className="flex min-w-0 items-center gap-3">
-          <button
-            aria-label="Open navigation"
-            className="q-icon lg:hidden"
-            onClick={() =>
-              window.dispatchEvent(new Event('medguard-open-menu'))
-            }
-          >
-            <Menu className="size-5" />
-          </button>
-          <div>
-            <h1 className="text-lg font-bold">My QBanks</h1>
-            <p className="text-xs text-muted-foreground">
-              Your questions, organized around you.
-            </p>
-          </div>
-        </div>
-        <button
+      <WorkspaceHeader
+        title="My QBanks"
+        subtitle="Your questions, organized around you."
+        actions={<button
           onClick={() => (canCreate ? setCreating(true) : openUpgrade())}
           className={cx(
             'q-button',
@@ -443,8 +468,8 @@ export function QBankWorkspace({
             <LockKeyhole className="size-4" />
           )}
           {canCreate ? 'New QBank' : 'Create QBank · Pro'}
-        </button>
-      </header>
+        </button>}
+      />
       <div className="q-page space-y-6">
         {receivedInvites.length > 0 && (
           <section className="rounded-2xl border border-violet-200 bg-violet-50/70 p-5 dark:border-violet-500/20 dark:bg-violet-500/10">
@@ -510,33 +535,35 @@ export function QBankWorkspace({
           </div>
           <nav
             aria-label="QBank sections"
-            className="mb-4 flex gap-2 overflow-x-auto rounded-2xl bg-muted p-1.5 scrollbar-none"
+            className="mb-4 overflow-x-auto rounded-2xl bg-muted p-1.5 scrollbar-none"
           >
-            {(
-              [
-                ['mine', 'My QBanks'],
-                ['shared', 'Shared with me'],
-                ['public', 'Public QBanks'],
-                ['favorites', 'Favorites'],
-                ['bookmarks', 'Bookmarks'],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => {
-                  setActiveSection(id);
-                  setActiveFolderId('');
-                }}
-                className={cx(
-                  'flex shrink-0 items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground',
-                  activeSection === id && 'bg-card text-primary shadow-sm',
-                )}
-              >
-                {id === 'favorites' && <Heart className="size-4" />}
-                {id === 'bookmarks' && <Bookmark className="size-4" />}
-                {label}
-              </button>
-            ))}
+            <div className="mx-auto flex w-max gap-2">
+              {(
+                [
+                  ['mine', 'My QBanks'],
+                  ['shared', 'Shared with me'],
+                  ['public', 'Public QBanks'],
+                  ['favorites', 'Favorites'],
+                  ['bookmarks', 'Bookmarks'],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => {
+                    setActiveSection(id);
+                    setActiveFolderId('');
+                  }}
+                  className={cx(
+                    'flex shrink-0 items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground',
+                    activeSection === id && 'bg-card text-primary shadow-sm',
+                  )}
+                >
+                  {id === 'favorites' && <Heart className="size-4" />}
+                  {id === 'bookmarks' && <Bookmark className="size-4" />}
+                  {label}
+                </button>
+              ))}
+            </div>
           </nav>
           {activeSection === 'bookmarks' ? (
             <div className="space-y-4">
@@ -672,18 +699,19 @@ export function QBankWorkspace({
                   })}
                 </div>
               )}
-              <div className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
-                {!displayedBanks.length ? (
-                  <div className="p-12 text-center">
-                    <p className="font-bold">No QBanks here</p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {search
-                        ? 'Try a different search.'
-                        : 'This folder is currently empty.'}
-                    </p>
-                  </div>
-                ) : (
-                  displayedBanks.map((bank) => {
+              {(displayedBanks.length > 0 || visibleFolders.length === 0) && (
+                <div className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
+                  {!displayedBanks.length ? (
+                    <div className="p-12 text-center">
+                      <p className="font-bold">No QBanks here</p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {search
+                          ? 'Try a different search.'
+                          : 'This folder is currently empty.'}
+                      </p>
+                    </div>
+                  ) : (
+                    displayedBanks.map((bank) => {
                     const role = bankRoleFor(
                       user,
                       bank,
@@ -696,6 +724,15 @@ export function QBankWorkspace({
                     const pinned = organization.pinnedIds.includes(bank.id);
                     const sortable =
                       activeSection === 'mine' || activeSection === 'shared';
+                    const reorderPeers = sortable
+                      ? displayedBanks.filter(
+                          (item) =>
+                            organization.pinnedIds.includes(item.id) === pinned,
+                        )
+                      : [];
+                    const reorderIndex = reorderPeers.findIndex(
+                      (item) => item.id === bank.id,
+                    );
                     return (
                       <article
                         key={bank.id}
@@ -708,8 +745,11 @@ export function QBankWorkspace({
                         )}
                       >
                         <button
-                          draggable={sortable}
-                          onDragStart={() => setDraggingId(bank.id)}
+                          draggable={sortable && !coarsePointer}
+                          onDragStart={() => {
+                            if (!coarsePointer) setDraggingId(bank.id);
+                          }}
+                          onDragEnd={() => setDraggingId('')}
                           onDragOver={(event) => {
                             if (sortable) event.preventDefault();
                           }}
@@ -718,7 +758,7 @@ export function QBankWorkspace({
                           className="flex min-w-0 flex-1 items-start gap-4 text-left"
                         >
                           {sortable && (
-                            <GripVertical className="mt-3 size-4 shrink-0 cursor-grab text-muted-foreground" />
+                            <GripVertical className="q-fine-pointer-only mt-3 size-4 shrink-0 cursor-grab text-muted-foreground" />
                           )}
                           <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
                             {bank.visibility === 'public' ? (
@@ -764,6 +804,34 @@ export function QBankWorkspace({
                           </span>
                         </button>
                         <div className="flex shrink-0 flex-wrap gap-2">
+                          {sortable && (
+                            <div
+                              className="q-coarse-pointer-only items-center gap-2"
+                              aria-label="Reorder QBank"
+                            >
+                              <button
+                                type="button"
+                                aria-label={`Move ${bank.name} up`}
+                                disabled={reorderIndex <= 0}
+                                onClick={() => moveBank(bank.id, -1)}
+                                className="q-icon border disabled:opacity-35"
+                              >
+                                <ArrowUp className="size-4" />
+                              </button>
+                              <button
+                                type="button"
+                                aria-label={`Move ${bank.name} down`}
+                                disabled={
+                                  reorderIndex < 0 ||
+                                  reorderIndex >= reorderPeers.length - 1
+                                }
+                                onClick={() => moveBank(bank.id, 1)}
+                                className="q-icon border disabled:opacity-35"
+                              >
+                                <ArrowDown className="size-4" />
+                              </button>
+                            </div>
+                          )}
                           <button
                             onClick={() => onSelect(bank.id)}
                             className="q-button q-button-study"
@@ -819,9 +887,10 @@ export function QBankWorkspace({
                         </div>
                       </article>
                     );
-                  })
-                )}
-              </div>
+                    })
+                  )}
+                </div>
+              )}
             </>
           )}
         </section>

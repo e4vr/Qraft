@@ -3,6 +3,7 @@
 /* oxlint-disable next/no-img-element */
 
 import { api } from '@/lib/api-client';
+import { WorkspaceHeader } from '@/components/workspace-header';
 import {
   deleteQBankImages,
   uploadQuestionImage,
@@ -1704,7 +1705,12 @@ export function PreformedTestsWorkspace({
       />
     );
   return (
-    <div className="mx-auto max-w-7xl p-4 sm:p-7">
+    <>
+      <WorkspaceHeader
+        title="Preformed tests"
+        subtitle="Join, create, and share independent tests"
+      />
+      <div className="mx-auto max-w-7xl p-4 sm:p-7">
       <section className="overflow-hidden rounded-[30px] bg-gradient-to-br from-[#0b5fae] via-[#087cb9] to-[#13a69a] p-5 text-white shadow-xl shadow-primary/10 sm:p-8">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-2xl">
@@ -2023,7 +2029,8 @@ export function PreformedTestsWorkspace({
           </section>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
