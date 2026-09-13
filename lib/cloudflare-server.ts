@@ -1076,6 +1076,9 @@ export async function saveStatePatch(
       customQuestions: Array.isArray(input.customQuestions) ? input.customQuestions : state.customQuestions,
       flashcardDecks: Array.isArray(input.flashcardDecks) ? input.flashcardDecks : state.flashcardDecks,
       flashcards: Array.isArray(input.flashcards) ? input.flashcards : state.flashcards,
+      studyStreak: isRecord(input.studyStreak)
+        ? normalizeAppState({ studyStreak: input.studyStreak as unknown as AppState['studyStreak'] }).studyStreak
+        : state.studyStreak,
       clientUpdatedAt: typeof input.clientUpdatedAt === 'string' ? input.clientUpdatedAt : state.clientUpdatedAt,
     });
   } else if (kind === 'flashcards') {
@@ -1233,6 +1236,7 @@ function recordsToState(
     ),
     ...qbanks,
   ];
+  state.qbankFolders = values<CollaborationState['qbankFolders'][number]>('qbankFolders');
   state.memberships =
     values<CollaborationState['memberships'][number]>('qbankMemberships');
   state.invitations =
@@ -1398,9 +1402,16 @@ async function collaborationStateForOperations(
   const profileContextRows = profiles.length
     ? await recordsByTypes(['universityIds'])
     : [];
+  const folderContextRows = operations.some(
+    (operation) =>
+      operation.collection === 'qbankFolders' ||
+      operation.collection === 'qbanks',
+  )
+    ? await recordsByTypes(['qbankFolders'])
+    : [];
   const rows = [
     ...new Map(
-      [...directRows, ...accessRows, ...profileContextRows].map((row) => [
+      [...directRows, ...accessRows, ...profileContextRows, ...folderContextRows].map((row) => [
         `${row.collection}\u0000${row.id}`,
         row,
       ]),
@@ -1545,6 +1556,7 @@ export async function loadCollaboration(request: Request) {
     return json({ error: 'Approved account required.' }, 403);
   const catalogRows = await recordsByTypes([
     'qbanks',
+    'qbankFolders',
     'qbankMemberships',
   ]);
   const catalog = recordsToState(catalogRows);
@@ -1560,7 +1572,9 @@ export async function loadCollaboration(request: Request) {
   );
   allowedBankIds.add('smle-gs');
   const rows = [
-    ...catalogRows.filter((row) => row.collection === 'qbanks'),
+    ...catalogRows.filter(
+      (row) => row.collection === 'qbanks' || row.collection === 'qbankFolders',
+    ),
     ...(await scopedRecordsByTypes(allowedBankIds, [
       'qbankMemberships',
       'qbankInvitations',
@@ -2013,7 +2027,9 @@ function recordAllowed(
   const accessManager = hasAccessManagerRole(user);
   const canManageRoles = hasModeratorRole(user);
   const limits = getPlanLimits(user.effectivePlan ?? user.tier);
-  const canManage = existing ? canManageBank(user, existing) : false;
+  const canManage = existing
+    ? isRoot || canManageBank(user, existing)
+    : false;
   const canReview = existing
     ? canReviewBank(user, existing, state.memberships)
     : false;
@@ -2027,6 +2043,7 @@ function recordAllowed(
         limits.canCreateQBank &&
         (value.visibility !== 'private' || limits.canCreatePrivateQBank) &&
         value.ownerId === user.uid &&
+        (isRoot || value.folderId === undefined) &&
         (value.essential !== true || isRoot)
       );
     if (!existing || !canManage) return false;
@@ -2034,7 +2051,20 @@ function recordAllowed(
     return (
       isRoot ||
       (value.ownerId === existing.ownerId &&
-        value.essential === existing.essential)
+        value.essential === existing.essential &&
+        value.folderId === existing.folderId)
+    );
+  }
+  if (operation.collection === 'qbankFolders') {
+    if (!isRoot || operation.type === 'delete') return false;
+    return (
+      value.id === operation.id &&
+      typeof value.name === 'string' &&
+      Boolean(value.name.trim()) &&
+      value.name.length <= 80 &&
+      Number.isInteger(value.order) &&
+      value.parentId !== value.id &&
+      (value.parentId === null || typeof value.parentId === 'string')
     );
   }
   if (operation.collection === 'qbankMemberships')
@@ -2127,6 +2157,7 @@ function reviewedQuestionWriteAllowed(
 function collaborationValue(state: CollaborationState, collection: string, id: string): unknown {
   const arrays: Record<string, unknown[]> = {
     qbanks: state.qbanks,
+    qbankFolders: state.qbankFolders,
     qbankMemberships: state.memberships,
     qbankInvitations: state.invitations,
     profiles: state.members,
@@ -2146,6 +2177,45 @@ function collaborationValue(state: CollaborationState, collection: string, id: s
   return arrays[collection]?.find(value => isRecord(value) && (value.id === id || value.uid === id));
 }
 
+function qbankFolderChangeSetValid(
+  operations: RecordOperation[],
+  state: CollaborationState,
+) {
+  const folders = new Map(state.qbankFolders.map((folder) => [folder.id, folder]));
+  for (const operation of operations) {
+    if (operation.collection !== 'qbankFolders') continue;
+    if (operation.type === 'delete') folders.delete(operation.id);
+    else if (isRecord(operation.value))
+      folders.set(
+        operation.id,
+        operation.value as unknown as CollaborationState['qbankFolders'][number],
+      );
+  }
+  const names = new Set<string>();
+  for (const folder of folders.values()) {
+    const parent = folder.parentId ? folders.get(folder.parentId) : undefined;
+    if (folder.parentId && (!parent || parent.parentId !== null)) return false;
+    const key = `${folder.parentId ?? 'root'}\u0000${folder.name.trim().toLocaleLowerCase()}`;
+    if (names.has(key)) return false;
+    names.add(key);
+  }
+  const validFolderIds = new Set(folders.keys());
+  return operations.every((operation) => {
+    if (
+      operation.collection !== 'qbanks' ||
+      operation.type !== 'set' ||
+      !isRecord(operation.value)
+    )
+      return true;
+    return (
+      operation.value.folderId === undefined ||
+      operation.value.folderId === null ||
+      (typeof operation.value.folderId === 'string' &&
+        validFolderIds.has(operation.value.folderId))
+    );
+  });
+}
+
 export async function saveCollaboration(request: Request) {
   assertSameOrigin(request);
   const user = await currentUser(request);
@@ -2158,6 +2228,14 @@ export async function saveCollaboration(request: Request) {
   if (!Array.isArray(input.operations) || input.operations.length > 500)
     return json({ error: 'Invalid collaboration change set.' }, 400);
   const state = await collaborationStateForOperations(user, input.operations);
+  if (!qbankFolderChangeSetValid(input.operations, state))
+    return json(
+      {
+        error:
+          'Folder names must be unique per level, and folders support two levels only.',
+      },
+      400,
+    );
   if (user.role !== 'super_admin' && hasAccessManagerRole(user)) {
     const mutable = new Set<string>([
       'status',
@@ -2775,18 +2853,12 @@ export async function serveMedia(request: Request, key: string) {
   return new Response(object.body, { headers });
 }
 
-export async function deleteBankMedia(request: Request, qbankId: string) {
-  assertSameOrigin(request);
-  const user = await currentUser(request);
-  const readyMadeTest = await preformedMediaTest(qbankId);
-  const state = readyMadeTest ? null : await bankAccessState(qbankId);
-  const bank = state?.qbanks.find((item) => item.id === qbankId);
-  if (!user || (readyMadeTest ? readyMadeTest.owner_id !== user.uid : !bank || !canManageBank(user, bank)))
-    return json({ error: readyMadeTest ? 'Test owner access required.' : 'QBank management access required.' }, 403);
+async function removeBankMedia(qbankIds: string[]) {
+  if (!qbankIds.length) return;
   const rows = await env.DB.prepare(
-    'SELECT key,provider,storage_key,size FROM media WHERE qbank_id = ?',
+    'SELECT key,provider,storage_key,size FROM media WHERE qbank_id IN (SELECT value FROM json_each(?))',
   )
-    .bind(qbankId)
+    .bind(JSON.stringify(qbankIds))
     .all<{
       key: string;
       provider: string;
@@ -2803,30 +2875,204 @@ export async function deleteBankMedia(request: Request, qbankId: string) {
       { error: 'Legacy ImageKit storage is not configured.' },
       503,
     );
-  const deletions = await Promise.all(
-    rows.results.map(async (row) => {
-      if (row.provider === 'r2' && row.storage_key && hasR2Storage()) {
-        await r2StorageService.delete(row.storage_key, Number(row.size || 0));
-        return true;
-      }
-      return deleteImageKitFile(row.key);
-    }),
-  );
-  if (deletions.some((deleted) => !deleted))
-    return json(
-      { error: 'Some images could not be deleted from ImageKit. Try again.' },
-      502,
+  for (let offset = 0; offset < rows.results.length; offset += 50) {
+    const deletions = await Promise.all(
+      rows.results.slice(offset, offset + 50).map(async (row) => {
+        if (row.provider === 'r2' && row.storage_key && hasR2Storage()) {
+          await r2StorageService.delete(row.storage_key, Number(row.size || 0));
+          return true;
+        }
+        return deleteImageKitFile(row.key);
+      }),
     );
+    if (deletions.some((deleted) => !deleted))
+      return json(
+        { error: 'Some images could not be deleted from ImageKit. Try again.' },
+        502,
+      );
+  }
   const removedLegacyBytes = rows.results.reduce(
     (total, row) =>
       row.provider === 'r2' ? total : total + Number(row.size || 0),
     0,
   );
   await env.DB.batch([
-    env.DB.prepare('DELETE FROM media WHERE qbank_id = ?').bind(qbankId),
+    env.DB.prepare(
+      'DELETE FROM media WHERE qbank_id IN (SELECT value FROM json_each(?))',
+    ).bind(JSON.stringify(qbankIds)),
     env.DB.prepare(
       "UPDATE counters SET value=max(0,value-?),updated_at=? WHERE id='media-bytes'",
     ).bind(removedLegacyBytes, new Date().toISOString()),
   ]);
+}
+
+export async function deleteBankMedia(request: Request, qbankId: string) {
+  assertSameOrigin(request);
+  const user = await currentUser(request);
+  const readyMadeTest = await preformedMediaTest(qbankId);
+  const state = readyMadeTest ? null : await bankAccessState(qbankId);
+  const bank = state?.qbanks.find((item) => item.id === qbankId);
+  if (
+    !user ||
+    (readyMadeTest
+      ? readyMadeTest.owner_id !== user.uid
+      : !bank ||
+        (user.role !== 'super_admin' && !canManageBank(user, bank)))
+  )
+    return json({ error: readyMadeTest ? 'Test owner access required.' : 'QBank management access required.' }, 403);
+  const mediaError = await removeBankMedia([qbankId]);
+  if (mediaError) return mediaError;
   return json({ ok: true });
+}
+
+export async function deleteQBankFolder(request: Request, folderId: string) {
+  assertSameOrigin(request);
+  const user = await currentUser(request);
+  if (
+    !user ||
+    user.status !== 'approved' ||
+    user.role !== 'super_admin' ||
+    !user.mfaVerified
+  )
+    return json({ error: 'Verified Superadmin access required.' }, 403);
+  const input = await readJson<{
+    mode?: 'move' | 'cascade';
+    targetFolderId?: string | null;
+    confirmation?: string;
+  }>(request);
+  const folderRows = await recordsByTypes(['qbankFolders']);
+  const folders = folderRows.map(
+    (row) => row.value as CollaborationState['qbankFolders'][number],
+  );
+  const folder = folders.find((item) => item.id === folderId);
+  if (!folder) return json({ error: 'Folder not found.' }, 404);
+  const folderIds = new Set([
+    folder.id,
+    ...folders
+      .filter((item) => item.parentId === folder.id)
+      .map((item) => item.id),
+  ]);
+  const targetFolderId = input.targetFolderId ?? null;
+  if (input.mode === 'move') {
+    if (targetFolderId && folderIds.has(targetFolderId))
+      return json({ error: 'Choose a folder outside the deleted branch.' }, 400);
+    if (targetFolderId && !folders.some((item) => item.id === targetFolderId))
+      return json({ error: 'Destination folder not found.' }, 404);
+  } else if (input.mode !== 'cascade' || input.confirmation !== 'حذف') {
+    return json({ error: 'Type حذف to confirm permanent deletion.' }, 400);
+  }
+  const bankRows = await recordsByTypes(['qbanks']);
+  const banks = bankRows
+    .map((row) => row.value as QBank)
+    .filter((bank) => bank.folderId && folderIds.has(bank.folderId));
+  if (input.mode === 'cascade' && banks.some((bank) => bank.essential))
+    return json(
+      { error: 'Essential QBanks must be moved or removed independently.' },
+      409,
+    );
+  if (input.mode === 'cascade') {
+    const mediaError = await removeBankMedia(banks.map((bank) => bank.id));
+    if (mediaError) return mediaError;
+  }
+  const now = new Date().toISOString();
+  const auditId = crypto.randomUUID();
+  const bankIds = banks.map((bank) => bank.id);
+  const folderIdList = [...folderIds];
+  const statements: D1PreparedStatement[] = [];
+  const relatedTables = new Set<string>();
+  if (input.mode === 'cascade' && bankIds.length) {
+    const available = await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('question_ids','qbank_classification_revisions','user_topic_stats','qbank_stats','classification_operations')",
+    ).all<{ name: string }>();
+    available.results.forEach((row) => relatedTables.add(row.name));
+  }
+  if (input.mode === 'move' && bankIds.length) {
+    statements.push(
+      targetFolderId
+        ? env.DB.prepare(`UPDATE records SET payload=json_set(payload,'$.folderId',?),updated_at=?
+            WHERE type='qbanks' AND id IN (SELECT value FROM json_each(?))`).bind(
+            targetFolderId,
+            now,
+            JSON.stringify(bankIds),
+          )
+        : env.DB.prepare(`UPDATE records SET payload=json_remove(payload,'$.folderId'),updated_at=?
+            WHERE type='qbanks' AND id IN (SELECT value FROM json_each(?))`).bind(
+            now,
+            JSON.stringify(bankIds),
+          ),
+    );
+  }
+  if (input.mode === 'cascade' && bankIds.length) {
+    statements.push(
+      env.DB.prepare(`DELETE FROM records WHERE
+        qbank_id IN (SELECT value FROM json_each(?)) OR
+        (type='qbanks' AND id IN (SELECT value FROM json_each(?)))`).bind(
+        JSON.stringify(bankIds),
+        JSON.stringify(bankIds),
+      ),
+    );
+    if (relatedTables.has('question_ids'))
+      statements.push(
+        env.DB.prepare(
+          'DELETE FROM question_ids WHERE qbank_id IN (SELECT value FROM json_each(?))',
+        ).bind(JSON.stringify(bankIds)),
+      );
+    if (relatedTables.has('qbank_classification_revisions'))
+      statements.push(
+        env.DB.prepare(
+          'DELETE FROM qbank_classification_revisions WHERE qbank_id IN (SELECT value FROM json_each(?))',
+        ).bind(JSON.stringify(bankIds)),
+      );
+    if (relatedTables.has('user_topic_stats'))
+      statements.push(
+        env.DB.prepare(
+          'DELETE FROM user_topic_stats WHERE qbank_id IN (SELECT value FROM json_each(?))',
+        ).bind(JSON.stringify(bankIds)),
+      );
+    if (relatedTables.has('qbank_stats'))
+      statements.push(
+        env.DB.prepare(
+          'DELETE FROM qbank_stats WHERE qbank_id IN (SELECT value FROM json_each(?))',
+        ).bind(JSON.stringify(bankIds)),
+      );
+    if (relatedTables.has('classification_operations'))
+      statements.push(
+        env.DB.prepare(
+          'DELETE FROM classification_operations WHERE qbank_id IN (SELECT value FROM json_each(?))',
+        ).bind(JSON.stringify(bankIds)),
+      );
+  }
+  statements.push(
+    env.DB.prepare(
+      "DELETE FROM records WHERE type='qbankFolders' AND id IN (SELECT value FROM json_each(?))",
+    ).bind(JSON.stringify(folderIdList)),
+    env.DB.prepare(
+      'INSERT INTO records(type,id,owner_id,payload,updated_at) VALUES(?,?,?,?,?)',
+    ).bind(
+      'auditLog',
+      auditId,
+      user.uid,
+      JSON.stringify({
+        id: auditId,
+        action:
+          input.mode === 'cascade'
+            ? 'qbank_folder_cascade_deleted'
+            : 'qbank_folder_moved_deleted',
+        entityType: 'qbank',
+        entityId: folder.id,
+        actorId: user.uid,
+        actorName: user.displayName,
+        createdAt: now,
+        detail: `${folder.name}: ${banks.length} QBank(s), ${folderIds.size} folder(s).`,
+      }),
+      now,
+    ),
+  );
+  await env.DB.batch(statements);
+  return json({
+    ok: true,
+    deletedFolderIds: folderIdList,
+    deletedBankIds: input.mode === 'cascade' ? bankIds : [],
+    movedBankIds: input.mode === 'move' ? bankIds : [],
+  });
 }

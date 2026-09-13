@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-const compiled = await build({ stdin: { contents: `export {reviewerPeriods} from './lib/reviewer-periods'; export {deleteFlashcardDeck} from './lib/flashcard-deletion'; export {initialAppState} from './lib/medguard-types';`, resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { reviewerPeriods, deleteFlashcardDeck, initialAppState } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
+const compiled = await build({ stdin: { contents: `export {reviewerPeriods} from './lib/reviewer-periods'; export {deleteFlashcardDeck} from './lib/flashcard-deletion'; export {initialAppState} from './lib/medguard-types'; export {recordStudyActivity,visibleStudyStreak} from './lib/study-streak';`, resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const { reviewerPeriods, deleteFlashcardDeck, initialAppState, recordStudyActivity, visibleStudyStreak } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
 void test('Reviewer dates use local midnight and correct month boundaries, including DST', () => {
   const r = reviewerPeriods('Asia/Riyadh', new Date('2026-08-31T22:00:00Z'));
   assert.equal(r.todayStart,'2026-08-31T21:00:00.000Z');
@@ -25,4 +25,18 @@ void test('Deleting a deck removes its tree and schedules, preserving other bank
   assert.equal(next.customQuestions,state.customQuestions);
   assert.equal(deleteFlashcardDeck(state,'parent','other-bank'),state);
   assert.equal(state.flashcards.length,3);
+});
+void test('Study streak counts the first viewed test per local day and preserves yesterday until day end', () => {
+  const empty = initialAppState().studyStreak;
+  const first = recordStudyActivity(empty, new Date(2026, 8, 13, 9));
+  assert.deepEqual({ current:first.current, best:first.best, last:first.lastActivityDate }, { current:1, best:1, last:'2026-09-13' });
+  assert.equal(recordStudyActivity(first, new Date(2026, 8, 13, 22)), first);
+  const second = recordStudyActivity(first, new Date(2026, 8, 14, 8));
+  assert.equal(second.current,2);
+  assert.equal(second.best,2);
+  assert.equal(visibleStudyStreak(second, new Date(2026, 8, 15, 23)),2);
+  assert.equal(visibleStudyStreak(second, new Date(2026, 8, 16, 0)),0);
+  const restarted = recordStudyActivity(second, new Date(2026, 8, 16, 10));
+  assert.equal(restarted.current,1);
+  assert.equal(restarted.best,2);
 });

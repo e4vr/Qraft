@@ -54,13 +54,14 @@ function mutationTags(path: string, body: BodyInit | null | undefined) {
     const collections = new Set((input.operations as Array<{ collection?: string }>).map(operation => operation.collection));
     if (collections.has('questionProposals')) { tags.add('review-queue'); tags.add('contributions'); }
     if (collections.has('sharedQuestions') || collections.has('qbankSpecialties') || collections.has('qbankTopics')) { tags.add('question-catalog'); tags.add('test-pool'); }
-    if (collections.has('qbanks') || collections.has('qbankMemberships') || collections.has('qbankInvitations')) tags.add('collaboration');
+    if (collections.has('qbanks') || collections.has('qbankFolders') || collections.has('qbankMemberships') || collections.has('qbankInvitations')) tags.add('collaboration');
     if (collections.has('profiles') || collections.has('system')) { tags.add('account'); tags.add('subscriptions'); }
   }
   if (path.startsWith('/platform/bulk-review')) {
     tags.add('review-queue'); tags.add('question-catalog'); tags.add('reviewer-performance'); tags.add('contributions'); tags.add('economy');
   }
   if (path.startsWith('/platform/classification')) { tags.add('collaboration'); tags.add('question-catalog'); tags.add('test-pool'); }
+  if (path.startsWith('/qbank-folders/')) { tags.add('collaboration'); tags.add('question-catalog'); tags.add('test-pool'); }
   if (path.startsWith('/platform/discounts')) { tags.add('discounts'); tags.add('pricing'); }
   if (path.startsWith('/platform/subscriptions') || path.startsWith('/platform/checkout')) { tags.add('subscriptions'); tags.add('account'); }
   if (path.startsWith('/platform/rewards')) {

@@ -58,9 +58,18 @@ void test('the registration dashboard highlights IDs that need manual verificati
 
 void test('collaboration normalization ignores malformed blocked access values', async () => {
   const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
-  assert.match(types, /input\.blockedAccess\?\.phones[\s\S]*filter\(\(value\): value is string => typeof value === 'string'\)/);
-  assert.match(types, /input\.blockedAccess\?\.universityIds[\s\S]*filter\(\(value\): value is string => typeof value === 'string'\)/);
-  assert.match(types, /input\.blockedAccess\?\.emails[\s\S]*filter\(\(value\): value is string => typeof value === 'string'\)/);
+  assert.match(
+    types,
+    /input\.blockedAccess\?\.phones[\s\S]*filter\(\(value\): value is string => typeof value === 'string'\)/,
+  );
+  assert.match(
+    types,
+    /input\.blockedAccess\?\.universityIds[\s\S]*filter\(\(value\): value is string => typeof value === 'string'\)/,
+  );
+  assert.match(
+    types,
+    /input\.blockedAccess\?\.emails[\s\S]*filter\(\(value\): value is string => typeof value === 'string'\)/,
+  );
 });
 
 void test('platform roles are managed independently from subscriptions', async () => {
@@ -86,7 +95,10 @@ void test('platform roles are managed independently from subscriptions', async (
   assert.match(dashboard, /Role management/);
   assert.match(dashboard, /toggleAccountRole/);
   assert.match(dashboard, /saveAccountRoles/);
-  assert.match(dashboard, /Moderator includes Reviewer and Access Manager permissions/);
+  assert.match(
+    dashboard,
+    /Moderator includes Reviewer and Access Manager permissions/,
+  );
   assert.doesNotMatch(dashboard, /toggleAccountRole\(member, 'pro'\)/);
   assert.match(dashboard, /disabled={!unsaved}/);
   assert.match(dashboard, /account_roles_saved/);
@@ -214,7 +226,7 @@ void test('private flashcards support decks, Anki import, question conversion, a
   assert.match(server, /Invalid flashcard data/);
 });
 
-void test('collaboration reads are scoped to the user\'s accessible QBanks', async () => {
+void test("collaboration reads are scoped to the user's accessible QBanks", async () => {
   const server = await readFile(
     new URL('lib/cloudflare-server.ts', root),
     'utf8',
@@ -530,20 +542,43 @@ void test('Every subscription can contribute questions and redeem earned rewards
   assert.match(plans, /REWARD_CATALOG/);
 });
 
-void test('QBank library uses a categorized list with favorites and pins', async () => {
+void test('QBank library uses Superadmin folders, personal shortcuts, and bookmarks', async () => {
   const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
   const workspace = await readFile(
     new URL('components/qbank-workspace.tsx', root),
     'utf8',
   );
+  const folderManager = await readFile(
+    new URL('components/qbank-folder-manager.tsx', root),
+    'utf8',
+  );
+  const server = await readFile(
+    new URL('lib/cloudflare-server.ts', root),
+    'utf8',
+  );
   assert.match(types, /favoriteQBankIds: string\[\]/);
   assert.match(types, /pinnedQBankIds: string\[\]/);
-  assert.match(types, /qbankCategoryById: Record<string, string>/);
-  assert.match(workspace, /New subcategory/);
+  assert.match(types, /quickAccessQBankIds: string\[\]/);
+  assert.match(types, /qbankOrderBySection/);
+  assert.match(types, /interface QBankFolder/);
+  assert.match(types, /bookmarked: boolean/);
+  assert.doesNotMatch(types, /qbankCategoryById/);
+  assert.match(workspace, /Shared with me/);
+  assert.match(workspace, /Public QBanks/);
+  assert.match(workspace, /Quick Access QBanks/);
+  assert.match(workspace, /Start test/);
   assert.match(workspace, /toggleList\('favoriteIds'/);
   assert.match(workspace, /toggleList\('pinnedIds'/);
-  assert.match(workspace, /\{questions\} questions/);
+  assert.match(workspace, /draggable=\{sortable\}/);
   assert.match(workspace, /by \{bank\.ownerName\}/);
+  assert.match(folderManager, /One global structure, up to two levels/);
+  assert.match(folderManager, /Type حذف to confirm/);
+  assert.match(server, /Verified Superadmin access required/);
+  assert.match(
+    server,
+    /Essential QBanks must be moved or removed independently/,
+  );
+  assert.match(server, /input\.confirmation !== 'حذف'/);
 });
 
 void test('shared QBank links require an explicit accept or decline decision', async () => {
@@ -561,7 +596,10 @@ void test('shared QBank links require an explicit accept or decline decision', a
   assert.match(app, /'Joining…' : 'Accept'/);
   assert.match(app, /await joinCloudflareQBankByLink/);
   assert.match(app, /url\.searchParams\.delete\('join_qbank'\)/);
-  assert.match(app, /handledInvitationLink\.current = linkKey;\s*clearInvitationLink\(\);/);
+  assert.match(
+    app,
+    /handledInvitationLink\.current = linkKey;\s*clearInvitationLink\(\);/,
+  );
   assert.match(app, /collaboration\.memberships\.some/);
 });
 

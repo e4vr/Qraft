@@ -1,10 +1,44 @@
 'use client';
 
 import { ReviewerSearch } from '@/components/reviewer-search';
-import { openUpgrade, UpgradeButton } from '@/components/subscription-workspace';
-import { ArrowRight, Check, Crown, Menu, Search, FolderPlus, Globe2, Heart, ListChecks, LockKeyhole, Pin, Plus, Settings2, UserPlus, Users, X } from 'lucide-react';
+import {
+  openUpgrade,
+  UpgradeButton,
+} from '@/components/subscription-workspace';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bookmark,
+  Check,
+  Crown,
+  Folder,
+  Globe2,
+  GripVertical,
+  Heart,
+  ListChecks,
+  LockKeyhole,
+  Menu,
+  Pin,
+  Plus,
+  Search,
+  Settings2,
+  SlidersHorizontal,
+  UserPlus,
+  Users,
+  X,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { bankRoleFor, canAccessBank, canManageBank, type AppUser, type BankRole, type CollaborationState, type QBank, type QBankVisibility, type Question } from '@/lib/medguard-types';
+import {
+  bankRoleFor,
+  canAccessBank,
+  canManageBank,
+  type AppUser,
+  type BankRole,
+  type CollaborationState,
+  type QBank,
+  type QBankVisibility,
+  type Question,
+} from '@/lib/medguard-types';
 import { cn as cx, nowIso } from '@/lib/utils';
 import { hasFeature, PLAN_LIMITS } from '@/lib/plan-config';
 
@@ -26,19 +60,42 @@ export function QBankWorkspace({
   activeQBankId,
   organization,
   updateOrganization,
+  bookmarkedQuestionIds,
+  onToggleBookmark,
+  onStartBookmarks,
   onSelect,
   onManageBank,
 }: {
   user: AppUser;
   collaboration: CollaborationState;
   questionPool: Question[];
-  update: (updater: (current: CollaborationState) => CollaborationState) => void;
-  confirmUpdate: (updater: (current: CollaborationState) => CollaborationState) => void;
+  update: (
+    updater: (current: CollaborationState) => CollaborationState,
+  ) => void;
+  confirmUpdate: (
+    updater: (current: CollaborationState) => CollaborationState,
+  ) => void;
   activeQBankId: string;
-  organization: { favoriteIds: string[]; pinnedIds: string[]; categories: string[]; categoryByBankId: Record<string, string> };
-  updateOrganization: (next: { favoriteIds: string[]; pinnedIds: string[]; categories: string[]; categoryByBankId: Record<string, string> }) => void;
+  organization: {
+    favoriteIds: string[];
+    pinnedIds: string[];
+    quickAccessIds: string[];
+    orderBySection: { mine: string[]; shared: string[] };
+  };
+  updateOrganization: (next: {
+    favoriteIds: string[];
+    pinnedIds: string[];
+    quickAccessIds: string[];
+    orderBySection: { mine: string[]; shared: string[] };
+  }) => void;
+  bookmarkedQuestionIds: string[];
+  onToggleBookmark: (questionId: string) => void;
+  onStartBookmarks: (questionIds: string[], title: string) => void;
   onSelect: (id: string) => void;
-  onManageBank: (id: string, section: 'settings' | 'structure' | 'questions') => void;
+  onManageBank: (
+    id: string,
+    section: 'settings' | 'structure' | 'questions',
+  ) => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState('');
@@ -49,9 +106,14 @@ export function QBankWorkspace({
   const [essential, setEssential] = useState(false);
   const [inviteBankId, setInviteBankId] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState<Exclude<BankRole, 'owner'>>('viewer');
-  const [newCategory, setNewCategory] = useState('');
-  const [activeCategory, setActiveCategory] = useState('all');
+  const [inviteRole, setInviteRole] =
+    useState<Exclude<BankRole, 'owner'>>('viewer');
+  const [activeSection, setActiveSection] = useState<
+    'mine' | 'shared' | 'public' | 'favorites' | 'bookmarks'
+  >('mine');
+  const [activeFolderId, setActiveFolderId] = useState('');
+  const [quickAccessOpen, setQuickAccessOpen] = useState(false);
+  const [draggingId, setDraggingId] = useState('');
   const accessible = useMemo(
     () =>
       collaboration.qbanks.filter(
@@ -70,31 +132,107 @@ export function QBankWorkspace({
     [collaboration.invitations, user.email],
   );
   const canCreate = hasFeature(user.effectivePlan ?? user.tier, 'createQBank');
-  const categoryNames = useMemo(
-    () => ['Uncategorized', ...organization.categories],
-    [organization.categories],
+  const sectionBanks = useMemo(() => {
+    if (activeSection === 'mine')
+      return accessible.filter(
+        (bank) => bank.ownerId === user.uid && !bank.essential,
+      );
+    if (activeSection === 'shared') {
+      const sharedIds = new Set(
+        collaboration.memberships
+          .filter((membership) => membership.userId === user.uid)
+          .map((membership) => membership.qbankId),
+      );
+      return accessible.filter(
+        (bank) => bank.ownerId !== user.uid && sharedIds.has(bank.id),
+      );
+    }
+    if (activeSection === 'public')
+      return accessible.filter(
+        (bank) =>
+          bank.essential ||
+          (bank.visibility === 'public' && bank.ownerId !== user.uid),
+      );
+    if (activeSection === 'favorites')
+      return accessible.filter((bank) =>
+        organization.favoriteIds.includes(bank.id),
+      );
+    return [];
+  }, [
+    activeSection,
+    accessible,
+    collaboration.memberships,
+    organization.favoriteIds,
+    user.uid,
+  ]);
+  const activeFolder = collaboration.qbankFolders.find(
+    (folder) => folder.id === activeFolderId,
   );
-  const categoryTabs = useMemo(
-    () => [
-      { id: 'all', label: 'All', count: accessible.length },
-      { id: 'favorites', label: 'Favorites', count: accessible.filter((bank) => organization.favoriteIds.includes(bank.id)).length },
-      { id: 'pinned', label: 'Pinned', count: accessible.filter((bank) => organization.pinnedIds.includes(bank.id)).length },
-      ...categoryNames.map((category) => ({ id: `category:${category}`, label: category, count: accessible.filter((bank) => (organization.categoryByBankId[bank.id] || 'Uncategorized') === category).length })),
+  const visibleFolders = useMemo(
+    () =>
+      search.trim() || activeSection === 'favorites'
+        ? []
+        : collaboration.qbankFolders
+            .filter((folder) => folder.parentId === (activeFolder?.id ?? null))
+            .filter((folder) =>
+              sectionBanks.some(
+                (bank) =>
+                  bank.folderId === folder.id ||
+                  collaboration.qbankFolders.some(
+                    (child) =>
+                      child.parentId === folder.id &&
+                      child.id === bank.folderId,
+                  ),
+              ),
+            )
+            .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name)),
+    [
+      activeFolder?.id,
+      activeSection,
+      collaboration.qbankFolders,
+      search,
+      sectionBanks,
     ],
-    [accessible, categoryNames, organization.categoryByBankId, organization.favoriteIds, organization.pinnedIds],
   );
   const displayedBanks = useMemo(
     () =>
-      accessible
-        .filter((bank) => `${bank.name} ${bank.shortName} ${bank.description}`.toLowerCase().includes(search.trim().toLowerCase()))
+      sectionBanks
+        .filter((bank) =>
+          `${bank.name} ${bank.shortName} ${bank.description}`
+            .toLowerCase()
+            .includes(search.trim().toLowerCase()),
+        )
         .filter((bank) => {
-          if (activeCategory === 'favorites') return organization.favoriteIds.includes(bank.id);
-          if (activeCategory === 'pinned') return organization.pinnedIds.includes(bank.id);
-          if (activeCategory.startsWith('category:')) return (organization.categoryByBankId[bank.id] || 'Uncategorized') === activeCategory.slice(9);
-          return true;
+          if (search.trim() || activeSection === 'favorites') return true;
+          return activeFolder
+            ? bank.folderId === activeFolder.id
+            : !bank.folderId;
         })
-        .sort((left, right) => Number(organization.pinnedIds.includes(right.id)) - Number(organization.pinnedIds.includes(left.id)) || left.name.localeCompare(right.name)),
-    [accessible, activeCategory, organization.categoryByBankId, organization.favoriteIds, organization.pinnedIds, search],
+        .sort((left, right) => {
+          const pin =
+            Number(organization.pinnedIds.includes(right.id)) -
+            Number(organization.pinnedIds.includes(left.id));
+          if (pin) return pin;
+          if (activeSection === 'mine' || activeSection === 'shared') {
+            const order = organization.orderBySection[activeSection];
+            const leftIndex = order.indexOf(left.id);
+            const rightIndex = order.indexOf(right.id);
+            if (leftIndex >= 0 || rightIndex >= 0)
+              return (
+                (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex) -
+                (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex)
+              );
+          }
+          return left.name.localeCompare(right.name);
+        }),
+    [
+      activeFolder,
+      activeSection,
+      organization.orderBySection,
+      organization.pinnedIds,
+      search,
+      sectionBanks,
+    ],
   );
   const questionCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -104,26 +242,51 @@ export function QBankWorkspace({
     }
     return counts;
   }, [questionPool]);
+  const bookmarkedGroups = useMemo(() => {
+    const accessibleIds = new Set(accessible.map((bank) => bank.id));
+    return accessible
+      .map((bank) => ({
+        bank,
+        questions: questionPool.filter(
+          (question) =>
+            (question.qbankId ?? 'smle-gs') === bank.id &&
+            bookmarkedQuestionIds.includes(question.id) &&
+            accessibleIds.has(bank.id),
+        ),
+      }))
+      .filter((group) => group.questions.length > 0);
+  }, [accessible, bookmarkedQuestionIds, questionPool]);
 
   function toggleList(key: 'favoriteIds' | 'pinnedIds', bankId: string) {
     const values = organization[key];
-    updateOrganization({ ...organization, [key]: values.includes(bankId) ? values.filter((id) => id !== bankId) : [...values, bankId] });
+    updateOrganization({
+      ...organization,
+      [key]: values.includes(bankId)
+        ? values.filter((id) => id !== bankId)
+        : [...values, bankId],
+    });
   }
 
-  function addCategory(event: React.SyntheticEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const value = newCategory.trim();
-    if (!value || organization.categories.some((item) => item.toLowerCase() === value.toLowerCase())) return;
-    updateOrganization({ ...organization, categories: [...organization.categories, value] });
-    setActiveCategory(`category:${value}`);
-    setNewCategory('');
-  }
-
-  function setBankCategory(bankId: string, category: string) {
-    const next = { ...organization.categoryByBankId };
-    if (category === 'Uncategorized') delete next[bankId];
-    else next[bankId] = category;
-    updateOrganization({ ...organization, categoryByBankId: next });
+  function reorderBank(targetId: string) {
+    if (
+      !draggingId ||
+      draggingId === targetId ||
+      (activeSection !== 'mine' && activeSection !== 'shared')
+    )
+      return;
+    const currentOrder = organization.orderBySection[activeSection];
+    const ids = [
+      ...new Set([...currentOrder, ...sectionBanks.map((bank) => bank.id)]),
+    ].filter((id) => sectionBanks.some((bank) => bank.id === id));
+    const from = ids.indexOf(draggingId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    updateOrganization({
+      ...organization,
+      orderBySection: { ...organization.orderBySection, [activeSection]: ids },
+    });
+    setDraggingId('');
   }
 
   function createBank(event: React.SyntheticEvent<HTMLFormElement>) {
@@ -175,7 +338,9 @@ export function QBankWorkspace({
   }
 
   function invite() {
-    const bank = collaboration.qbanks.find((item) => item.id === inviteBankId && canManageBank(user, item));
+    const bank = collaboration.qbanks.find(
+      (item) => item.id === inviteBankId && canManageBank(user, item),
+    );
     const email = inviteEmail.trim().toLowerCase();
     if (!bank || !email.includes('@')) return;
     const createdAt = nowIso();
@@ -213,14 +378,23 @@ export function QBankWorkspace({
   }
 
   function acceptInvite(inviteId: string) {
-    const invitation = collaboration.invitations.find((item) => item.id === inviteId);
+    const invitation = collaboration.invitations.find(
+      (item) => item.id === inviteId,
+    );
     if (!invitation) return;
     const acceptedAt = nowIso();
     update((current) => ({
       ...current,
-      invitations: current.invitations.map((item) => (item.id === inviteId ? { ...item, status: 'accepted', acceptedById: user.uid, acceptedAt } : item)),
+      invitations: current.invitations.map((item) =>
+        item.id === inviteId
+          ? { ...item, status: 'accepted', acceptedById: user.uid, acceptedAt }
+          : item,
+      ),
       memberships: [
-        ...current.memberships.filter((item) => !(item.qbankId === invitation.qbankId && item.userId === user.uid)),
+        ...current.memberships.filter(
+          (item) =>
+            !(item.qbankId === invitation.qbankId && item.userId === user.uid),
+        ),
         {
           id: `${invitation.qbankId}_${user.uid}`,
           qbankId: invitation.qbankId,
@@ -239,15 +413,35 @@ export function QBankWorkspace({
   return (
     <>
       <header className="workspace-header">
-        <div className="flex min-w-0 items-center gap-3"><button aria-label="Open navigation" className="q-icon lg:hidden" onClick={() => window.dispatchEvent(new Event('medguard-open-menu'))}><Menu className="size-5" /></button><div>
-          <h1 className="text-lg font-bold">My QBanks</h1>
-          <p className="text-xs text-muted-foreground">Your questions, organized around you.</p>
-        </div></div>
+        <div className="flex min-w-0 items-center gap-3">
+          <button
+            aria-label="Open navigation"
+            className="q-icon lg:hidden"
+            onClick={() =>
+              window.dispatchEvent(new Event('medguard-open-menu'))
+            }
+          >
+            <Menu className="size-5" />
+          </button>
+          <div>
+            <h1 className="text-lg font-bold">My QBanks</h1>
+            <p className="text-xs text-muted-foreground">
+              Your questions, organized around you.
+            </p>
+          </div>
+        </div>
         <button
           onClick={() => (canCreate ? setCreating(true) : openUpgrade())}
-          className={cx('q-button', canCreate ? 'q-button-contribute' : 'border')}
+          className={cx(
+            'q-button',
+            canCreate ? 'q-button-contribute' : 'border',
+          )}
         >
-          {canCreate ? <Plus className="size-4" /> : <LockKeyhole className="size-4" />}
+          {canCreate ? (
+            <Plus className="size-4" />
+          ) : (
+            <LockKeyhole className="size-4" />
+          )}
           {canCreate ? 'New QBank' : 'Create QBank · Pro'}
         </button>
       </header>
@@ -260,11 +454,18 @@ export function QBankWorkspace({
             </h2>
             <div className="mt-3 space-y-2">
               {receivedInvites.map((inviteItem) => (
-                <div key={inviteItem.id} className="flex flex-col gap-3 rounded-xl bg-card p-3 sm:flex-row sm:items-center">
+                <div
+                  key={inviteItem.id}
+                  className="flex flex-col gap-3 rounded-xl bg-card p-3 sm:flex-row sm:items-center"
+                >
                   <span className="flex-1 text-sm">
-                    <strong>{inviteItem.invitedByName}</strong> invited you as {inviteItem.role}.
+                    <strong>{inviteItem.invitedByName}</strong> invited you as{' '}
+                    {inviteItem.role}.
                   </span>
-                  <button onClick={() => acceptInvite(inviteItem.id)} className="h-9 rounded-lg bg-violet-600 px-4 text-xs font-bold text-white">
+                  <button
+                    onClick={() => acceptInvite(inviteItem.id)}
+                    className="h-9 rounded-lg bg-violet-600 px-4 text-xs font-bold text-white"
+                  >
                     Accept invitation
                   </button>
                 </div>
@@ -278,83 +479,351 @@ export function QBankWorkspace({
               <Crown className="size-5" />
             </div>
             <div className="flex-1">
-              <h2 className="font-bold">{PLAN_LIMITS[user.effectivePlan ?? user.tier].name} account</h2><div className="mt-3"><UpgradeButton /></div>
-              <p className="mt-1 text-sm text-muted-foreground">You can study public and shared banks. Upgrade to Pro to create your own.</p>
+              <h2 className="font-bold">
+                {PLAN_LIMITS[user.effectivePlan ?? user.tier].name} account
+              </h2>
+              <div className="mt-3">
+                <UpgradeButton />
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                You can study public and shared banks. Upgrade to Pro to create
+                your own.
+              </p>
             </div>
           </section>
         )}
         <section>
-          <label className="mb-6 flex items-center gap-3 rounded-xl border bg-card px-4 py-3"><Search className="size-5 text-muted-foreground" /><input aria-label="Search QBanks" placeholder="Find a question bank…" value={search} onChange={(event) => setSearch(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none" /><span className="text-xs text-muted-foreground" aria-live="polite">{displayedBanks.length} banks</span></label>
-          <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-bold">Your collection</h2>
-              <p className="mt-1 text-sm text-muted-foreground">Choose a bank to study. Keep your favorites close.</p>
+              <h2 className="text-lg font-bold">Your QBank library</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                A clean folder view with personal shortcuts.
+              </p>
             </div>
-            <form onSubmit={addCategory} className="flex gap-2">
-              <input value={newCategory} onChange={(event) => setNewCategory(event.target.value)} placeholder="New subcategory" aria-label="New QBank subcategory" className="h-10 min-w-0 rounded-xl border bg-card px-3 text-sm" />
-              <button type="submit" disabled={!newCategory.trim()} className="inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-bold disabled:opacity-40">
-                <FolderPlus className="size-4" />
-                Add
-              </button>
-            </form>
+            <button
+              onClick={() => setQuickAccessOpen(true)}
+              className="q-button q-button-secondary"
+            >
+              <SlidersHorizontal className="size-4" />
+              Quick Access
+            </button>
           </div>
-          <nav aria-label="QBank categories" className="mb-4 flex gap-1 overflow-x-auto border-b px-1 scrollbar-none">
-            {categoryTabs.map((tab) => (
-              <button key={tab.id} aria-pressed={activeCategory === tab.id} onClick={() => setActiveCategory(tab.id)} className={cx('relative flex h-12 shrink-0 items-center gap-2 px-4 text-sm font-semibold text-muted-foreground transition hover:text-foreground', activeCategory === tab.id && 'text-primary after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary')}>
-                {tab.id === 'favorites' && <Heart className={cx('size-4', activeCategory === tab.id && 'fill-current')} />}
-                {tab.id === 'pinned' && <Pin className={cx('size-4', activeCategory === tab.id && 'fill-current')} />}
-                <span>{tab.label}</span>
-                <span className={cx('rounded-full bg-muted px-1.5 py-0.5 text-xs', activeCategory === tab.id && 'bg-primary/10 text-primary')}>{tab.count}</span>
+          <nav
+            aria-label="QBank sections"
+            className="mb-4 flex gap-2 overflow-x-auto rounded-2xl bg-muted p-1.5 scrollbar-none"
+          >
+            {(
+              [
+                ['mine', 'My QBanks'],
+                ['shared', 'Shared with me'],
+                ['public', 'Public QBanks'],
+                ['favorites', 'Favorites'],
+                ['bookmarks', 'Bookmarks'],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => {
+                  setActiveSection(id);
+                  setActiveFolderId('');
+                }}
+                className={cx(
+                  'flex shrink-0 items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold text-muted-foreground',
+                  activeSection === id && 'bg-card text-primary shadow-sm',
+                )}
+              >
+                {id === 'favorites' && <Heart className="size-4" />}
+                {id === 'bookmarks' && <Bookmark className="size-4" />}
+                {label}
               </button>
             ))}
           </nav>
-          <div className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
-            {displayedBanks.length === 0 ? (
-              <div className="grid min-h-40 place-items-center p-6 text-center">
-                <div>
-                  <p className="font-bold">{search ? 'No matching question banks' : 'No QBanks here yet'}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{search ? 'Try a shorter name or clear your search.' : 'Use the heart, pin, or category selector on a bank to add it here.'}</p>
+          {activeSection === 'bookmarks' ? (
+            <div className="space-y-4">
+              {bookmarkedGroups.length ? (
+                bookmarkedGroups.map(({ bank, questions }) => (
+                  <section
+                    key={bank.id}
+                    className="overflow-hidden rounded-2xl bg-card ring-1 ring-border"
+                  >
+                    <header className="flex items-center gap-3 border-b p-4">
+                      <Folder className="size-5 text-primary" />
+                      <div className="min-w-0 flex-1">
+                        <h3 className="truncate font-bold">{bank.name}</h3>
+                        <p className="text-xs text-muted-foreground">
+                          {questions.length} bookmarked questions
+                        </p>
+                      </div>
+                      <button
+                        onClick={() =>
+                          onStartBookmarks(
+                            questions.map((question) => question.id),
+                            `${bank.shortName} Bookmarks`,
+                          )
+                        }
+                        className="q-button q-button-study"
+                      >
+                        Start test
+                      </button>
+                    </header>
+                    <div className="divide-y">
+                      {questions.map((question, index) => (
+                        <div
+                          key={question.id}
+                          className="flex items-center gap-3 p-3"
+                        >
+                          <button
+                            onClick={() =>
+                              onStartBookmarks(
+                                [question.id],
+                                `Bookmarked question ${question.questionId ?? index + 1}`,
+                              )
+                            }
+                            className="min-w-0 flex-1 text-left"
+                          >
+                            <strong className="line-clamp-1 text-sm">
+                              {question.stem}
+                            </strong>
+                            <span className="mt-1 block text-xs text-muted-foreground">
+                              Question {question.questionId ?? index + 1}
+                            </span>
+                          </button>
+                          <button
+                            onClick={() => onToggleBookmark(question.id)}
+                            aria-label="Remove bookmark"
+                            className="q-icon text-primary"
+                          >
+                            <Bookmark className="size-4 fill-current" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ))
+              ) : (
+                <div className="rounded-2xl border border-dashed bg-card p-12 text-center">
+                  <Bookmark className="mx-auto size-8 text-muted-foreground" />
+                  <h3 className="mt-3 font-bold">No bookmarks yet</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Bookmark questions while solving a test.
+                  </p>
                 </div>
-              </div>
-            ) : (
-              displayedBanks.map((bank) => {
-                    const role = bankRoleFor(user, bank, collaboration.memberships);
+              )}
+            </div>
+          ) : (
+            <>
+              <label className="mb-4 flex items-center gap-3 rounded-xl border bg-card px-4 py-3">
+                <Search className="size-5 text-muted-foreground" />
+                <input
+                  aria-label="Search QBanks"
+                  placeholder="Find a question bank…"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+                />
+              </label>
+              {activeFolder && (
+                <button
+                  onClick={() => setActiveFolderId(activeFolder.parentId ?? '')}
+                  className="q-button q-button-secondary mb-3"
+                >
+                  <ArrowLeft className="size-4" />
+                  Back{' '}
+                  <span className="text-muted-foreground">
+                    / {activeFolder.name}
+                  </span>
+                </button>
+              )}
+              {!!visibleFolders.length && (
+                <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {visibleFolders.map((folder) => {
+                    const direct = sectionBanks.filter(
+                      (bank) => bank.folderId === folder.id,
+                    ).length;
+                    const childIds = collaboration.qbankFolders
+                      .filter((child) => child.parentId === folder.id)
+                      .map((child) => child.id);
+                    const total =
+                      direct +
+                      sectionBanks.filter(
+                        (bank) =>
+                          bank.folderId && childIds.includes(bank.folderId),
+                      ).length;
+                    return (
+                      <button
+                        key={folder.id}
+                        onClick={() => setActiveFolderId(folder.id)}
+                        className="group flex min-h-24 items-center gap-4 rounded-2xl bg-card p-4 text-left ring-1 ring-border transition hover:-translate-y-0.5 hover:ring-primary/30"
+                      >
+                        <span className="grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
+                          <Folder className="size-6 fill-current/10" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <strong className="block truncate">
+                            {folder.name}
+                          </strong>
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            {total} QBanks
+                          </span>
+                        </span>
+                        <ArrowRight className="size-4 text-muted-foreground" />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
+                {!displayedBanks.length ? (
+                  <div className="p-12 text-center">
+                    <p className="font-bold">No QBanks here</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {search
+                        ? 'Try a different search.'
+                        : 'This folder is currently empty.'}
+                    </p>
+                  </div>
+                ) : (
+                  displayedBanks.map((bank) => {
+                    const role = bankRoleFor(
+                      user,
+                      bank,
+                      collaboration.memberships,
+                    );
                     const questions = questionCounts.get(bank.id) ?? 0;
                     const managed = canManageBank(user, bank);
                     const isOwner = bank.ownerId === user.uid;
                     const favorite = organization.favoriteIds.includes(bank.id);
                     const pinned = organization.pinnedIds.includes(bank.id);
+                    const sortable =
+                      activeSection === 'mine' || activeSection === 'shared';
                     return (
-                      <article key={bank.id} data-active={activeQBankId === bank.id} className={cx('q-bank-row flex flex-col gap-4 border-b p-4 transition last:border-b-0 xl:flex-row xl:items-center', activeQBankId === bank.id ? 'bg-primary/5' : 'hover:bg-muted/30')}>
-                        <button onClick={() => onSelect(bank.id)} className="flex min-w-0 flex-1 items-start gap-4 text-left">
-                          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">{bank.visibility === 'public' ? <Globe2 className="size-5" /> : <LockKeyhole className="size-5" />}</span>
+                      <article
+                        key={bank.id}
+                        data-active={activeQBankId === bank.id}
+                        className={cx(
+                          'q-bank-row flex flex-col gap-4 border-b p-4 transition last:border-b-0 xl:flex-row xl:items-center',
+                          activeQBankId === bank.id
+                            ? 'bg-primary/5'
+                            : 'hover:bg-muted/30',
+                        )}
+                      >
+                        <button
+                          draggable={sortable}
+                          onDragStart={() => setDraggingId(bank.id)}
+                          onDragOver={(event) => {
+                            if (sortable) event.preventDefault();
+                          }}
+                          onDrop={() => reorderBank(bank.id)}
+                          onClick={() => onSelect(bank.id)}
+                          className="flex min-w-0 flex-1 items-start gap-4 text-left"
+                        >
+                          {sortable && (
+                            <GripVertical className="mt-3 size-4 shrink-0 cursor-grab text-muted-foreground" />
+                          )}
+                          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+                            {bank.visibility === 'public' ? (
+                              <Globe2 className="size-5" />
+                            ) : (
+                              <LockKeyhole className="size-5" />
+                            )}
+                          </span>
                           <span className="min-w-0 flex-1">
                             <span className="flex flex-wrap items-center gap-2">
-                              <span className="font-bold">{bank.name}</span>{activeQBankId === bank.id && <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-1 text-xs font-semibold text-primary"><Check className="size-3" />Selected</span>}
-                              {isOwner && <span className="rounded-full bg-violet-50 px-2 py-1 text-xs font-bold uppercase text-violet-700 dark:bg-violet-500/10 dark:text-violet-300">Owner</span>}
-                              {bank.essential && <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-bold uppercase text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">Essential</span>}
-                              {!isOwner && role && <span className="rounded-full bg-violet-50 px-2 py-1 text-xs font-bold uppercase text-violet-700 dark:bg-violet-500/10 dark:text-violet-300">{role}</span>}
-                              {pinned && <Pin className="size-3.5 fill-primary text-primary" aria-label="Pinned" />}
+                              <span className="font-bold">{bank.name}</span>
+                              {activeQBankId === bank.id && (
+                                <span className="rounded-full bg-primary/10 px-2 py-1 text-xs font-semibold text-primary">
+                                  Selected
+                                </span>
+                              )}
+                              {isOwner && (
+                                <span className="rounded-full bg-violet-50 px-2 py-1 text-xs font-bold text-violet-700">
+                                  Owner
+                                </span>
+                              )}
+                              {bank.essential && (
+                                <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800">
+                                  Essential
+                                </span>
+                              )}
+                              {!isOwner && role && (
+                                <span className="rounded-full bg-muted px-2 py-1 text-xs font-bold">
+                                  {role}
+                                </span>
+                              )}
+                              {pinned && (
+                                <Pin className="size-3.5 fill-primary text-primary" />
+                              )}
                             </span>
-                            <span className="mt-1 line-clamp-2 block text-sm leading-5 text-muted-foreground">{bank.description || 'Empty QBank ready for its first question.'}</span>
-                            <span className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"><span>{questions} questions</span><span>by {bank.ownerName}</span></span>
+                            <span className="mt-1 line-clamp-1 block text-sm text-muted-foreground">
+                              {bank.description ||
+                                'Ready for its first question.'}
+                            </span>
+                            <span className="mt-2 block text-xs text-muted-foreground">
+                              {questions} questions · by {bank.ownerName}
+                            </span>
                           </span>
                         </button>
-                        <div className="flex shrink-0 flex-wrap items-center gap-2 xl:max-w-[440px] xl:justify-end">
-                          <button onClick={() => onSelect(bank.id)} className="q-button q-button-study">Study<ArrowRight className="size-4" /></button>
-                          <select value={organization.categoryByBankId[bank.id] || 'Uncategorized'} onChange={(event) => setBankCategory(bank.id, event.target.value)} aria-label={`Category for ${bank.name}`} className="h-9 max-w-40 rounded-lg border bg-card px-2 text-xs">
-                            {categoryNames.map((item) => <option key={item} value={item}>{item}</option>)}
-                          </select>
-                          <button onClick={() => toggleList('favoriteIds', bank.id)} aria-pressed={favorite} aria-label={favorite ? `Remove ${bank.name} from favorites` : `Add ${bank.name} to favorites`} className={cx('grid size-9 place-items-center rounded-lg border', favorite && 'border-rose-200 bg-rose-50 text-rose-600 dark:bg-rose-500/10')}><Heart className={cx('size-4', favorite && 'fill-current')} /></button>
-                          <button onClick={() => toggleList('pinnedIds', bank.id)} aria-pressed={pinned} aria-label={pinned ? `Unpin ${bank.name}` : `Pin ${bank.name}`} className={cx('grid size-9 place-items-center rounded-lg border', pinned && 'border-primary/30 bg-primary/10 text-primary')}><Pin className={cx('size-4', pinned && 'fill-current')} /></button>
-                          {managed && <button onClick={() => onManageBank(bank.id, 'settings')} aria-label={`Manage ${bank.name}`} className="q-button q-button-secondary"><Settings2 className="size-4" /><span>Manage</span></button>}
-                          {managed && <button onClick={() => onManageBank(bank.id, 'questions')} aria-label={`Manage questions in ${bank.name}`} className="q-button q-button-secondary"><ListChecks className="size-4" /><span>Questions</span></button>}
+                        <div className="flex shrink-0 flex-wrap gap-2">
+                          <button
+                            onClick={() => onSelect(bank.id)}
+                            className="q-button q-button-study"
+                          >
+                            Study
+                            <ArrowRight className="size-4" />
+                          </button>
+                          <button
+                            onClick={() => toggleList('favoriteIds', bank.id)}
+                            aria-label="Toggle favorite"
+                            className={cx(
+                              'q-icon border',
+                              favorite && 'bg-rose-50 text-rose-600',
+                            )}
+                          >
+                            <Heart
+                              className={cx(
+                                'size-4',
+                                favorite && 'fill-current',
+                              )}
+                            />
+                          </button>
+                          <button
+                            onClick={() => toggleList('pinnedIds', bank.id)}
+                            aria-label="Toggle pin"
+                            className={cx(
+                              'q-icon border',
+                              pinned && 'bg-primary/10 text-primary',
+                            )}
+                          >
+                            <Pin
+                              className={cx('size-4', pinned && 'fill-current')}
+                            />
+                          </button>
+                          {managed && (
+                            <button
+                              onClick={() => onManageBank(bank.id, 'settings')}
+                              className="q-button q-button-secondary"
+                            >
+                              <Settings2 className="size-4" />
+                              Manage
+                            </button>
+                          )}
+                          {managed && (
+                            <button
+                              onClick={() => onManageBank(bank.id, 'questions')}
+                              className="q-button q-button-secondary"
+                            >
+                              <ListChecks className="size-4" />
+                              Questions
+                            </button>
+                          )}
                         </div>
                       </article>
                     );
-              })
-            )}
-          </div>
+                  })
+                )}
+              </div>
+            </>
+          )}
         </section>
         {collaboration.qbanks.some((bank) => canManageBank(user, bank)) && (
           <section className="rounded-2xl bg-card p-5 ring-1 ring-border">
@@ -362,9 +831,17 @@ export function QBankWorkspace({
               <Users className="size-5 text-primary" />
               <h2 className="font-bold">Invite a specific user</h2>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">Invite by account email and assign Viewer or Reviewer access for one bank.</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Invite by account email and assign Viewer or Reviewer access for
+              one bank.
+            </p>
             <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1.2fr_150px_auto]">
-              <select aria-label="QBank to share" value={inviteBankId} onChange={(event) => setInviteBankId(event.target.value)} className="h-11 rounded-xl border bg-card px-3 text-sm">
+              <select
+                aria-label="QBank to share"
+                value={inviteBankId}
+                onChange={(event) => setInviteBankId(event.target.value)}
+                className="h-11 rounded-xl border bg-card px-3 text-sm"
+              >
                 <option value="">Choose your QBank</option>
                 {collaboration.qbanks
                   .filter((bank) => canManageBank(user, bank))
@@ -374,72 +851,254 @@ export function QBankWorkspace({
                     </option>
                   ))}
               </select>
-              {inviteRole === 'reviewer' ? <ReviewerSearch bankId={inviteBankId} onAdded={membership=>confirmUpdate(current=>({...current,memberships:[membership,...current.memberships.filter(m=>!(m.qbankId===membership.qbankId&&m.userId===membership.userId))]}))} /> : <input aria-label="Invitation email" type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="student@university.edu" className="h-11 rounded-xl border bg-card px-3 text-sm" />}
-              <select aria-label="Invitation role" value={inviteRole} onChange={(event) => setInviteRole(event.target.value as Exclude<BankRole, 'owner'>)} className="h-11 rounded-xl border bg-card px-3 text-sm">
+              {inviteRole === 'reviewer' ? (
+                <ReviewerSearch
+                  bankId={inviteBankId}
+                  onAdded={(membership) =>
+                    confirmUpdate((current) => ({
+                      ...current,
+                      memberships: [
+                        membership,
+                        ...current.memberships.filter(
+                          (m) =>
+                            !(
+                              m.qbankId === membership.qbankId &&
+                              m.userId === membership.userId
+                            ),
+                        ),
+                      ],
+                    }))
+                  }
+                />
+              ) : (
+                <input
+                  aria-label="Invitation email"
+                  type="email"
+                  value={inviteEmail}
+                  onChange={(event) => setInviteEmail(event.target.value)}
+                  placeholder="student@university.edu"
+                  className="h-11 rounded-xl border bg-card px-3 text-sm"
+                />
+              )}
+              <select
+                aria-label="Invitation role"
+                value={inviteRole}
+                onChange={(event) =>
+                  setInviteRole(
+                    event.target.value as Exclude<BankRole, 'owner'>,
+                  )
+                }
+                className="h-11 rounded-xl border bg-card px-3 text-sm"
+              >
                 <option value="viewer">Viewer</option>
                 <option value="reviewer">Reviewer</option>
               </select>
-              <button onClick={invite} disabled={inviteRole === 'reviewer' || !inviteBankId || !inviteEmail.includes('@')} className="q-button q-button-contribute">
+              <button
+                onClick={invite}
+                disabled={
+                  inviteRole === 'reviewer' ||
+                  !inviteBankId ||
+                  !inviteEmail.includes('@')
+                }
+                className="q-button q-button-contribute"
+              >
                 Send invite
               </button>
             </div>
           </section>
         )}
       </div>
+      {quickAccessOpen && (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm">
+          <section className="w-full max-w-lg rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="font-bold">Quick Access QBanks</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Choose up to five banks for the menu above the sidebar.
+                </p>
+              </div>
+              <button
+                onClick={() => setQuickAccessOpen(false)}
+                className="q-icon"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+            <p className="mt-4 text-xs font-bold text-primary">
+              {organization.quickAccessIds.length}/5 selected
+            </p>
+            <div className="mt-3 max-h-[55dvh] space-y-2 overflow-y-auto pr-1">
+              {accessible.map((bank) => {
+                const selected = organization.quickAccessIds.includes(bank.id);
+                return (
+                  <label
+                    key={bank.id}
+                    aria-label={`Toggle ${bank.name} in Quick Access`}
+                    className="flex cursor-pointer items-center gap-3 rounded-xl border p-3"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      disabled={
+                        !selected && organization.quickAccessIds.length >= 5
+                      }
+                      onChange={() =>
+                        updateOrganization({
+                          ...organization,
+                          quickAccessIds: selected
+                            ? organization.quickAccessIds.filter(
+                                (id) => id !== bank.id,
+                              )
+                            : [...organization.quickAccessIds, bank.id],
+                        })
+                      }
+                      className="size-4 accent-primary"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <strong className="block truncate text-sm">
+                        {bank.name}
+                      </strong>
+                      <span className="text-xs text-muted-foreground">
+                        {bank.shortName}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setQuickAccessOpen(false)}
+              className="q-button q-button-primary mt-4 w-full"
+            >
+              Done
+            </button>
+          </section>
+        </div>
+      )}
       {creating && (
         <div className="q-safe-overlay fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm">
-          <form onSubmit={createBank} className="my-8 w-full max-w-xl rounded-2xl bg-card p-6 shadow-2xl ring-1 ring-border">
+          <form
+            onSubmit={createBank}
+            className="my-8 w-full max-w-xl rounded-2xl bg-card p-6 shadow-2xl ring-1 ring-border"
+          >
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-bold">Create a QBank from scratch</h2>
-                <p className="text-xs text-muted-foreground">You become the Bank Owner.</p>
+                <h2 className="text-lg font-bold">
+                  Create a QBank from scratch
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  You become the Bank Owner.
+                </p>
               </div>
-              <button type="button" onClick={() => setCreating(false)} aria-label="Close">
+              <button
+                type="button"
+                onClick={() => setCreating(false)}
+                aria-label="Close"
+              >
                 <X className="size-5" />
               </button>
             </div>
             <div className="mt-5 space-y-4">
               <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold">QBank name</span>
-                <input required value={name} onChange={(event) => setName(event.target.value)} className="h-11 w-full rounded-xl border bg-card px-3" placeholder="Surgery final review" />
+                <span className="mb-1.5 block text-sm font-semibold">
+                  QBank name
+                </span>
+                <input
+                  required
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  className="h-11 w-full rounded-xl border bg-card px-3"
+                  placeholder="Surgery final review"
+                />
               </label>
               <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold">Short label</span>
-                <input value={shortName} onChange={(event) => setShortName(event.target.value)} className="h-11 w-full rounded-xl border bg-card px-3" placeholder="SURG 401" />
+                <span className="mb-1.5 block text-sm font-semibold">
+                  Short label
+                </span>
+                <input
+                  value={shortName}
+                  onChange={(event) => setShortName(event.target.value)}
+                  className="h-11 w-full rounded-xl border bg-card px-3"
+                  placeholder="SURG 401"
+                />
               </label>
               <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold">Description</span>
-                <textarea value={description} onChange={(event) => setDescription(event.target.value)} className="min-h-24 w-full rounded-xl border bg-card p-3" />
+                <span className="mb-1.5 block text-sm font-semibold">
+                  Description
+                </span>
+                <textarea
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  className="min-h-24 w-full rounded-xl border bg-card p-3"
+                />
               </label>
               <fieldset>
                 <legend className="text-sm font-semibold">Visibility</legend>
                 <div className="mt-2 grid grid-cols-2 gap-3">
                   {(['private', 'public'] as const).map((item) => (
-                    <button type="button" key={item} onClick={() => setVisibility(item)} className={cx('rounded-xl border p-4 text-left', visibility === item && 'border-primary bg-primary/5 ring-2 ring-primary/10')}>
+                    <button
+                      type="button"
+                      key={item}
+                      onClick={() => setVisibility(item)}
+                      className={cx(
+                        'rounded-xl border p-4 text-left',
+                        visibility === item &&
+                          'border-primary bg-primary/5 ring-2 ring-primary/10',
+                      )}
+                    >
                       <span className="flex items-center gap-2 font-bold capitalize">
-                        {item === 'private' ? <LockKeyhole className="size-4" /> : <Globe2 className="size-4" />}
+                        {item === 'private' ? (
+                          <LockKeyhole className="size-4" />
+                        ) : (
+                          <Globe2 className="size-4" />
+                        )}
                         {item}
                       </span>
-                      <span className="mt-1 block text-sm leading-6 text-muted-foreground">{item === 'private' ? 'Only you, invited members, and Superadmin audit view.' : 'Visible to every approved Lite and Pro user.'}</span>
+                      <span className="mt-1 block text-sm leading-6 text-muted-foreground">
+                        {item === 'private'
+                          ? 'Only you, invited members, and Superadmin audit view.'
+                          : 'Visible to every approved Lite and Pro user.'}
+                      </span>
                     </button>
                   ))}
                 </div>
               </fieldset>
               {user.role === 'super_admin' && (
-                <label aria-label="Make this an Essential QBank" className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-500/25 dark:bg-amber-500/10">
-                  <input type="checkbox" checked={essential} onChange={(event) => setEssential(event.target.checked)} className="mt-1 size-4 accent-amber-600" />
+                <label
+                  aria-label="Make this an Essential QBank"
+                  className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-500/25 dark:bg-amber-500/10"
+                >
+                  <input
+                    type="checkbox"
+                    checked={essential}
+                    onChange={(event) => setEssential(event.target.checked)}
+                    className="mt-1 size-4 accent-amber-600"
+                  />
                   <span>
-                    <span className="block text-sm font-bold">Check to make it an Essential QBank</span>
-                    <span className="mt-1 block text-sm leading-6 text-muted-foreground">Only Superadmin can edit or delete it. Other users can submit change proposals for review.</span>
+                    <span className="block text-sm font-bold">
+                      Check to make it an Essential QBank
+                    </span>
+                    <span className="mt-1 block text-sm leading-6 text-muted-foreground">
+                      Only Superadmin can edit or delete it. Other users can
+                      submit change proposals for review.
+                    </span>
                   </span>
                 </label>
               )}
             </div>
             <div className="mt-6 flex justify-end gap-2">
-              <button type="button" onClick={() => setCreating(false)} className="h-10 rounded-xl border px-4 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setCreating(false)}
+                className="h-10 rounded-xl border px-4 text-xs font-bold"
+              >
                 Cancel
               </button>
-              <button type="submit" className="inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-5 text-xs font-bold text-primary-foreground">
+              <button
+                type="submit"
+                className="inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-5 text-xs font-bold text-primary-foreground"
+              >
                 <Check className="size-4" />
                 Create empty QBank
               </button>

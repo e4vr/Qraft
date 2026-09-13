@@ -14,6 +14,7 @@ import {
 } from '@/lib/local-db';
 import type { AppUser } from '@/lib/medguard-types';
 import { parseQuestionImportReport } from '@/lib/question-import';
+import { subscribeLive } from '@/lib/realtime-client';
 import type {
   PreformedLeaderboardEntry,
   PreformedLocalAttempt,
@@ -76,6 +77,21 @@ function emptyQuestion(): PreformedQuestion {
   };
 }
 
+function questionValidationMessage(question: PreformedQuestion) {
+  if (!question.stem.trim()) return 'Write the question before saving it.';
+  if (question.options.length < 2) return 'Add at least two answer options.';
+  const emptyOption = question.options.findIndex((option) => !option.trim());
+  if (emptyOption >= 0)
+    return `Complete answer option ${String.fromCharCode(65 + emptyOption)} before saving.`;
+  if (
+    !Number.isInteger(question.answer) ||
+    question.answer < 0 ||
+    question.answer >= question.options.length
+  )
+    return 'Choose the correct answer before saving.';
+  return '';
+}
+
 function duration(value: number) {
   const hours = Math.floor(value / 3600);
   const minutes = Math.floor((value % 3600) / 60);
@@ -93,13 +109,40 @@ function testUrl(code: string) {
   return url.toString();
 }
 
-function downloadResults(test: PreformedTestDocument, entries: PreformedLeaderboardEntry[]) {
-  const escape = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+function downloadResults(
+  test: PreformedTestDocument,
+  entries: PreformedLeaderboardEntry[],
+) {
+  const escape = (value: string | number) =>
+    `"${String(value).replaceAll('"', '""')}"`;
   const rows = [
-    ['Rank', 'Name', 'Guest', 'Score', 'Questions', 'Percentage', 'Duration seconds', 'Attempt', 'Submitted at'],
-    ...entries.map((entry) => [entry.rank, entry.participantName, entry.guest ? 'Yes' : 'No', entry.score, entry.questionCount, entry.percentage, entry.durationSeconds, entry.attemptNumber, entry.submittedAt]),
+    [
+      'Rank',
+      'Name',
+      'Guest',
+      'Score',
+      'Questions',
+      'Percentage',
+      'Duration seconds',
+      'Attempt',
+      'Submitted at',
+    ],
+    ...entries.map((entry) => [
+      entry.rank,
+      entry.participantName,
+      entry.guest ? 'Yes' : 'No',
+      entry.score,
+      entry.questionCount,
+      entry.percentage,
+      entry.durationSeconds,
+      entry.attemptNumber,
+      entry.submittedAt,
+    ]),
   ];
-  const blob = new Blob([rows.map((row) => row.map(escape).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const blob = new Blob(
+    [rows.map((row) => row.map(escape).join(',')).join('\r\n')],
+    { type: 'text/csv;charset=utf-8' },
+  );
   const href = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = href;
@@ -174,6 +217,9 @@ function TestEditor({
   const [selected, setSelected] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [messageKind, setMessageKind] = useState<'success' | 'error' | 'info'>(
+    'info',
+  );
   const dirty = JSON.stringify(draft) !== baseline || passcode !== undefined;
   const question = draft.questions[selected];
 
@@ -198,14 +244,18 @@ function TestEditor({
       ),
     }));
   };
-  const addQuestion = () => {
-    if (draft.questions.length >= 35)
-      return setMessage('A test can contain up to 35 questions.');
+  const appendQuestion = () => {
+    if (draft.questions.length >= 35) return false;
     setDraft((current) => ({
       ...current,
       questions: [...current.questions, emptyQuestion()],
     }));
     setSelected(draft.questions.length);
+    setMessage(
+      'New question started. Complete it, then save or save and continue.',
+    );
+    setMessageKind('info');
+    return true;
   };
   const importJson = async (file?: File) => {
     if (!file) return;
@@ -226,10 +276,12 @@ function TestEditor({
         ...current,
         questions: [...current.questions, ...imported],
       }));
+      setMessageKind('success');
       setMessage(
         `${imported.length} question${imported.length === 1 ? '' : 's'} imported${report.skipped.length ? `; ${report.skipped.length} skipped` : ''}.`,
       );
     } catch (error) {
+      setMessageKind('error');
       setMessage(
         error instanceof Error
           ? error.message
@@ -255,6 +307,7 @@ function TestEditor({
         ],
       });
     } catch (error) {
+      setMessageKind('error');
       setMessage(
         error instanceof Error ? error.message : 'Image upload failed.',
       );
@@ -262,7 +315,31 @@ function TestEditor({
       setBusy(false);
     }
   };
-  const save = async () => {
+  const save = async (
+    nextDraft: PreformedTestDocument = draft,
+    successMessage = 'Test saved.',
+  ) => {
+    if (!nextDraft.title.trim()) {
+      setMessageKind('error');
+      setMessage('Add a test title before saving.');
+      return undefined;
+    }
+    const invalidQuestion = nextDraft.questions.findIndex(
+      (item) => questionValidationMessage(item) !== '',
+    );
+    if (invalidQuestion >= 0) {
+      setSelected(invalidQuestion);
+      setMessageKind('error');
+      setMessage(
+        `Question ${invalidQuestion + 1}: ${questionValidationMessage(nextDraft.questions[invalidQuestion])}`,
+      );
+      return undefined;
+    }
+    if (nextDraft.status === 'published' && !nextDraft.questions.length) {
+      setMessageKind('error');
+      setMessage('Add at least one complete question before publishing.');
+      return undefined;
+    }
     setBusy(true);
     setMessage('');
     try {
@@ -272,7 +349,7 @@ function TestEditor({
       }>('/preformed/save', {
         method: 'PUT',
         body: JSON.stringify({
-          test: draft,
+          test: nextDraft,
           ...(passcode !== undefined
             ? { passcode: passcodeEnabled ? passcode : '' }
             : {}),
@@ -281,19 +358,72 @@ function TestEditor({
       setDraft(payload.test);
       setBaseline(JSON.stringify(payload.test));
       setPasscode(undefined);
+      setPasscodeEnabled(payload.test.hasPasscode);
       onSaved(payload.test);
+      setMessageKind('success');
       setMessage(
         payload.resultsReset
-          ? 'Saved. Previous results were permanently cleared because the questions changed.'
-          : 'Saved.',
+          ? `${successMessage} Previous results were permanently cleared because the questions changed.`
+          : successMessage,
       );
+      return payload.test;
     } catch (error) {
+      setMessageKind('error');
       setMessage(
         error instanceof Error ? error.message : 'Could not save the test.',
       );
     } finally {
       setBusy(false);
     }
+    return undefined;
+  };
+  const saveQuestion = async (advance: boolean) => {
+    if (!question) return;
+    const issue = questionValidationMessage(question);
+    if (issue) {
+      setMessageKind('error');
+      setMessage(issue);
+      return;
+    }
+    const saved = await save(
+      draft,
+      advance
+        ? 'Question saved. Ready for the next question.'
+        : 'Question saved.',
+    );
+    if (!saved || !advance) return;
+    if (selected < saved.questions.length - 1) {
+      setSelected(selected + 1);
+      return;
+    }
+    if (saved.questions.length >= 35) {
+      setMessageKind('success');
+      setMessage(
+        'Question saved. This test has reached the 35-question limit.',
+      );
+      return;
+    }
+    const next = { ...saved, questions: [...saved.questions, emptyQuestion()] };
+    setDraft(next);
+    setSelected(saved.questions.length);
+  };
+  const addQuestion = async () => {
+    if (!question) {
+      appendQuestion();
+      return;
+    }
+    await saveQuestion(true);
+  };
+  const publishPublicly = async () => {
+    const publicDraft: PreformedTestDocument = {
+      ...draft,
+      visibility: 'public',
+      status: 'published',
+    };
+    await save(
+      publicDraft,
+      'Published. The test is now visible in Public Tests.',
+    );
   };
 
   return (
@@ -312,14 +442,30 @@ function TestEditor({
             Questions are independent from every QBank.
           </p>
         </div>
-        <button
-          disabled={busy || !dirty}
-          onClick={() => void save()}
-          className="q-button q-button-primary"
-        >
-          <Save className="size-4" />
-          {busy ? 'Saving…' : 'Save'}
-        </button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {draft.status !== 'hidden' &&
+            !(
+              draft.visibility === 'public' && draft.status === 'published'
+            ) && (
+              <button
+                disabled={busy}
+                onClick={() => void publishPublicly()}
+                className="q-button q-button-secondary"
+              >
+                <Globe2 className="size-4" />
+                <span className="hidden sm:inline">Publish publicly</span>
+                <span className="sm:hidden">Publish</span>
+              </button>
+            )}
+          <button
+            disabled={busy || !dirty}
+            onClick={() => void save()}
+            className="q-button q-button-primary"
+          >
+            <Save className="size-4" />
+            {busy ? 'Saving…' : 'Save test'}
+          </button>
+        </div>
       </header>
       <div className="mx-auto grid max-w-7xl gap-5 p-4 sm:p-7 xl:grid-cols-[360px_1fr]">
         <aside className="space-y-5">
@@ -388,6 +534,11 @@ function TestEditor({
                   </select>
                 </label>
               </div>
+              <p className="rounded-xl bg-muted/70 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                Public Tests shows tests that are both <strong>Public</strong>{' '}
+                and <strong>Published</strong>. Use “Publish publicly” above to
+                apply both in one step.
+              </p>
               {draft.status === 'hidden' && (
                 <p className="rounded-xl bg-red-50 p-3 text-xs text-red-700 dark:bg-red-500/10 dark:text-red-200">
                   This test is hidden by a Superadmin.
@@ -398,8 +549,9 @@ function TestEditor({
                   type="checkbox"
                   checked={passcodeEnabled}
                   onChange={(e) => {
-                    setPasscodeEnabled(e.target.checked);
-                    setPasscode(e.target.checked ? '' : '');
+                    const enabled = e.target.checked;
+                    setPasscodeEnabled(enabled);
+                    setPasscode(enabled && draft.hasPasscode ? undefined : '');
                   }}
                 />
                 Require an access passcode
@@ -616,14 +768,28 @@ function TestEditor({
               />
             </label>
             <button
-              onClick={addQuestion}
-              disabled={draft.questions.length >= 35}
+              onClick={() => void addQuestion()}
+              disabled={busy || draft.questions.length >= 35}
               className="q-button q-button-primary"
             >
               <Plus className="size-4" />
               Add question
             </button>
           </div>
+          {message && (
+            <output
+              aria-live="polite"
+              className={`m-4 block rounded-xl border px-4 py-3 text-sm font-semibold ${
+                messageKind === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200'
+                  : messageKind === 'error'
+                    ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200'
+                    : 'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200'
+              }`}
+            >
+              {message}
+            </output>
+          )}
           {!!draft.questions.length && (
             <div className="flex gap-2 overflow-x-auto border-b p-3">
               {draft.questions.map((item, index) => (
@@ -807,12 +973,25 @@ function TestEditor({
                   </label>
                 </div>
               </div>
+              <div className="sticky bottom-4 flex flex-wrap items-center justify-end gap-2 rounded-2xl border bg-card/95 p-3 shadow-lg backdrop-blur">
+                <button
+                  disabled={busy}
+                  onClick={() => void saveQuestion(false)}
+                  className="q-button q-button-secondary"
+                >
+                  <Save className="size-4" />
+                  {busy ? 'Saving…' : 'Save question'}
+                </button>
+                <button
+                  disabled={busy || draft.questions.length >= 35}
+                  onClick={() => void saveQuestion(true)}
+                  className="q-button q-button-primary"
+                >
+                  <ChevronRight className="size-4" />
+                  Save & next question
+                </button>
+              </div>
             </div>
-          )}
-          {message && (
-            <output className="m-5 block rounded-xl bg-muted px-4 py-3 text-sm">
-              {message}
-            </output>
           )}
         </main>
       </div>
@@ -825,11 +1004,13 @@ export function PreformedTestRunner({
   code,
   onClose,
   onJoinQraft,
+  onTestEntered,
 }: {
   user: AppUser | null;
   code: string;
   onClose: () => void;
   onJoinQraft: () => void;
+  onTestEntered?: () => void;
 }) {
   const [name, setName] = useState(user?.displayName ?? '');
   const [passcode, setPasscode] = useState('');
@@ -849,6 +1030,11 @@ export function PreformedTestRunner({
   const [reviewing, setReviewing] = useState(false);
   const [leaderboard, setLeaderboard] = useState<PreformedLeaderboardEntry[]>();
   const submitLock = useRef(false);
+
+  useEffect(() => {
+    if (!attempt?.test.questions.length) return;
+    onTestEntered?.();
+  }, [attempt?.test.id, attempt?.test.questions.length, onTestEntered]);
 
   useEffect(() => {
     let active = true;
@@ -1350,9 +1536,11 @@ export function PreformedTestRunner({
 export function PreformedTestsWorkspace({
   user,
   onUpgrade,
+  onTestEntered,
 }: {
   user: AppUser;
   onUpgrade: () => void;
+  onTestEntered?: () => void;
 }) {
   const [tests, setTests] = useState<PreformedTestSummary[]>([]);
   const [tab, setTab] = useState<'mine' | 'public'>('mine');
@@ -1362,32 +1550,37 @@ export function PreformedTestsWorkspace({
   const [stats, setStats] = useState<ManageResponse>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const loadSequence = useRef(0);
   const canCreate = ['pro', 'unlimited'].includes(
     user.effectivePlan ?? user.tier,
   );
   const load = useCallback(
-    async (force = false) => {
-      setBusy(true);
-      setError('');
+    async (force = false, silent = false) => {
+      const sequence = ++loadSequence.current;
+      if (!silent) {
+        setBusy(true);
+        setError('');
+      }
       try {
-        setTests(
-          (
-            await api<{ tests: PreformedTestSummary[] }>('/preformed/catalog', {
-              resourceQuery: true,
-              cacheScope: user.uid,
-              forceRefresh: force,
-              requestReason: force ? 'explicit-refresh' : undefined,
-            })
-          ).tests,
+        const value = await api<{ tests: PreformedTestSummary[] }>(
+          '/preformed/catalog',
+          {
+            resourceQuery: true,
+            cacheScope: user.uid,
+            forceRefresh: force,
+            requestReason: force ? 'explicit-refresh' : undefined,
+          },
         );
+        if (sequence === loadSequence.current) setTests(value.tests);
       } catch (caught) {
-        setError(
-          caught instanceof Error
-            ? caught.message
-            : 'Could not load ready-made tests.',
-        );
+        if (!silent && sequence === loadSequence.current)
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : 'Could not load ready-made tests.',
+          );
       } finally {
-        setBusy(false);
+        if (!silent) setBusy(false);
       }
     },
     [user.uid],
@@ -1396,6 +1589,10 @@ export function PreformedTestsWorkspace({
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+  useEffect(
+    () => subscribeLive(() => void load(true, true), ['preformed-tests']),
+    [load],
+  );
   const create = async () => {
     if (!canCreate) return onUpgrade();
     setBusy(true);
@@ -1503,6 +1700,7 @@ export function PreformedTestsWorkspace({
         code={runningCode}
         onClose={() => setRunningCode('')}
         onJoinQraft={() => undefined}
+        onTestEntered={onTestEntered}
       />
     );
   return (
@@ -1639,7 +1837,11 @@ export function PreformedTestsWorkspace({
               <div className="mt-auto flex flex-wrap gap-2 pt-5">
                 <button
                   disabled={test.status !== 'published'}
-                  title={test.status !== 'published' ? 'Publish this test before opening it.' : undefined}
+                  title={
+                    test.status !== 'published'
+                      ? 'Publish this test before opening it.'
+                      : undefined
+                  }
                   onClick={() => setRunningCode(test.code)}
                   className="q-button q-button-primary"
                 >
@@ -1739,6 +1941,8 @@ export function PreformedTestsWorkspace({
           }}
           onSaved={(test) => {
             setEditing(test);
+            if (test.visibility === 'public' && test.status === 'published')
+              setTab('public');
             setTests((current) => {
               const exists = current.some((item) => item.id === test.id);
               return exists
@@ -1759,8 +1963,12 @@ export function PreformedTestsWorkspace({
                 </h2>
               </div>
               {stats.test.ownerId === user.uid && (
-                <button onClick={() => downloadResults(stats.test, stats.leaderboard)} className="q-button q-button-secondary">
-                  <Download className="size-4" />Export CSV
+                <button
+                  onClick={() => downloadResults(stats.test, stats.leaderboard)}
+                  className="q-button q-button-secondary"
+                >
+                  <Download className="size-4" />
+                  Export CSV
                 </button>
               )}
               <button
@@ -1798,8 +2006,8 @@ export function PreformedTestsWorkspace({
                             />
                           </div>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            {rate}% correct · {stat?.submissions ?? 0}{' '}
-                            signed-in submissions
+                            {rate}% correct · {stat?.submissions ?? 0} signed-in
+                            submissions
                           </p>
                         </div>
                       );

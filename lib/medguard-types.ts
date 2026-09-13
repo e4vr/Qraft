@@ -16,7 +16,11 @@ export type PlatformRole = 'moderator' | 'reviewer' | 'access_manager';
 export type BankRole = 'owner' | 'reviewer' | 'viewer';
 export type QBankVisibility = 'public' | 'private';
 export type AccountStatus = 'pending' | 'approved' | 'rejected';
-export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'needs_changes';
+export type ProposalStatus =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'needs_changes';
 export type ProposalEditKind =
   | 'question_text'
   | 'options'
@@ -73,6 +77,7 @@ export interface QuestionProgress {
   lastAnswer?: number;
   lastAnsweredAt?: string;
   flagged: boolean;
+  bookmarked: boolean;
   highlights: HighlightRange[];
   highlightSections?: Record<string, HighlightRange[]>;
   note: string;
@@ -97,6 +102,14 @@ export interface TestSession {
   completedAt?: string;
   status: 'active' | 'completed';
   qbankId?: string;
+  origin?: 'bookmarks';
+}
+
+export interface StudyStreak {
+  current: number;
+  best: number;
+  lastActivityDate: string;
+  updatedAt?: string;
 }
 
 export type FlashcardType = 'basic' | 'cloze' | 'image';
@@ -199,8 +212,11 @@ export interface AppSettings {
   activeQBankId: string;
   favoriteQBankIds: string[];
   pinnedQBankIds: string[];
-  qbankCategories: string[];
-  qbankCategoryById: Record<string, string>;
+  quickAccessQBankIds: string[];
+  qbankOrderBySection: {
+    mine: string[];
+    shared: string[];
+  };
 }
 
 export interface AppState {
@@ -218,6 +234,7 @@ export interface AppState {
   flashcardReviewLog: FlashcardReviewLog[];
   flashcardSettings: FlashcardSettings;
   settings: AppSettings;
+  studyStreak: StudyStreak;
   lastSyncAt?: string;
 }
 
@@ -262,6 +279,16 @@ export interface QBank {
   shareToken?: string;
   reviewerIds: string[];
   viewerIds: string[];
+  folderId?: string;
+}
+
+export interface QBankFolder {
+  id: string;
+  name: string;
+  parentId: string | null;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface QBankMembership {
@@ -448,6 +475,7 @@ export interface AuditEntry {
 
 export interface CollaborationState {
   qbanks: QBank[];
+  qbankFolders: QBankFolder[];
   memberships: QBankMembership[];
   invitations: QBankInvitation[];
   members: MemberProfile[];
@@ -483,6 +511,7 @@ export function emptyProgress(): QuestionProgress {
     correctAttempts: 0,
     incorrectAttempts: 0,
     flagged: false,
+    bookmarked: false,
     highlights: [],
     note: '',
     noteImages: [],
@@ -514,8 +543,13 @@ export function initialAppState(): AppState {
       activeQBankId: 'smle-gs',
       favoriteQBankIds: [],
       pinnedQBankIds: [],
-      qbankCategories: [],
-      qbankCategoryById: {},
+      quickAccessQBankIds: [],
+      qbankOrderBySection: { mine: [], shared: [] },
+    },
+    studyStreak: {
+      current: 0,
+      best: 0,
+      lastActivityDate: '',
     },
   };
 }
@@ -541,6 +575,7 @@ export function initialCollaborationState(): CollaborationState {
         viewerIds: [],
       },
     ],
+    qbankFolders: [],
     memberships: [],
     invitations: [],
     members: [],
@@ -579,6 +614,39 @@ export function normalizeCollaborationState(
   );
   const specialties = input.specialties ?? [];
   const topics = input.topics ?? [];
+  const rawFolders = (input.qbankFolders ?? []).filter(
+    (folder) =>
+      typeof folder?.id === 'string' &&
+      Boolean(folder.id) &&
+      typeof folder.name === 'string' &&
+      Boolean(folder.name.trim()) &&
+      folder.name.length <= 80 &&
+      (folder.parentId === null || typeof folder.parentId === 'string') &&
+      folder.parentId !== folder.id &&
+      Number.isInteger(folder.order),
+  );
+  const rootIds = new Set(
+    rawFolders
+      .filter((folder) => folder.parentId === null)
+      .map((folder) => folder.id),
+  );
+  const seenFolderIds = new Set<string>();
+  const seenFolderNames = new Set<string>();
+  const qbankFolders = rawFolders.filter((folder) => {
+    if (folder.parentId !== null && !rootIds.has(folder.parentId)) return false;
+    const nameKey = `${folder.parentId ?? 'root'}\u0000${folder.name.trim().toLocaleLowerCase()}`;
+    if (seenFolderIds.has(folder.id) || seenFolderNames.has(nameKey))
+      return false;
+    seenFolderIds.add(folder.id);
+    seenFolderNames.add(nameKey);
+    return true;
+  });
+  const validFolderIds = new Set(qbankFolders.map((folder) => folder.id));
+  const normalizedQBanks = qbanks.map((bank) =>
+    bank.folderId && !validFolderIds.has(bank.folderId)
+      ? { ...bank, folderId: undefined }
+      : bank,
+  );
   const specialtyById = new Map(specialties.map((item) => [item.id, item]));
   const topicById = new Map(topics.map((item) => [item.id, item]));
   const resolveClassification = <T extends Question | QuestionProposalPayload>(
@@ -601,7 +669,8 @@ export function normalizeCollaborationState(
   return {
     ...base,
     ...input,
-    qbanks,
+    qbanks: normalizedQBanks,
+    qbankFolders,
     memberships: input.memberships ?? [],
     invitations: input.invitations ?? [],
     members: (input.members ?? []).map((member) => ({
@@ -795,11 +864,49 @@ export function canReviewBank(
 export function normalizeAppState(input?: Partial<AppState>): AppState {
   const base = initialAppState();
   if (!input) return base;
+  const stringIds = (values: unknown, limit = Number.MAX_SAFE_INTEGER) =>
+    Array.isArray(values)
+      ? [
+          ...new Set(
+            values.filter(
+              (value): value is string =>
+                typeof value === 'string' && Boolean(value),
+            ),
+          ),
+        ].slice(0, limit)
+      : [];
   return {
     ...base,
     ...input,
     version: 1,
-    settings: { ...base.settings, ...input.settings },
+    settings: {
+      ...base.settings,
+      ...input.settings,
+      favoriteQBankIds: stringIds(input.settings?.favoriteQBankIds),
+      pinnedQBankIds: stringIds(input.settings?.pinnedQBankIds),
+      quickAccessQBankIds: stringIds(input.settings?.quickAccessQBankIds, 5),
+      qbankOrderBySection: {
+        mine: stringIds(input.settings?.qbankOrderBySection?.mine),
+        shared: stringIds(input.settings?.qbankOrderBySection?.shared),
+      },
+    },
+    studyStreak: {
+      current: Math.max(0, Math.trunc(Number(input.studyStreak?.current) || 0)),
+      best: Math.max(
+        0,
+        Math.trunc(Number(input.studyStreak?.best) || 0),
+        Math.trunc(Number(input.studyStreak?.current) || 0),
+      ),
+      lastActivityDate:
+        typeof input.studyStreak?.lastActivityDate === 'string' &&
+        /^\d{4}-\d{2}-\d{2}$/.test(input.studyStreak.lastActivityDate)
+          ? input.studyStreak.lastActivityDate
+          : '',
+      updatedAt:
+        typeof input.studyStreak?.updatedAt === 'string'
+          ? input.studyStreak.updatedAt
+          : undefined,
+    },
     progress: Object.fromEntries(
       Object.entries(input.progress ?? {}).map(([id, progress]) => [
         id,

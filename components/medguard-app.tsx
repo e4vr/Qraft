@@ -23,12 +23,14 @@ import { openLiveChannels, subscribeLive } from '@/lib/realtime-client';
 import { api, setApiCache } from '@/lib/api-client';
 import { mergeLiveState } from '@/lib/merge-live-state';
 import { appStateFreshness, mergeAppStates } from '@/lib/merge-app-state';
+import { recordStudyActivity } from '@/lib/study-streak';
 import { loadActiveLocalTheme, loadLocalTheme, saveLocalTheme, type LocalTheme } from '@/lib/local-preferences';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
   Award,
   ArrowRight,
   BarChart3,
+  Bookmark,
   Bold,
   BookOpenCheck,
   Check,
@@ -1040,6 +1042,7 @@ function AppSidebar({
   mobileOpen,
   closeMobile,
   qbanks,
+  quickAccessQBankIds,
   activeQBankId,
   onSelectQBank,
   showReview,
@@ -1054,6 +1057,7 @@ function AppSidebar({
   mobileOpen: boolean;
   closeMobile: () => void;
   qbanks: CollaborationState['qbanks'];
+  quickAccessQBankIds: string[];
   activeQBankId: string;
   onSelectQBank: (id: string) => void;
   showReview: boolean;
@@ -1069,6 +1073,14 @@ function AppSidebar({
   const sidebarRef = useRef<HTMLElement>(null);
   const qbankMenuRef = useRef<HTMLDivElement>(null);
   const [qbankMenuOpen, setQbankMenuOpen] = useState(false);
+  const quickAccessQBanks = useMemo(
+    () =>
+      quickAccessQBankIds.flatMap((id) => {
+        const bank = qbanks.find((item) => item.id === id && !item.archived);
+        return bank ? [bank] : [];
+      }),
+    [qbanks, quickAccessQBankIds],
+  );
   useEffect(() => {
     if (!qbankMenuOpen) return;
     const close = (event: PointerEvent) => {
@@ -1228,7 +1240,7 @@ function AppSidebar({
               aria-label="Choose QBank"
               className="absolute inset-x-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-2xl border border-sidebar-border/80 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_45px_-20px_rgba(15,23,42,0.55)] ring-1 ring-black/5 backdrop-blur-xl"
             >
-              {qbanks.filter((item) => !item.archived).map((qbank) => {
+              {quickAccessQBanks.map((qbank) => {
                 const active = qbank.id === activeQBankId;
                 return (
                   <button
@@ -1251,6 +1263,18 @@ function AppSidebar({
                   </button>
                 );
               })}
+              {!quickAccessQBanks.length && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigate('library');
+                    setQbankMenuOpen(false);
+                  }}
+                  className="w-full rounded-xl px-3 py-3 text-left text-xs leading-5 text-muted-foreground hover:bg-accent"
+                >
+                  Choose up to five banks from My QBanks → Quick Access.
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -2078,7 +2102,7 @@ function TestView({
   questions: Question[];
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
-  onExit: (destination?: 'dashboard' | 'history') => void;
+  onExit: (destination?: 'dashboard' | 'history' | 'library') => void;
   user: AppUser;
   collaboration: CollaborationState;
   updateCollaboration: (
@@ -2354,23 +2378,28 @@ function TestView({
       return {
         ...current,
         progress: nextProgress,
-        tests: current.tests.map((item) =>
-          item.id === test.id
-            ? {
-                ...item,
-                status: 'completed',
-                completedAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                elapsedSeconds: seconds,
-                timerPaused: true,
-                timerStartedAt: new Date().toISOString(),
-                graded: [
-                  ...new Set([...item.graded, ...Object.keys(item.answers)]),
-                ],
-                revealed: [...new Set([...item.revealed, ...item.questionIds])],
-              }
-            : item,
-        ),
+        tests:
+          test.origin === 'bookmarks'
+            ? current.tests.filter((item) => item.id !== test.id)
+            : current.tests.map((item) =>
+                item.id === test.id
+                  ? {
+                      ...item,
+                      status: 'completed',
+                      completedAt: new Date().toISOString(),
+                      updatedAt: new Date().toISOString(),
+                      elapsedSeconds: seconds,
+                      timerPaused: true,
+                      timerStartedAt: new Date().toISOString(),
+                      graded: [
+                        ...new Set([...item.graded, ...Object.keys(item.answers)]),
+                      ],
+                      revealed: [
+                        ...new Set([...item.revealed, ...item.questionIds]),
+                      ],
+                    }
+                  : item,
+              ),
       };
     });
     updateCollaboration((current) => {
@@ -2395,7 +2424,7 @@ function TestView({
       });
       return { ...current, answerStats };
     });
-    onExit('history');
+    onExit(test.origin === 'bookmarks' ? 'library' : 'history');
   }
 
   function move(index: number) {
@@ -2416,7 +2445,28 @@ function TestView({
         ...current,
         progress: {
           ...current.progress,
-          [question.id]: { ...old, flagged: !old.flagged },
+          [question.id]: {
+            ...old,
+            flagged: !old.flagged,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      };
+    });
+  }
+
+  function toggleBookmark() {
+    setState((current) => {
+      const old = getQuestionProgress(current, question.id);
+      return {
+        ...current,
+        progress: {
+          ...current.progress,
+          [question.id]: {
+            ...old,
+            bookmarked: !old.bookmarked,
+            updatedAt: new Date().toISOString(),
+          },
         },
       };
     });
@@ -2951,6 +3001,15 @@ function TestView({
           >
             <Flag
               className={cx('size-4', progress.flagged && 'fill-current')}
+            />
+          </IconButton>
+          <IconButton
+            label={progress.bookmarked ? 'Remove bookmark' : 'Bookmark question'}
+            active={progress.bookmarked}
+            onClick={toggleBookmark}
+          >
+            <Bookmark
+              className={cx('size-4', progress.bookmarked && 'fill-current')}
             />
           </IconButton>
           <SecondaryButton onClick={finishTest} className="hidden sm:flex">
@@ -5276,6 +5335,14 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       return { ...next, progress, clientUpdatedAt: updatedAt };
     });
   }, []);
+  const recordStudyVisit = useCallback(() => {
+    setState((current) => {
+      const studyStreak = recordStudyActivity(current.studyStreak);
+      return studyStreak === current.studyStreak
+        ? current
+        : { ...current, studyStreak };
+    });
+  }, [setState]);
   const [theme, setTheme] = useState<LocalTheme>(loadActiveLocalTheme);
   const [collaboration, setCollaboration] = useState<CollaborationState>(
     initialCollaborationState,
@@ -5471,6 +5538,65 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       ),
     [allQuestions, activeQBankId],
   );
+  useEffect(() => {
+    if (!hydrated || !collaborationHydrated || !user) return;
+    const bankIds = new Set(accessibleQBanks.map((bank) => bank.id));
+    const questionIds = new Set(
+      allQuestions
+        .filter((question) => bankIds.has(question.qbankId ?? 'smle-gs'))
+        .map((question) => question.id),
+    );
+    const cleanup = window.setTimeout(() => setState((current) => {
+      const favoriteQBankIds = current.settings.favoriteQBankIds.filter((id) =>
+        bankIds.has(id),
+      );
+      const pinnedQBankIds = current.settings.pinnedQBankIds.filter((id) =>
+        bankIds.has(id),
+      );
+      const quickAccessQBankIds = current.settings.quickAccessQBankIds
+        .filter((id) => bankIds.has(id))
+        .slice(0, 5);
+      const qbankOrderBySection = {
+        mine: [...new Set(current.settings.qbankOrderBySection.mine)].filter((id) =>
+          bankIds.has(id),
+        ),
+        shared: [...new Set(current.settings.qbankOrderBySection.shared)].filter(
+          (id) => bankIds.has(id),
+        ),
+      };
+      let progressChanged = false;
+      const progress = Object.fromEntries(
+        Object.entries(current.progress).map(([id, value]) => {
+          if (value.bookmarked && !questionIds.has(id)) {
+            progressChanged = true;
+            return [id, { ...value, bookmarked: false }];
+          }
+          return [id, value];
+        }),
+      );
+      const settingsChanged =
+        favoriteQBankIds.length !== current.settings.favoriteQBankIds.length ||
+        pinnedQBankIds.length !== current.settings.pinnedQBankIds.length ||
+        quickAccessQBankIds.length !== current.settings.quickAccessQBankIds.length ||
+        qbankOrderBySection.mine.length !==
+          current.settings.qbankOrderBySection.mine.length ||
+        qbankOrderBySection.shared.length !==
+          current.settings.qbankOrderBySection.shared.length;
+      if (!progressChanged && !settingsChanged) return current;
+      return {
+        ...current,
+        progress,
+        settings: {
+          ...current.settings,
+          favoriteQBankIds,
+          pinnedQBankIds,
+          quickAccessQBankIds,
+          qbankOrderBySection,
+        },
+      };
+    }), 0);
+    return () => window.clearTimeout(cleanup);
+  }, [accessibleQBanks, allQuestions, collaborationHydrated, hydrated, setState, user]);
   const activeQBank = collaboration.qbanks.find(
     (bank) => bank.id === activeQBankId,
   );
@@ -5496,6 +5622,17 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
   const activeTest =
     state.tests.find((test) => test.id === activeTestId) ??
     state.tests.find((test) => test.status === 'active');
+  const activeTestHasQuestion = Boolean(
+    activeTest?.questionIds.some((id) =>
+      allQuestions.some((question) => question.id === id),
+    ),
+  );
+
+  useEffect(() => {
+    if (view !== 'test' || !activeTestHasQuestion) return;
+    const timer = window.setTimeout(recordStudyVisit, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeTest?.id, activeTestHasQuestion, recordStudyVisit, view]);
 
   useEffect(() => {
     const timer = window.setInterval(
@@ -6572,6 +6709,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
           mobileOpen={mobileOpen}
           closeMobile={() => setMobileOpen(false)}
           qbanks={accessibleQBanks}
+          quickAccessQBankIds={state.settings.quickAccessQBankIds}
           activeQBankId={activeQBankId}
           onSelectQBank={(id) => {
             const nextBank = collaboration.qbanks.find(
@@ -6648,8 +6786,53 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
               organization={{
                 favoriteIds: state.settings.favoriteQBankIds,
                 pinnedIds: state.settings.pinnedQBankIds,
-                categories: state.settings.qbankCategories,
-                categoryByBankId: state.settings.qbankCategoryById,
+                quickAccessIds: state.settings.quickAccessQBankIds,
+                orderBySection: state.settings.qbankOrderBySection,
+              }}
+              bookmarkedQuestionIds={Object.entries(state.progress)
+                .filter(([, progress]) => progress.bookmarked)
+                .map(([questionId]) => questionId)}
+              onToggleBookmark={(questionId) =>
+                setState((current) => {
+                  const old = getQuestionProgress(current, questionId);
+                  return {
+                    ...current,
+                    progress: {
+                      ...current.progress,
+                      [questionId]: {
+                        ...old,
+                        bookmarked: !old.bookmarked,
+                        updatedAt: new Date().toISOString(),
+                      },
+                    },
+                  };
+                })
+              }
+              onStartBookmarks={(questionIds, title) => {
+                const now = new Date().toISOString();
+                const test: TestSession = {
+                  id: crypto.randomUUID(),
+                  title,
+                  mode: 'tutor',
+                  questionIds,
+                  currentIndex: 0,
+                  answers: {},
+                  revealed: [],
+                  graded: [],
+                  startedAt: now,
+                  updatedAt: now,
+                  elapsedSeconds: 0,
+                  timerStartedAt: now,
+                  timerPaused: false,
+                  status: 'active',
+                  origin: 'bookmarks',
+                };
+                setState((current) => ({
+                  ...current,
+                  tests: [test, ...current.tests],
+                }));
+                setActiveTestId(test.id);
+                setView('test');
               }}
               updateOrganization={(organization) =>
                 setState((current) => ({
@@ -6658,8 +6841,8 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
                     ...current.settings,
                     favoriteQBankIds: organization.favoriteIds,
                     pinnedQBankIds: organization.pinnedIds,
-                    qbankCategories: organization.categories,
-                    qbankCategoryById: organization.categoryByBankId,
+                    quickAccessQBankIds: organization.quickAccessIds.slice(0, 5),
+                    qbankOrderBySection: organization.orderBySection,
                   },
                 }))
               }
@@ -6699,14 +6882,20 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
             />
           )}
           {view === 'preformed' && (
-            <PreformedTestsWorkspace user={user} onUpgrade={openUpgrade} />
+            <PreformedTestsWorkspace
+              user={user}
+              onUpgrade={openUpgrade}
+              onTestEntered={recordStudyVisit}
+            />
           )}
           {view === 'history' && (
             <HistoryView
               state={{
                 ...state,
                 tests: state.tests.filter(
-                  (test) => (test.qbankId ?? 'smle-gs') === activeQBankId,
+                  (test) =>
+                    test.origin !== 'bookmarks' &&
+                    (test.qbankId ?? 'smle-gs') === activeQBankId,
                 ),
               }}
               questions={questions}

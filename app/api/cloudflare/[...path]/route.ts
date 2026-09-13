@@ -10,6 +10,7 @@ import {
   changeOwnPassword,
   currentUser,
   deleteBankMedia,
+  deleteQBankFolder,
   joinBank,
   loadCollaboration,
   loadState,
@@ -148,6 +149,7 @@ export async function DELETE(request: Request) {
   return safely(request, async () => {
   const [scope, action] = pathParts(request);
   if (scope === 'preformed' && action) return preformedTestApi(request, action);
+  if (scope === 'qbank-folders' && action) return deleteQBankFolder(request, action);
   if (scope === 'auth' && action === 'account') return deleteOwnAccount(request);
   if (scope === 'contact') return contactApi(request);
   if (scope === 'platform' && action) return platformApi(request, action);

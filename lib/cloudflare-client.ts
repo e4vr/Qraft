@@ -105,6 +105,7 @@ function operationPayload(
       customQuestions: state.customQuestions,
       flashcardDecks: state.flashcardDecks,
       flashcards: state.flashcards,
+      studyStreak: state.studyStreak,
       clientUpdatedAt: state.clientUpdatedAt,
       ...extra,
     };
@@ -362,6 +363,7 @@ export async function saveCollaborationState(next: CollaborationState, previous:
     }
   };
   collect('qbanks', next.qbanks, previous.qbanks, (item) => item.id, true);
+  collect('qbankFolders', next.qbankFolders, previous.qbankFolders, (item) => item.id, true);
   changed(next.qbanks, previous.qbanks, (item) => item.id).forEach((bank) => {
     if (bank.shareToken) writes.push({ collection: 'qbankShareLinks', id: bank.shareToken, value: { id: bank.shareToken, qbankId: bank.id, bankName: bank.name, description: bank.description, ownerId: bank.ownerId, ownerName: bank.ownerName, enabled: bank.shareEnabled, updatedAt: new Date().toISOString() }, type: 'set' });
   });

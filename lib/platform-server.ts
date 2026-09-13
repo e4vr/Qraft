@@ -563,7 +563,7 @@ export async function platformApi(request: Request, action: string) {
     }
     if (action === 'content-backup') {
       if (!root) return json({ error: 'Superadmin access required.' }, 403);
-      const allowedTypes = ['qbanks', 'sharedQuestions', 'questionProposals', 'sharedNotes', 'qbankMemberships'];
+      const allowedTypes = ['qbanks', 'qbankFolders', 'sharedQuestions', 'questionProposals', 'sharedNotes', 'qbankMemberships'];
       if (request.method === 'GET') {
         const placeholders = allowedTypes.map(() => '?').join(',');
         const rows = await env.DB.prepare(

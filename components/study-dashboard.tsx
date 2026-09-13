@@ -1,8 +1,9 @@
 'use client';
 
 import { memo } from 'react';
-import { ArrowRight, BookOpenCheck, Check, CheckCircle2, ChevronRight, ClipboardPlus, Flag, Library, Menu, Moon, Play, Sun, Target, TrendingUp } from 'lucide-react';
+import { ArrowRight, BookOpenCheck, Check, CheckCircle2, ChevronRight, ClipboardPlus, Flag, Flame, Library, Menu, Moon, Play, Sun, Target, TrendingUp } from 'lucide-react';
 import { emptyProgress, type AppState, type Question } from '@/lib/medguard-types';
+import { localStudyDay, visibleStudyStreak } from '@/lib/study-streak';
 
 type Destination = 'create' | 'test' | 'library' | 'progress' | 'history';
 
@@ -25,6 +26,8 @@ export const StudyDashboard = memo(function StudyDashboard({ state, questions, n
   const goal = Math.max(1, state.settings.dailyGoal);
   const completion = questions.length ? Math.round(completed / questions.length * 100) : 0;
   const daily = Math.min(100, Math.round(todayCompleted / goal * 100));
+  const streak = visibleStudyStreak(state.studyStreak);
+  const studiedToday = state.studyStreak.lastActivityDate === localStudyDay();
   const activeTest = state.tests.find((test) => test.status === 'active');
   const specialty = questions[0]?.specialty;
   const newQuestions = progress.filter(({ question, progress: item }) => !item.attempts && question.specialty === specialty);
@@ -66,10 +69,18 @@ export const StudyDashboard = memo(function StudyDashboard({ state, questions, n
           </div>
         </div>
         <div className="daily-focus"><progress className="sr-only" aria-label={`Daily study goal: ${todayCompleted} of ${goal} questions today`} value={daily} max={100} />
-          <div className="goal-ring" aria-hidden="true" style={{ background: `conic-gradient(#5ee0bd ${daily * 3.6}deg, #ffffff16 0)` }}>
-            <div><Target className="size-[18px] shrink-0 text-emerald-300" /><strong dir="ltr" style={{ fontSize: `${Math.min(34, 170 / Math.max(1, String(todayCompleted).length))}px` }}>{todayCompleted}</strong><span className="goal-total" dir="ltr">of {goal}</span><span className="goal-caption">questions today</span></div>
+          <div className="daily-focus-stats">
+            <div className="goal-ring" aria-hidden="true" style={{ background: `conic-gradient(#5ee0bd ${daily * 3.6}deg, #ffffff16 0)` }}>
+              <div><Target className="size-[18px] shrink-0 text-emerald-300" /><strong dir="ltr" style={{ fontSize: `${Math.min(34, 170 / Math.max(1, String(todayCompleted).length))}px` }}>{todayCompleted}</strong><span className="goal-total" dir="ltr">of {goal}</span><span className="goal-caption">questions today</span></div>
+            </div>
+            <div className="streak-card" aria-label={`${streak} day study streak. Best streak ${state.studyStreak.best} days.`}>
+              <span className="streak-icon"><Flame className="size-5 fill-current" /></span>
+              <strong dir="ltr">{streak}</strong>
+              <span>{streak === 1 ? 'day streak' : 'days streak'}</span>
+              <small>Best {state.studyStreak.best}</small>
+            </div>
           </div>
-          <p className="mt-4 text-sm font-medium text-slate-200">{daily === 100 ? 'Daily goal reached. Well done.' : 'Small steps. Lasting progress.'}</p>
+          <p className="mt-4 text-sm font-medium text-slate-200">{studiedToday ? daily === 100 ? 'Daily goal reached. Well done.' : 'Today counts. Keep your rhythm.' : streak ? `Open a test today to keep your ${streak}-day streak.` : 'Open a test to begin your streak.'}</p>
         </div>
       </section>
       <div className="q-stagger mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">

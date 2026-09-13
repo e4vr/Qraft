@@ -12,6 +12,7 @@ import { ContactWorkspace } from '@/components/contact-workspace';
 import { QuestionPreview } from '@/components/question-tools';
 import { ReviewWorkspace } from '@/components/review-workspace';
 import { PreformedReportsAdmin } from '@/components/preformed-tests-workspace';
+import { QBankFolderManager } from '@/components/qbank-folder-manager';
 import { api, invalidateApiResources, setApiCache } from '@/lib/api-client';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 
@@ -1135,6 +1136,14 @@ export function AdminDashboard({ user, collaboration, update, replaceFromServer,
         )}
         {tab === 'qbanks' && (
           <section className="grid gap-4 md:grid-cols-2">
+            {isRoot && (
+              <QBankFolderManager
+                user={user}
+                collaboration={collaboration}
+                update={update}
+                replaceFromServer={replaceFromServer}
+              />
+            )}
             {collaboration.qbanks.map((bank) => (
               <article key={bank.id} className="rounded-2xl bg-card p-5 ring-1 ring-border">
                 <div className="flex justify-between">

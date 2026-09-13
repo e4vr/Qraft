@@ -84,6 +84,7 @@ export async function notifyMutation(request: Request) {
       addUser(value.userId ?? value.proposedById);
       if (operation.collection === 'profiles') { addUser(operation.id); channels.add('access'); }
       if (operation.collection === 'qbanks') { addBank(operation.id); channels.add('catalog'); }
+      else if (operation.collection === 'qbankFolders') channels.add('catalog');
       if (operation.type === 'delete' || ['qbankMemberships', 'qbankInvitations', 'system'].includes(operation.collection)) channels.add('catalog');
       if (operation.collection === 'questionProposals') { topics.add('review-queue'); topics.add('contributions'); }
       else if (['sharedQuestions', 'qbankSpecialties', 'qbankTopics'].includes(operation.collection)) topics.add('question-catalog');
@@ -91,6 +92,10 @@ export async function notifyMutation(request: Request) {
       else if (operation.collection === 'sharedNotes') topics.add('shared-notes');
       else topics.add('collaboration');
     }
+  } else if (path[0] === 'qbank-folders') {
+    channels.add('catalog');
+    topics.add('collaboration');
+    topics.add('question-catalog');
   } else if (path[0] === 'platform' && path[1] === 'review-history') {
     topics.add('review-history');
   } else if (path[0] === 'platform' && path[1] === 'discounts') {
