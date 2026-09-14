@@ -5746,7 +5746,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       // Safari may use the first matching server-rendered theme entry.
       document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach((meta) => {
         meta.removeAttribute('media');
-        meta.content = dark ? '#07111d' : '#f4f7fb';
+        meta.content = dark ? '#0d1b2a' : '#ffffff';
       });
     };
     apply();

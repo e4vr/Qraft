@@ -646,6 +646,10 @@ void test('touch input uses one event path, forgiving targets, and touch-safe sc
   assert.match(styles, /touch-action: pan-y pinch-zoom;/);
   assert.match(styles, /q-viewport:has\(> \.q-shell\).*overflow-y: hidden/);
   assert.match(styles, /--q-safe-top: env\(safe-area-inset-top, 0px\)/);
+  assert.match(styles, /html, body \{ background: var\(--card\); \}/);
+  assert.match(styles, /\.q-viewport \{[^}]*height: 100%;[^}]*background: var\(--background\);/);
+  assert.doesNotMatch(styles, /\.q-viewport \{[^}]*padding-bottom: var\(--q-safe-bottom\)/);
+  assert.match(styles, /main:not\(\.q-shell\):not\(\.q-test-screen\):not\(\.q-admin-dashboard\)[^{]*\{[^}]*padding-bottom: var\(--q-safe-bottom\)/);
   assert.match(styles, /--q-control-safe-bottom: max\(8px, var\(--q-safe-bottom\)\)/);
   assert.match(
     styles,
