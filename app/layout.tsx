@@ -34,6 +34,11 @@ export const metadata: Metadata = {
 
 const themeBootstrap = `(()=>{try{const t=localStorage.getItem('qraft-theme-active')||'system';const d=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light'}catch{}})()`;
 
+// iOS can ignore the viewport's zoom limits, especially in standalone mode.
+// Keep the browser experience accessible while making the installed PWA feel
+// like a native app with a fixed viewport.
+const pwaZoomGuard = `(()=>{try{const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);if(!standalone||!ios)return;const lockViewport=()=>{const meta=document.querySelector('meta[name="viewport"]');if(meta)meta.setAttribute('content','width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover')};lockViewport();document.addEventListener('DOMContentLoaded',lockViewport,{once:true});const prevent=(event)=>{if(event.cancelable)event.preventDefault()};for(const type of ['gesturestart','gesturechange','gestureend'])document.addEventListener(type,prevent,{passive:false});document.addEventListener('touchmove',(event)=>{if(event.touches.length>1)prevent(event)},{passive:false})}catch{}})()`;
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeBootstrap }} /></head><body><div className="q-viewport">{children}</div></body></html>;
+  return <html lang="en" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeBootstrap }} /><script dangerouslySetInnerHTML={{ __html: pwaZoomGuard }} /></head><body><div className="q-viewport">{children}</div></body></html>;
 }

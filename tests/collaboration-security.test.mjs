@@ -178,6 +178,15 @@ void test('study experience includes persistent marker, answer statistics, dark 
   assert.match(app, /q-question-drawer-list/);
 });
 
+void test('shared notes open automatically after grading on desktop only', async () => {
+  const app = await readFile(
+    new URL('components/medguard-app.tsx', root),
+    'utf8',
+  );
+  assert.match(app, /if \(!isMobile\) setNotesOpen\(true\);/);
+  assert.match(app, /onClick=\{\(\) => setNotesOpen\(!notesOpen\)\}/);
+});
+
 void test('QBank switching, review counters, random tests, private notes, labs, and grouped progress are integrated', async () => {
   const app = await readFile(
     new URL('components/medguard-app.tsx', root),
@@ -281,6 +290,17 @@ void test('confirmations share a responsive in-app surface across workspaces', a
   assert.match(alertDialog, /flex flex-col-reverse[\s\S]*sm:flex-row/);
   assert.match(styles, /\.q-confirm-dialog \{ max-height: calc\(100dvh/);
   assert.match(styles, /\.q-confirm-dialog-wide/);
+});
+
+void test('published ready-made tests expose a direct share link', async () => {
+  const workspace = await readFile(
+    new URL('components/preformed-tests-workspace.tsx', root),
+    'utf8',
+  );
+  assert.match(workspace, /url\.searchParams\.set\('join_test', code\)/);
+  assert.match(workspace, /Copy link/);
+  assert.match(workspace, /Link copied/);
+  assert.match(workspace, /disabled=\{test\.status !== 'published'\}/);
 });
 
 void test('the sidebar keeps navigation scrollable and the account footer visible', async () => {
@@ -627,6 +647,10 @@ void test('touch input uses one event path, forgiving targets, and touch-safe sc
   assert.match(styles, /q-viewport:has\(> \.q-shell\).*overflow-y: hidden/);
   assert.match(styles, /--q-safe-top: env\(safe-area-inset-top, 0px\)/);
   assert.match(styles, /--q-control-safe-bottom: max\(8px, var\(--q-safe-bottom\)\)/);
+  assert.match(
+    styles,
+    /display-mode: standalone[\s\S]*--q-control-safe-bottom: max\(8px, calc\(var\(--q-safe-bottom\) - 10px\)\)/,
+  );
   assert.doesNotMatch(app, /env\(safe-area-inset-/);
   assert.match(styles, /\.q-safe-fullscreen/);
   assert.match(styles, /\.q-flashcard-review-card/);

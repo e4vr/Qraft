@@ -2322,7 +2322,7 @@ function TestView({
         },
       };
     });
-    setNotesOpen(true);
+    if (!isMobile) setNotesOpen(true);
   }
 
   function finishTest() {

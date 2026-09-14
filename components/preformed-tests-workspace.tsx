@@ -1564,8 +1564,10 @@ export function PreformedTestsWorkspace({
   const [stats, setStats] = useState<ManageResponse>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [copiedCode, setCopiedCode] = useState('');
   const [confirmAction, confirmationDialog] = useConfirmationDialog();
   const loadSequence = useRef(0);
+  const copyResetTimer = useRef<number | undefined>(undefined);
   const canCreate = ['pro', 'unlimited'].includes(
     user.effectivePlan ?? user.tier,
   );
@@ -1608,6 +1610,12 @@ export function PreformedTestsWorkspace({
     () => subscribeLive(() => void load(true, true), ['preformed-tests']),
     [load],
   );
+  useEffect(
+    () => () => {
+      if (copyResetTimer.current) window.clearTimeout(copyResetTimer.current);
+    },
+    [],
+  );
   const create = async () => {
     if (!canCreate) return onUpgrade();
     setBusy(true);
@@ -1645,7 +1653,16 @@ export function PreformedTestsWorkspace({
     }
   };
   const share = async (code: string) => {
-    await navigator.clipboard.writeText(testUrl(code));
+    try {
+      await navigator.clipboard.writeText(testUrl(code));
+      setCopiedCode(code);
+      if (copyResetTimer.current) window.clearTimeout(copyResetTimer.current);
+      copyResetTimer.current = window.setTimeout(() => {
+        setCopiedCode((current) => (current === code ? '' : current));
+      }, 2400);
+    } catch {
+      setError('Could not copy the share link. Try again.');
+    }
   };
   const rotate = async (id: string) => {
     if (!(await confirmAction({
@@ -1807,11 +1824,21 @@ export function PreformedTestsWorkspace({
           <button
             onClick={() => void create()}
             className="q-button q-button-primary ml-auto"
+            aria-label={!canCreate ? 'New test — Pro plan required' : undefined}
+            title={!canCreate ? 'Upgrade to Pro to create a test' : undefined}
           >
-            <span className="relative">
-              <Plus className="size-4" />
-              {!canCreate && (
-                <LockKeyhole className="absolute -right-2 -top-2 size-3 rounded-full bg-white text-amber-600" />
+            <span
+              aria-hidden="true"
+              className={`grid size-6 shrink-0 place-items-center rounded-lg transition-colors ${
+                canCreate
+                  ? 'bg-white/15 text-current'
+                  : 'bg-amber-50 text-amber-700 shadow-sm ring-1 ring-inset ring-amber-300/80'
+              }`}
+            >
+              {canCreate ? (
+                <Plus className="size-4" strokeWidth={2.4} />
+              ) : (
+                <LockKeyhole className="size-3.5" strokeWidth={2.4} />
               )}
             </span>
             New test
@@ -1881,6 +1908,23 @@ export function PreformedTestsWorkspace({
                   <Eye className="size-4" />
                   {test.status === 'published' ? 'Open' : test.status}
                 </button>
+                <button
+                  disabled={test.status !== 'published'}
+                  title={
+                    test.status !== 'published'
+                      ? 'Publish this test before sharing it.'
+                      : 'Copy a direct link to this test'
+                  }
+                  onClick={() => void share(test.code)}
+                  className="q-button q-button-secondary"
+                >
+                  {copiedCode === test.code ? (
+                    <Check className="size-4 text-emerald-600" />
+                  ) : (
+                    <Copy className="size-4" />
+                  )}
+                  {copiedCode === test.code ? 'Link copied' : 'Copy link'}
+                </button>
                 {test.ownerId === user.uid ? (
                   <>
                     <button
@@ -1896,13 +1940,6 @@ export function PreformedTestsWorkspace({
                     >
                       <BarChart3 className="size-4" />
                       Stats
-                    </button>
-                    <button
-                      title="Copy share link"
-                      onClick={() => void share(test.code)}
-                      className="q-button q-button-secondary px-3"
-                    >
-                      <Copy className="size-4" />
                     </button>
                     <button
                       title="Rotate code"

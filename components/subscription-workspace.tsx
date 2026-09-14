@@ -170,14 +170,16 @@ export function Subscribe({
           );
         })}
       </div>
-      <button
-        type="button"
-        onClick={() => setDetailsOpen(true)}
-        className="q-button mx-auto inline-flex items-center gap-2 border"
-      >
-        <Eye className="size-4" />
-        استعرض تفاصيل الخطط
-      </button>
+      <div className="flex justify-center">
+        <button
+          type="button"
+          onClick={() => setDetailsOpen(true)}
+          className="q-button inline-flex items-center gap-2 border"
+        >
+          <Eye className="size-4" />
+          استعرض تفاصيل الخطط
+        </button>
+      </div>
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DialogContent className="max-h-[88dvh] overflow-y-auto border-0 bg-[#f7fbfc] p-0 shadow-2xl dark:bg-slate-950 sm:max-w-5xl">
           <div className="border-b bg-gradient-to-br from-[#e8f8f7] via-background to-background px-5 py-7 text-center dark:from-[#0d2c36] sm:px-8">

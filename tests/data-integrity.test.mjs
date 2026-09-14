@@ -44,6 +44,7 @@ void test('source pages remain in order and extraction artifacts are removed', (
 void test('PWA shell and Cloudflare persistence configuration are present', async () => {
   const manifest = JSON.parse(await readFile(new URL('../public/manifest.webmanifest', import.meta.url), 'utf8'));
   const serviceWorker = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
+  const layout = await readFile(new URL('../app/layout.tsx', import.meta.url), 'utf8');
   const wrangler = await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
   const schema = await readFile(new URL('../db/schema.ts', import.meta.url), 'utf8');
   assert.equal(manifest.display, 'standalone');
@@ -52,6 +53,10 @@ void test('PWA shell and Cloudflare persistence configuration are present', asyn
   assert.ok(manifest.icons.some(icon => icon.purpose === 'any' && icon.sizes === '512x512'));
   assert.match(serviceWorker, /CACHE_NAME/);
   assert.match(serviceWorker, /'\/offline'/);
+  assert.match(layout, /display-mode: standalone/);
+  assert.match(layout, /iPad\|iPhone\|iPod/);
+  assert.match(layout, /user-scalable=no/);
+  assert.match(layout, /gesturestart/);
   assert.match(wrangler, /"binding": "DB"/);
   assert.doesNotMatch(wrangler, /"binding": "MEDIA"/);
   assert.match(schema, /sqliteTable\(\s*'profiles'/);

@@ -390,6 +390,7 @@ body > main, .q-stage { min-width: 0; }
 }
 .q-stage, .q-test-screen { padding-left: var(--q-safe-left); padding-right: var(--q-safe-right); }
 @media (display-mode: standalone) {
+  :root { --q-control-safe-bottom: max(8px, calc(var(--q-safe-bottom) - 10px)); }
   .q-stage > header, .q-test-screen > header, .q-sidebar, .q-mobile-nav, .q-test-bottom { background-clip: border-box; }
 }
 .q-stage :where(p, h1, h2, h3, dd), .q-test-screen p { overflow-wrap: anywhere; }
