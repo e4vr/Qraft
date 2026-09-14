@@ -308,6 +308,8 @@ button { cursor: pointer; }
   --q-safe-left: env(safe-area-inset-left, 0px);
   --q-app-header-height: 64px;
   --q-control-safe-bottom: max(8px, var(--q-safe-bottom));
+  --q-navigation-safe-bottom: max(8px, var(--q-safe-bottom));
+  --q-workspace-safe-bottom: var(--q-safe-bottom);
 }
 /* The iOS status area and the bottom navigation use the same chrome surface. */
 html, body { background: var(--card); }
@@ -326,7 +328,7 @@ body { position: fixed; inset: 0; margin: 0; min-width: 0; width: 100%; height: 
 .q-viewport:has(> .q-test-screen) { overflow-y: hidden; }
 .q-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; box-sizing: border-box; padding-top: var(--q-safe-top); background: var(--card); overflow: hidden; }
 .q-frame { flex: 1; min-height: 0; background: var(--background); }
-.q-frame > .q-stage { background: var(--background); padding-bottom: var(--q-safe-bottom); min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; scroll-padding-top: 1rem; scroll-padding-bottom: calc(1rem + var(--q-safe-bottom)); touch-action: pan-x pan-y pinch-zoom; -webkit-overflow-scrolling: touch; }
+.q-frame > .q-stage { background: var(--background); padding-bottom: var(--q-workspace-safe-bottom); min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; scroll-padding-top: 1rem; scroll-padding-bottom: calc(1rem + var(--q-workspace-safe-bottom)); touch-action: pan-x pan-y pinch-zoom; -webkit-overflow-scrolling: touch; }
 .q-frame > .q-stage.q-enter { animation: none; }
 .q-viewport :where(button, a, input, select, textarea, [role='button']) { touch-action: manipulation; }
 .q-viewport :where(button, a, [role='button']):focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
@@ -354,7 +356,7 @@ body > main, .q-stage { min-width: 0; }
   .workspace-header-actions .q-button { min-height: 38px; padding: 8px 11px; }
 }
 .q-sidebar { padding-top: var(--q-safe-top); padding-left: var(--q-safe-left); }
-.q-sidebar-footer { padding-bottom: max(.625rem, var(--q-safe-bottom)); }
+.q-sidebar-footer { padding-bottom: max(.625rem, var(--q-workspace-safe-bottom)); }
 .q-announcement { padding-block: 0.5rem; background: var(--card); color: var(--muted-foreground); box-shadow: none; font-weight: 500; }
 .q-announcement a { color: var(--primary); background: var(--accent); }
 .q-admin-dashboard table thead { position: sticky; top: 0; z-index: 2; backdrop-filter: blur(12px); }
@@ -391,8 +393,14 @@ body > main, .q-stage { min-width: 0; }
 }
 .q-stage, .q-test-screen { padding-left: var(--q-safe-left); padding-right: var(--q-safe-right); }
 @media (display-mode: standalone) {
-  :root { --q-control-safe-bottom: max(8px, calc(var(--q-safe-bottom) - 10px)); }
+  :root {
+    --q-control-safe-bottom: max(8px, calc(var(--q-safe-bottom) - 10px));
+    --q-navigation-safe-bottom: max(8px, calc(var(--q-safe-bottom) - 20px));
+  }
   .q-stage > header, .q-test-screen > header, .q-sidebar, .q-mobile-nav, .q-test-bottom { background-clip: border-box; }
+}
+@media (display-mode: standalone) and (min-width: 768px) and (pointer: coarse) {
+  :root { --q-workspace-safe-bottom: max(0px, calc(var(--q-safe-bottom) - 10px)); }
 }
 .q-stage :where(p, h1, h2, h3, dd), .q-test-screen p { overflow-wrap: anywhere; }
 .q-stage :where(input, textarea, select), [data-slot='dialog-content'] :where(input, textarea, select) { max-width: 100%; }
@@ -432,7 +440,7 @@ body > main, .q-stage { min-width: 0; }
 @media (min-width: 768px) and (max-width: 1023px) { .q-frame > .q-stage { padding-bottom: 0; } }
 /* A single continuous surface extends from the tab controls to the home indicator. */
 @media (max-width: 1023px) {
-  .q-mobile-nav { gap: 4px; padding: 6px max(12px, var(--q-safe-right)) var(--q-control-safe-bottom) max(12px, var(--q-safe-left)); background: var(--card); border-top-color: color-mix(in srgb, var(--border) 55%, transparent); box-shadow: 0 -6px 24px #192a4004; }
+  .q-mobile-nav { gap: 4px; padding: 6px max(12px, var(--q-safe-right)) var(--q-navigation-safe-bottom) max(12px, var(--q-safe-left)); background: var(--card); border-top-color: color-mix(in srgb, var(--border) 55%, transparent); box-shadow: 0 -6px 24px #192a4004; }
   .q-mobile-nav button { flex: 1; min-width: 0; max-width: 160px; min-height: 50px; border-radius: 16px; gap: 3px; padding: 5px 8px; }
   .q-mobile-nav .mobile-start:not([aria-current='page']) { background: transparent; color: var(--study); }
 }
