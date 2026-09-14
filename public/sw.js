@@ -1,4 +1,4 @@
-const CACHE_NAME = 'qraft-shell-v1.0.4';
+const CACHE_NAME = 'qraft-shell-v1.0.5';
 const APP_SHELL = ['/offline', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/icon-maskable-512.png'];
 
 self.addEventListener('install', (event) => {

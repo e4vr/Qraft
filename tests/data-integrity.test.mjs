@@ -52,6 +52,7 @@ void test('PWA shell and Cloudflare persistence configuration are present', asyn
   assert.ok(manifest.icons.some(icon => icon.purpose === 'any' && icon.sizes === '192x192'));
   assert.ok(manifest.icons.some(icon => icon.purpose === 'any' && icon.sizes === '512x512'));
   assert.match(serviceWorker, /CACHE_NAME/);
+  assert.match(serviceWorker, /qraft-shell-v1\.0\.5/);
   assert.match(serviceWorker, /'\/offline'/);
   assert.match(layout, /display-mode: standalone/);
   assert.match(layout, /iPad\|iPhone\|iPod/);

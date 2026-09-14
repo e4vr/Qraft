@@ -312,20 +312,19 @@ button { cursor: pointer; }
 /* The iOS status area and the bottom navigation use the same chrome surface. */
 html, body { background: var(--card); }
 /* The document stays still; each workspace owns its scroll position. */
-html { height: 100%; overflow: hidden; overscroll-behavior: none; }
-body { margin: 0; min-width: 0; height: 100%; box-sizing: border-box; padding-top: var(--q-safe-top); overflow: hidden; overscroll-behavior: none; }
-@supports (height: 100dvh) { body { height: 100dvh; } }
-.q-viewport { position: relative; width: 100%; height: 100%; box-sizing: border-box; min-width: 0; max-width: 100%; background: var(--background); overflow-x: hidden; overflow-y: auto; overscroll-behavior: none; scroll-padding-top: 1rem; scroll-padding-bottom: calc(1rem + var(--q-safe-bottom)); transition: background-color 160ms ease; }
-/* The status bar belongs to the root. Plain pages own their bottom safe area;
-   app and test navigation paint theirs so no unpainted strip can remain. */
+html { width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; }
+body { position: fixed; inset: 0; margin: 0; min-width: 0; width: 100%; height: 100%; box-sizing: border-box; overflow: hidden; overscroll-behavior: none; }
+.q-viewport { position: fixed; inset: 0; box-sizing: border-box; min-width: 0; background: var(--background); overflow-x: hidden; overflow-y: auto; overscroll-behavior: none; scroll-padding-top: calc(1rem + var(--q-safe-top)); scroll-padding-bottom: calc(1rem + var(--q-safe-bottom)); transition: background-color 160ms ease; }
+/* WebKit cannot reserve any outer safe-area strip: each screen paints the full
+   viewport and owns the inset required by its controls. */
 .q-viewport > main { min-height: 100%; }
-.q-viewport > main:not(.q-shell):not(.q-test-screen):not(.q-admin-dashboard) { box-sizing: border-box; padding-right: max(1rem, var(--q-safe-right)); padding-bottom: var(--q-safe-bottom); padding-left: max(1rem, var(--q-safe-left)); }
+.q-viewport > main:not(.q-shell):not(.q-test-screen):not(.q-admin-dashboard) { box-sizing: border-box; padding-top: var(--q-safe-top); padding-right: max(1rem, var(--q-safe-right)); padding-bottom: var(--q-safe-bottom); padding-left: max(1rem, var(--q-safe-left)); }
 @media (max-width: 767px) {
   .q-viewport > main:not(.q-shell):not(.q-test-screen):not(.q-admin-dashboard) { padding-left: var(--q-safe-left); padding-right: var(--q-safe-right); }
 }
 .q-viewport:has(> .q-shell) { overflow-y: hidden; }
 .q-viewport:has(> .q-test-screen) { overflow-y: hidden; }
-.q-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
+.q-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; box-sizing: border-box; padding-top: var(--q-safe-top); background: var(--card); overflow: hidden; }
 .q-frame { flex: 1; min-height: 0; background: var(--background); }
 .q-frame > .q-stage { background: var(--background); padding-bottom: var(--q-safe-bottom); min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; scroll-padding-top: 1rem; scroll-padding-bottom: calc(1rem + var(--q-safe-bottom)); touch-action: pan-x pan-y pinch-zoom; -webkit-overflow-scrolling: touch; }
 .q-frame > .q-stage.q-enter { animation: none; }
@@ -422,7 +421,7 @@ body > main, .q-stage { min-width: 0; }
   .q-stage > header button { white-space: normal; }
 }
 /* Each scrolling surface has one safe-area owner; navigation takes real layout space. */
-.q-test-screen { height: 100%; min-height: 0; overflow: hidden; }
+.q-test-screen { height: 100%; min-height: 0; box-sizing: border-box; padding-top: var(--q-safe-top); overflow: hidden; }
 .q-test-screen > .q-test-body { min-height: 0; overflow-y: auto; touch-action: pan-y pinch-zoom; -webkit-overflow-scrolling: touch; }
 @keyframes q-question-drawer-in { from { opacity: .72; transform: translateX(-18px); } to { opacity: 1; transform: translateX(0); } }
 .q-question-drawer { width: min(84vw, 420px); max-width: calc(100vw - var(--q-safe-left) - 48px); height: 100%; overflow: hidden; padding-top: max(20px, var(--q-safe-top)); padding-bottom: max(12px, var(--q-safe-bottom)); padding-left: var(--q-safe-left); border-radius: 0 24px 24px 0; animation: q-question-drawer-in 180ms ease-out both; }

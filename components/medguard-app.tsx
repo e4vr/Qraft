@@ -5708,7 +5708,10 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
 
   useEffect(() => {
     if ('serviceWorker' in navigator)
-      navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((registration) => registration.update())
+        .catch(() => undefined);
     const openMenu = () => setMobileOpen(true);
     window.addEventListener('medguard-open-menu', openMenu);
     const handleOnline = () => {
