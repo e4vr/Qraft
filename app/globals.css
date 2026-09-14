@@ -395,12 +395,12 @@ body > main, .q-stage { min-width: 0; }
 @media (display-mode: standalone) {
   :root {
     --q-control-safe-bottom: max(8px, calc(var(--q-safe-bottom) - 10px));
-    --q-navigation-safe-bottom: max(8px, calc(var(--q-safe-bottom) - 20px));
+    --q-navigation-safe-bottom: max(0px, calc(var(--q-safe-bottom) - 45px));
   }
   .q-stage > header, .q-test-screen > header, .q-sidebar, .q-mobile-nav, .q-test-bottom { background-clip: border-box; }
 }
 @media (display-mode: standalone) and (min-width: 768px) and (pointer: coarse) {
-  :root { --q-workspace-safe-bottom: max(0px, calc(var(--q-safe-bottom) - 10px)); }
+  :root { --q-workspace-safe-bottom: max(0px, calc(var(--q-safe-bottom) - 35px)); }
 }
 .q-stage :where(p, h1, h2, h3, dd), .q-test-screen p { overflow-wrap: anywhere; }
 .q-stage :where(input, textarea, select), [data-slot='dialog-content'] :where(input, textarea, select) { max-width: 100%; }

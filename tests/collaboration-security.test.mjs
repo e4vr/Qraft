@@ -659,12 +659,12 @@ void test('touch input uses one event path, forgiving targets, and touch-safe sc
   );
   assert.match(
     styles,
-    /display-mode: standalone[\s\S]*--q-navigation-safe-bottom: max\(8px, calc\(var\(--q-safe-bottom\) - 20px\)\)/,
+    /display-mode: standalone[\s\S]*--q-navigation-safe-bottom: max\(0px, calc\(var\(--q-safe-bottom\) - 45px\)\)/,
   );
   assert.match(styles, /\.q-mobile-nav \{[^}]*var\(--q-navigation-safe-bottom\)/);
   assert.match(
     styles,
-    /display-mode: standalone\) and \(min-width: 768px\) and \(pointer: coarse\)[\s\S]*--q-workspace-safe-bottom: max\(0px, calc\(var\(--q-safe-bottom\) - 10px\)\)/,
+    /display-mode: standalone\) and \(min-width: 768px\) and \(pointer: coarse\)[\s\S]*--q-workspace-safe-bottom: max\(0px, calc\(var\(--q-safe-bottom\) - 35px\)\)/,
   );
   assert.doesNotMatch(app, /env\(safe-area-inset-/);
   assert.match(styles, /\.q-safe-fullscreen/);
