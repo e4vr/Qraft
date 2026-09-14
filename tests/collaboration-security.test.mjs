@@ -136,7 +136,11 @@ void test('private banks, per-bank roles, and owner boundaries are enforced', as
     types,
     /type AccountTier = 'free' \| 'lite' \| 'pro' \| 'unlimited'/,
   );
-  assert.match(types, /type BankRole = 'owner' \| 'reviewer' \| 'viewer'/);
+  assert.match(
+    types,
+    /type BankRole = 'owner' \| 'editor' \| 'reviewer' \| 'viewer'/,
+  );
+  assert.match(types, /function canEditBank/);
   assert.match(server, /canAccessBank\(user, existing/);
   assert.match(server, /value\.ownerId === user\.uid/);
   assert.match(server, /operation\.collection === 'qbankShareLinks'/);
@@ -357,6 +361,35 @@ void test('QBank owners can manage access, links, questions, and deletion', asyn
   assert.match(cloud, /deleteQBankImages/);
 });
 
+void test('QBank editors can edit content but owner-only controls stay protected', async () => {
+  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  const server = await readFile(
+    new URL('lib/cloudflare-server.ts', root),
+    'utf8',
+  );
+  const platform = await readFile(
+    new URL('lib/platform-server.ts', root),
+    'utf8',
+  );
+  const manager = await readFile(
+    new URL('components/qbank-management.tsx', root),
+    'utf8',
+  );
+  const workspace = await readFile(
+    new URL('components/qbank-workspace.tsx', root),
+    'utf8',
+  );
+  assert.match(types, /bankRoleFor\(user, bank, memberships\) === 'editor'/);
+  assert.match(types, /bankRole === 'editor'/);
+  assert.match(server, /operation\.type === 'delete'\) return canManage/);
+  assert.match(server, /qbankSpecialties'[\s\S]*return canEdit/);
+  assert.match(platform, /canEditBank\(user, bank, state\.memberships\)/);
+  assert.match(workspace, /<option value="editor">Editor<\/option>/);
+  assert.match(manager, /bankRole === 'editor' \? 'EDITOR' : 'OWNER'/);
+  assert.match(manager, /section === 'settings' && canManageAccess/);
+  assert.match(manager, /deleteOpen && canManageAccess/);
+});
+
 void test('Question IDs are reserved atomically and released only by hard deletion', async () => {
   const server = await readFile(
     new URL('lib/cloudflare-server.ts', root),
@@ -566,7 +599,7 @@ void test('Essential QBanks are managed only by Superadmin while other users sub
   assert.match(types, /function canManageBank/);
   assert.match(workspace, /Check to make it an Essential QBank/);
   assert.match(manager, /ESSENTIAL · SUPERADMIN/);
-  assert.match(app, /canManageBank\(user, qbank\)/);
+  assert.match(app, /canEditBank\(user, qbank, collaboration\.memberships\)/);
   assert.match(server, /value\.essential !== true \|\| isRoot/);
   assert.match(server, /value\.essential === existing\.essential/);
 });
@@ -644,6 +677,7 @@ void test('touch input uses one event path, forgiving targets, and touch-safe sc
   assert.match(styles, /:not\(\.q-compact-touch\)[^{]*\{[\s\S]*?min-width: 44px;/);
   assert.match(styles, /min-height: 44px;/);
   assert.match(styles, /touch-action: pan-y pinch-zoom;/);
+  assert.match(styles, /\.q-ios-pwa, \.q-ios-pwa body, \.q-ios-pwa \.q-viewport \{ touch-action: pan-x pan-y !important; \}/);
   assert.match(styles, /q-viewport:has\(> \.q-shell\).*overflow-y: hidden/);
   assert.match(styles, /--q-safe-top: env\(safe-area-inset-top, 0px\)/);
   assert.match(styles, /html, body \{ background: var\(--card\); \}/);
@@ -664,7 +698,11 @@ void test('touch input uses one event path, forgiving targets, and touch-safe sc
   assert.match(styles, /\.q-mobile-nav \{[^}]*var\(--q-navigation-safe-bottom\)/);
   assert.match(
     styles,
-    /display-mode: standalone\) and \(min-width: 768px\) and \(pointer: coarse\)[\s\S]*--q-workspace-safe-bottom: max\(0px, calc\(var\(--q-safe-bottom\) - 35px\)\)/,
+    /display-mode: standalone\) and \(max-width: 767px\) and \(pointer: coarse\)[\s\S]*--q-navigation-safe-bottom: max\(0px, calc\(var\(--q-safe-bottom\) - 65px\)\)/,
+  );
+  assert.match(
+    styles,
+    /display-mode: standalone\) and \(min-width: 768px\) and \(pointer: coarse\)[\s\S]*--q-workspace-safe-bottom: max\(0px, calc\(var\(--q-safe-bottom\) - 70px\)\)/,
   );
   assert.doesNotMatch(app, /env\(safe-area-inset-/);
   assert.match(styles, /\.q-safe-fullscreen/);

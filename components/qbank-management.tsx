@@ -12,7 +12,7 @@ import { ReviewerSearch } from '@/components/reviewer-search';
 import { WorkspaceHeader } from '@/components/workspace-header';
 import { api } from '@/lib/api-client';
 import { deleteQBankImages, uploadQuestionImage } from '@/lib/application-services';
-import { canManageBank, optionLabel, type AppUser, type CollaborationState, type NoteImage, type QBank, type Question, type QBankVisibility } from '@/lib/medguard-types';
+import { bankRoleFor, canEditBank, canManageBank, optionLabel, type AppUser, type CollaborationState, type NoteImage, type QBank, type Question, type QBankVisibility } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
 import { hasFeature } from '@/lib/plan-config';
 import { openUpgrade } from '@/components/subscription-workspace';
@@ -101,6 +101,10 @@ export function QBankManagement({
   const plan = user.effectivePlan ?? user.tier;
   const canAddQuestions = hasFeature(plan, 'addQuestions');
   const canImport = hasFeature(plan, 'jsonImport');
+  const canManageAccess = Boolean(bank && canManageBank(user, bank));
+  const bankRole = bank
+    ? bankRoleFor(user, bank, collaboration.memberships)
+    : undefined;
   const filteredQuestions = useMemo(() => {
     const raw = search.trim().replace(/^#/, '').toLowerCase();
     const padded = /^\d+$/.test(raw) ? raw.padStart(5, '0') : raw;
@@ -111,12 +115,12 @@ export function QBankManagement({
     );
   }, [questions, search, specialtyFilter, topicFilter]);
 
-  if (!bank || !canManageBank(user, bank))
+  if (!bank || !canEditBank(user, bank, collaboration.memberships))
     return (
       <main className="grid min-h-screen place-items-center p-6">
         <div className="text-center">
           <h1 className="text-xl font-bold">QBank management is unavailable</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Only the Bank Owner, or Superadmin for an Essential QBank, can manage this workspace.</p>
+          <p className="mt-2 text-sm text-muted-foreground">QBank Owner or Editor access is required for this workspace.</p>
           <button onClick={onBack} className="mt-5 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground">
             Return to My QBanks
           </button>
@@ -164,6 +168,7 @@ export function QBankManagement({
   }
 
   function rotateLink() {
+    if (!canManageAccess) return;
     updateBank((current) => ({
       ...current,
       shareEnabled: true,
@@ -173,6 +178,7 @@ export function QBankManagement({
   }
 
   function removeMember(memberId: string) {
+    if (!canManageAccess) return;
     const member = collaboration.memberships.find((item) => item.id === memberId);
     update((current) => ({
       ...current,
@@ -190,6 +196,7 @@ export function QBankManagement({
   }
 
   async function deleteBank() {
+    if (!canManageAccess) return;
     setBusy(true);
     setError('');
     try {
@@ -431,7 +438,7 @@ export function QBankManagement({
         leading={<button onClick={leaveManagement} className="q-icon" aria-label="Back to My QBanks">
             <ArrowLeft className="size-5" />
           </button>}
-        actions={<span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">{bank.essential ? 'ESSENTIAL · SUPERADMIN' : 'OWNER'}</span>}
+        actions={<span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">{bank.essential ? 'ESSENTIAL · SUPERADMIN' : bankRole === 'editor' ? 'EDITOR' : 'OWNER'}</span>}
       />
       <div className="mx-auto max-w-[1180px] p-4 sm:p-7">
         <nav className="mb-6 flex gap-2 overflow-x-auto" aria-label="QBank management sections">
@@ -462,7 +469,7 @@ export function QBankManagement({
           </p>
         )}
 
-        {section === 'settings' && <div className="mb-4 rounded-xl border bg-card p-4"><h2 className="mb-3 font-bold">Add Reviewer</h2><ReviewerSearch bankId={bankId} onAdded={membership=>confirmUpdate(current=>({...current,memberships:[membership,...current.memberships.filter(m=>!(m.qbankId===bankId&&m.userId===membership.userId))]}))} /></div>}
+        {section === 'settings' && canManageAccess && <div className="mb-4 rounded-xl border bg-card p-4"><h2 className="mb-3 font-bold">Add Reviewer</h2><ReviewerSearch bankId={bankId} onAdded={membership=>confirmUpdate(current=>({...current,memberships:[membership,...current.memberships.filter(m=>!(m.qbankId===bankId&&m.userId===membership.userId))]}))} /></div>}
         {section === 'settings' && (
           <div className="grid gap-5 lg:grid-cols-[1fr_0.85fr]">
             <form onSubmit={saveProperties} className="rounded-2xl bg-card p-6 ring-1 ring-border">
@@ -503,7 +510,7 @@ export function QBankManagement({
               </div>
             </form>
             <div className="space-y-5">
-              <section className="rounded-2xl bg-card p-6 ring-1 ring-border">
+              {canManageAccess && <section className="rounded-2xl bg-card p-6 ring-1 ring-border">
                 <h2 className="flex items-center gap-2 text-lg font-bold">
                   <Link2 className="size-5 text-primary" />
                   Access link
@@ -537,21 +544,26 @@ export function QBankManagement({
                     </button>
                   )}
                 </div>
-              </section>
-              <section className="rounded-2xl border border-red-200 bg-red-50/60 p-6 dark:border-red-500/25 dark:bg-red-500/5">
+              </section>}
+              {canManageAccess && <section className="rounded-2xl border border-red-200 bg-red-50/60 p-6 dark:border-red-500/25 dark:bg-red-500/5">
                 <h2 className="font-bold text-red-700 dark:text-red-300">Delete QBank</h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">Deletes the bank, its questions, invitations, access grants, statistics, and shared notes. Question IDs are never reused.</p>
                 <button onClick={() => setDeleteOpen(true)} className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl bg-red-600 px-4 text-sm font-bold text-white">
                   <Trash2 className="size-4" />
                   Delete QBank
                 </button>
-              </section>
+              </section>}
             </div>
             <section className="rounded-2xl bg-card p-6 ring-1 ring-border lg:col-span-2">
               <h2 className="flex items-center gap-2 text-lg font-bold">
                 <Users className="size-5 text-primary" />
                 Granted access
               </h2>
+              {!canManageAccess && (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Only the QBank Owner can add or remove users.
+                </p>
+              )}
               {members.length ? (
                 <div className="mt-4 divide-y rounded-xl border">
                   {members.map((member) => (
@@ -561,10 +573,12 @@ export function QBankManagement({
                         <strong className="block truncate text-sm">{member.userName}</strong>
                         <span className="text-xs uppercase text-muted-foreground">{member.role}</span>
                       </div>
-                      <button onClick={() => removeMember(member.id)} className="inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-sm font-bold text-red-600 dark:text-red-300">
-                        <X className="size-4" />
-                        Revoke access
-                      </button>
+                      {canManageAccess && (
+                        <button onClick={() => removeMember(member.id)} className="inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-sm font-bold text-red-600 dark:text-red-300">
+                          <X className="size-4" />
+                          Revoke access
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -849,7 +863,7 @@ export function QBankManagement({
           </form>
         </div>
       )}
-      {deleteOpen && (
+      {deleteOpen && canManageAccess && (
         <div className="q-safe-overlay fixed inset-0 z-[60] grid place-items-center bg-slate-950/60 p-4">
           <section role="alertdialog" aria-modal="true" aria-labelledby="delete-bank-title" className="q-confirm-dialog w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl sm:p-6">
             <h2 id="delete-bank-title" className="text-xl font-bold">

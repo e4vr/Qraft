@@ -12,6 +12,7 @@ import {
 } from './storage-service';
 import {
   canAccessBank,
+  canEditBank,
   canManageBank,
   canReviewBank,
   hasAccessManagerRole,
@@ -19,6 +20,7 @@ import {
   initialAppState,
   initialCollaborationState,
   isPlatformRole,
+  isBankMembershipRole,
   normalizeCollaborationState,
   normalizeAppState,
   normalizeEmail,
@@ -1560,6 +1562,25 @@ export async function loadCollaboration(request: Request) {
     'qbankMemberships',
   ]);
   const catalog = recordsToState(catalogRows);
+  const invitedRowsResult = await env.DB.prepare(
+    "SELECT type,id,payload FROM records INDEXED BY idx_records_type_email WHERE type='qbankInvitations' AND email=?",
+  )
+    .bind(user.email)
+    .all<StoredRecord>();
+  const invitedRows = invitedRowsResult.results.map((row) => ({
+    collection: row.type,
+    id: row.id,
+    value: JSON.parse(row.payload) as unknown,
+  }));
+  const invitedBankIds = new Set(
+    invitedRows
+      .map((row) =>
+        isRecord(row.value) && typeof row.value.qbankId === 'string'
+          ? row.value.qbankId
+          : '',
+      )
+      .filter(Boolean),
+  );
   const allowedBankIds = new Set(
     catalog.qbanks
       .filter(
@@ -1571,24 +1592,31 @@ export async function loadCollaboration(request: Request) {
       .map((bank) => bank.id),
   );
   allowedBankIds.add('smle-gs');
+  const scopedRows = await scopedRecordsByTypes(allowedBankIds, [
+    'qbankMemberships',
+    'qbankInvitations',
+    'universityIds',
+    'adminInvites',
+    'questionProposals',
+    'roleApplications',
+    'sharedQuestions',
+    'qbankSpecialties',
+    'qbankTopics',
+    'answerStats',
+    'sharedNotes',
+    'system',
+  ]);
+  const scopedKeys = new Set(
+    scopedRows.map((row) => `${row.collection}\0${row.id}`),
+  );
   const rows = [
     ...catalogRows.filter(
       (row) => row.collection === 'qbanks' || row.collection === 'qbankFolders',
     ),
-    ...(await scopedRecordsByTypes(allowedBankIds, [
-      'qbankMemberships',
-      'qbankInvitations',
-      'universityIds',
-      'adminInvites',
-      'questionProposals',
-      'roleApplications',
-      'sharedQuestions',
-      'qbankSpecialties',
-      'qbankTopics',
-      'answerStats',
-      'sharedNotes',
-      'system',
-    ])),
+    ...scopedRows,
+    ...invitedRows.filter(
+      (row) => !scopedKeys.has(`${row.collection}\0${row.id}`),
+    ),
   ];
   const profileResult =
     hasAccessManagerRole(user)
@@ -1624,11 +1652,19 @@ export async function loadCollaboration(request: Request) {
       .filter((bank) => canManageBank(user, bank))
       .map((bank) => bank.id),
   );
+  const editIds = new Set(
+    state.qbanks
+      .filter((bank) => canEditBank(user, bank, state.memberships))
+      .map((bank) => bank.id),
+  );
   state.qbanks = state.qbanks.filter(
-    (bank) => accessibleIds.has(bank.id) || reviewIds.has(bank.id),
+    (bank) =>
+      accessibleIds.has(bank.id) ||
+      reviewIds.has(bank.id) ||
+      invitedBankIds.has(bank.id),
   );
   state.memberships = state.memberships.filter(
-    (item) => item.userId === user.uid || manageIds.has(item.qbankId),
+    (item) => item.userId === user.uid || editIds.has(item.qbankId),
   );
   state.invitations = state.invitations.filter(
     (item) =>
@@ -2030,6 +2066,9 @@ function recordAllowed(
   const canManage = existing
     ? isRoot || canManageBank(user, existing)
     : false;
+  const canEdit = existing
+    ? isRoot || canEditBank(user, existing, state.memberships)
+    : false;
   const canReview = existing
     ? canReviewBank(user, existing, state.memberships)
     : false;
@@ -2046,13 +2085,26 @@ function recordAllowed(
         (isRoot || value.folderId === undefined) &&
         (value.essential !== true || isRoot)
       );
-    if (!existing || !canManage) return false;
-    if (operation.type === 'delete') return true;
+    if (!existing) return false;
+    if (operation.type === 'delete') return canManage;
+    if (!canEdit) return false;
+    const editorFieldsStayImmutable =
+      canManage ||
+      (value.id === existing.id &&
+        value.createdAt === existing.createdAt &&
+        value.createdById === existing.createdById &&
+        value.createdByName === existing.createdByName &&
+        value.ownerName === existing.ownerName &&
+        value.shareEnabled === existing.shareEnabled &&
+        value.shareToken === existing.shareToken &&
+        sameJson(value.reviewerIds, existing.reviewerIds) &&
+        sameJson(value.viewerIds, existing.viewerIds));
     return (
-      isRoot ||
-      (value.ownerId === existing.ownerId &&
+      editorFieldsStayImmutable &&
+      (isRoot ||
+        (value.ownerId === existing.ownerId &&
         value.essential === existing.essential &&
-        value.folderId === existing.folderId)
+        value.folderId === existing.folderId))
     );
   }
   if (operation.collection === 'qbankFolders') {
@@ -2069,13 +2121,19 @@ function recordAllowed(
   }
   if (operation.collection === 'qbankMemberships')
     return (
-      canManage || selfMembershipChangeAllowed(user, operation, value, state)
+      (operation.type === 'set' && !isBankMembershipRole(value.role))
+        ? false
+        : canManage || selfMembershipChangeAllowed(user, operation, value, state)
     );
   if (operation.collection === 'qbankInvitations')
-    return canManage || invitedUserChangeAllowed(user, operation, value, state);
+    return (
+      (operation.type === 'set' && !isBankMembershipRole(value.role))
+        ? false
+        : canManage || invitedUserChangeAllowed(user, operation, value, state)
+    );
   if (operation.collection === 'qbankShareLinks') return canManage;
   if (operation.collection === 'qbankSpecialties' || operation.collection === 'qbankTopics')
-    return canManage;
+    return canEdit;
   if (operation.collection === 'questionProposals')
     return (
       (canAccess || canReview) &&
@@ -2086,7 +2144,7 @@ function recordAllowed(
       proposalChangeAllowed(user, operation, value, state, canReview)
     );
   if (operation.collection === 'sharedQuestions')
-    return operation.type === 'delete' ? canManage : canReview;
+    return operation.type === 'delete' ? canEdit : canReview;
   if (operation.collection === 'answerStats')
     return operation.type === 'delete'
       ? canManage

@@ -113,6 +113,7 @@ print(json.dumps(out))`,
     'moderator',
     'reviewer',
     'reviewer2',
+    'editor',
     'access',
     'manual-member',
     'paid-member',
@@ -904,6 +905,272 @@ print(json.dumps(out))`,
       );
       assert.equal(savedMember.tier, 'lite');
       assert.deepEqual(savedMember.platformRoles, ['reviewer']);
+    },
+  );
+  await t.test(
+    'QBank editors can edit settings and questions while membership and deletion stay owner-only',
+    async () => {
+      const now = new Date().toISOString();
+      const bank = {
+        id: 'editor-bank',
+        name: 'Editor fixture',
+        shortName: 'EDITOR',
+        description: 'Before editor update',
+        createdAt: now,
+        createdById: 'lite',
+        createdByName: 'lite',
+        archived: false,
+        essential: false,
+        ownerId: 'lite',
+        ownerName: 'lite',
+        visibility: 'private',
+        shareEnabled: false,
+        reviewerIds: [],
+        viewerIds: ['other'],
+      };
+      const editorMembership = {
+        id: 'editor-bank-editor',
+        qbankId: bank.id,
+        userId: 'editor',
+        userName: 'editor',
+        role: 'editor',
+        grantedById: 'lite',
+        grantedByName: 'lite',
+        createdAt: now,
+      };
+      const viewerMembership = {
+        id: 'editor-bank-viewer',
+        qbankId: bank.id,
+        userId: 'other',
+        userName: 'other',
+        role: 'viewer',
+        grantedById: 'lite',
+        grantedByName: 'lite',
+        createdAt: now,
+      };
+      for (const [type, id, ownerId, value] of [
+        ['qbanks', bank.id, 'lite', bank],
+        ['qbankMemberships', editorMembership.id, 'editor', editorMembership],
+        ['qbankMemberships', viewerMembership.id, 'other', viewerMembership],
+      ]) {
+        await db
+          .prepare(
+            'INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES(?,?,?,?,?,?)',
+          )
+          .bind(type, id, bank.id, ownerId, JSON.stringify(value), now)
+          .run();
+      }
+
+      const invitation = {
+        id: 'editor-bank-invite',
+        qbankId: bank.id,
+        email: 'manual-member@example.test',
+        role: 'editor',
+        invitedById: 'lite',
+        invitedByName: 'lite',
+        createdAt: now,
+        status: 'pending',
+      };
+      assert.equal(
+        (
+          await call(
+            'lite',
+            '/collaboration',
+            {
+              operations: [
+                {
+                  collection: 'qbankInvitations',
+                  id: invitation.id,
+                  type: 'set',
+                  value: invitation,
+                },
+              ],
+            },
+            'PUT',
+          )
+        ).status,
+        200,
+      );
+      const receivedInvitation = await call('manual-member', '/collaboration');
+      assert.equal(receivedInvitation.status, 200);
+      assert.ok(
+        receivedInvitation.data.collaboration.qbanks.some(
+          (item) => item.id === bank.id,
+        ),
+      );
+      assert.equal(
+        receivedInvitation.data.collaboration.invitations.find(
+          (item) => item.id === invitation.id,
+        )?.role,
+        'editor',
+      );
+      const acceptedAt = new Date().toISOString();
+      assert.equal(
+        (
+          await call(
+            'manual-member',
+            '/collaboration',
+            {
+              operations: [
+                {
+                  collection: 'qbankInvitations',
+                  id: invitation.id,
+                  type: 'set',
+                  value: {
+                    ...invitation,
+                    status: 'accepted',
+                    acceptedById: 'manual-member',
+                    acceptedAt,
+                  },
+                },
+                {
+                  collection: 'qbankMemberships',
+                  id: `${bank.id}_manual-member`,
+                  type: 'set',
+                  value: {
+                    id: `${bank.id}_manual-member`,
+                    qbankId: bank.id,
+                    userId: 'manual-member',
+                    userName: 'manual-member',
+                    role: 'editor',
+                    grantedById: 'lite',
+                    grantedByName: 'lite',
+                    createdAt: acceptedAt,
+                    inviteId: invitation.id,
+                  },
+                },
+              ],
+            },
+            'PUT',
+          )
+        ).status,
+        200,
+      );
+
+      const loaded = await call('editor', '/collaboration');
+      assert.equal(loaded.status, 200);
+      assert.equal(
+        loaded.data.collaboration.qbanks.find((item) => item.id === bank.id)?.name,
+        bank.name,
+      );
+      assert.ok(
+        loaded.data.collaboration.memberships.some(
+          (item) => item.id === viewerMembership.id,
+        ),
+      );
+
+      const update = await call(
+        'editor',
+        '/collaboration',
+        {
+          operations: [
+            {
+              collection: 'qbanks',
+              id: bank.id,
+              type: 'set',
+              value: { ...bank, description: 'Updated by editor' },
+            },
+          ],
+        },
+        'PUT',
+      );
+      assert.equal(update.status, 200, JSON.stringify(update.data));
+
+      const reserved = await call('editor', '/ids/reserve', {
+        count: 1,
+        qbankId: bank.id,
+        highestKnown: 0,
+      });
+      assert.equal(reserved.status, 200, JSON.stringify(reserved.data));
+
+      const classification = await call(
+        'editor',
+        '/platform/classification',
+        {
+          qbankId: bank.id,
+          operationId: randomUUID(),
+          baseRevision: 0,
+          specialties: [],
+          topics: [],
+          assignments: [],
+        },
+        'PUT',
+      );
+      assert.equal(classification.status, 200, JSON.stringify(classification.data));
+
+      assert.equal(
+        (
+          await call(
+            'editor',
+            '/collaboration',
+            {
+              operations: [
+                {
+                  collection: 'qbankMemberships',
+                  id: viewerMembership.id,
+                  type: 'delete',
+                },
+              ],
+            },
+            'PUT',
+          )
+        ).status,
+        403,
+      );
+      assert.equal(
+        (
+          await call(
+            'editor',
+            '/collaboration',
+            {
+              operations: [
+                { collection: 'qbanks', id: bank.id, type: 'delete' },
+              ],
+            },
+            'PUT',
+          )
+        ).status,
+        403,
+      );
+      assert.equal(
+        (
+          await call(
+            'lite',
+            '/collaboration',
+            {
+              operations: [
+                {
+                  collection: 'qbankMemberships',
+                  id: 'invalid-owner-membership',
+                  type: 'set',
+                  value: { ...viewerMembership, id: 'invalid-owner-membership', role: 'owner' },
+                },
+              ],
+            },
+            'PUT',
+          )
+        ).status,
+        403,
+      );
+      assert.equal(
+        (
+          await call(
+            'lite',
+            '/collaboration',
+            {
+              operations: [
+                {
+                  collection: 'qbankMemberships',
+                  id: viewerMembership.id,
+                  type: 'delete',
+                },
+              ],
+            },
+            'PUT',
+          )
+        ).status,
+        200,
+      );
     },
   );
   await t.test(

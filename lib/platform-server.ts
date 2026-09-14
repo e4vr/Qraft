@@ -11,6 +11,7 @@ import {
 } from './cloudflare-server';
 import {
   canAccessBank,
+  canEditBank,
   canManageBank,
   canReviewBank,
   optionLabel,
@@ -329,8 +330,8 @@ export async function platformApi(request: Request, action: string) {
       ) return json({ error: 'Invalid classification change set.' }, 400);
       const state = await bankAccessState(qbankId);
       const bank = state.qbanks.find((item) => item.id === qbankId);
-      if (!bank || !canManageBank(user, bank))
-        return json({ error: 'Only the QBank owner can change its classification structure.' }, 403);
+      if (!bank || !canEditBank(user, bank, state.memberships))
+        return json({ error: 'QBank editing access is required to change its classification structure.' }, 403);
       if (bank.essential && user.role !== 'super_admin')
         return json({ error: 'Only Superadmin can change an Essential QBank structure.' }, 403);
 
@@ -1577,8 +1578,8 @@ export async function platformApi(request: Request, action: string) {
       )
         return json({ error: 'Question not found' }, 404);
       if (request.method === 'DELETE') {
-        if (!canManageBank(user, bank))
-          return json({ error: 'Bank manager required.' }, 403);
+        if (!canEditBank(user, bank, state.memberships))
+          return json({ error: 'QBank editing access required.' }, 403);
         await env.DB.batch([
           env.DB.prepare(
             "DELETE FROM records WHERE type='sharedQuestions' AND id=?",

@@ -134,7 +134,7 @@ import {
   normalizeCollaborationState,
   normalizeAppState,
   canAccessBank,
-  canManageBank,
+  canEditBank,
   canReviewBank,
   optionLabel,
   type AppState,
@@ -4916,7 +4916,9 @@ function QuestionManager({
     setContributionDeleteMode(undefined);
   }
   const qbank = collaboration.qbanks.find((item) => item.id === activeQBankId);
-  const isOwner = Boolean(qbank && canManageBank(user, qbank));
+  const isOwner = Boolean(
+    qbank && canEditBank(user, qbank, collaboration.memberships),
+  );
   if (open)
     return (
       <>

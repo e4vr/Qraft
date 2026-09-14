@@ -332,6 +332,9 @@ body { position: fixed; inset: 0; margin: 0; min-width: 0; width: 100%; height: 
 .q-frame > .q-stage.q-enter { animation: none; }
 .q-viewport :where(button, a, input, select, textarea, [role='button']) { touch-action: manipulation; }
 .q-viewport :where(button, a, [role='button']):focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+/* iOS may ignore viewport zoom limits in an installed PWA. The root gesture
+   policy wins over descendant scroll areas that normally permit pinch zoom. */
+.q-ios-pwa, .q-ios-pwa body, .q-ios-pwa .q-viewport { touch-action: pan-x pan-y !important; }
 @media (max-width: 1023px) {
   .q-shell[data-navigation-open='true'] .q-stage { overflow: hidden; }
   .q-sidebar button, .q-test-bottom button { min-height: 44px; }
@@ -399,8 +402,11 @@ body > main, .q-stage { min-width: 0; }
   }
   .q-stage > header, .q-test-screen > header, .q-sidebar, .q-mobile-nav, .q-test-bottom { background-clip: border-box; }
 }
+@media (display-mode: standalone) and (max-width: 767px) and (pointer: coarse) {
+  :root { --q-navigation-safe-bottom: max(0px, calc(var(--q-safe-bottom) - 65px)); }
+}
 @media (display-mode: standalone) and (min-width: 768px) and (pointer: coarse) {
-  :root { --q-workspace-safe-bottom: max(0px, calc(var(--q-safe-bottom) - 35px)); }
+  :root { --q-workspace-safe-bottom: max(0px, calc(var(--q-safe-bottom) - 70px)); }
 }
 .q-stage :where(p, h1, h2, h3, dd), .q-test-screen p { overflow-wrap: anywhere; }
 .q-stage :where(input, textarea, select), [data-slot='dialog-content'] :where(input, textarea, select) { max-width: 100%; }

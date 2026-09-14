@@ -365,7 +365,8 @@ export async function saveCollaborationState(next: CollaborationState, previous:
   collect('qbanks', next.qbanks, previous.qbanks, (item) => item.id, true);
   collect('qbankFolders', next.qbankFolders, previous.qbankFolders, (item) => item.id, true);
   changed(next.qbanks, previous.qbanks, (item) => item.id).forEach((bank) => {
-    if (bank.shareToken) writes.push({ collection: 'qbankShareLinks', id: bank.shareToken, value: { id: bank.shareToken, qbankId: bank.id, bankName: bank.name, description: bank.description, ownerId: bank.ownerId, ownerName: bank.ownerName, enabled: bank.shareEnabled, updatedAt: new Date().toISOString() }, type: 'set' });
+    const oldBank = previous.qbanks.find((item) => item.id === bank.id);
+    if (bank.shareToken && (!oldBank || oldBank.shareToken !== bank.shareToken || oldBank.shareEnabled !== bank.shareEnabled)) writes.push({ collection: 'qbankShareLinks', id: bank.shareToken, value: { id: bank.shareToken, qbankId: bank.id, bankName: bank.name, description: bank.description, ownerId: bank.ownerId, ownerName: bank.ownerName, enabled: bank.shareEnabled, updatedAt: new Date().toISOString() }, type: 'set' });
   });
   previous.qbanks.forEach((oldBank) => {
     const nextBank = next.qbanks.find((item) => item.id === oldBank.id);

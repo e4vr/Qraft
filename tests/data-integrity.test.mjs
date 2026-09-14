@@ -58,6 +58,10 @@ void test('PWA shell and Cloudflare persistence configuration are present', asyn
   assert.match(layout, /iPad\|iPhone\|iPod/);
   assert.match(layout, /user-scalable=no/);
   assert.match(layout, /gesturestart/);
+  assert.match(layout, /classList\.add\('q-ios-pwa'\)/);
+  assert.match(layout, /new MutationObserver\(lockViewport\)/);
+  assert.match(layout, /\['touchstart','touchmove'\]/);
+  assert.match(layout, /event\.ctrlKey/);
   assert.match(wrangler, /"binding": "DB"/);
   assert.doesNotMatch(wrangler, /"binding": "MEDIA"/);
   assert.match(schema, /sqliteTable\(\s*'profiles'/);

@@ -33,6 +33,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   bankRoleFor,
   canAccessBank,
+  canEditBank,
   canManageBank,
   type AppUser,
   type BankRole,
@@ -485,7 +486,11 @@ export function QBankWorkspace({
                 >
                   <span className="flex-1 text-sm">
                     <strong>{inviteItem.invitedByName}</strong> invited you as{' '}
-                    {inviteItem.role}.
+                    {inviteItem.role === 'editor'
+                      ? 'Editor'
+                      : inviteItem.role === 'reviewer'
+                        ? 'Reviewer'
+                        : 'Viewer'}.
                   </span>
                   <button
                     onClick={() => acceptInvite(inviteItem.id)}
@@ -718,7 +723,11 @@ export function QBankWorkspace({
                       collaboration.memberships,
                     );
                     const questions = questionCounts.get(bank.id) ?? 0;
-                    const managed = canManageBank(user, bank);
+                    const editable = canEditBank(
+                      user,
+                      bank,
+                      collaboration.memberships,
+                    );
                     const isOwner = bank.ownerId === user.uid;
                     const favorite = organization.favoriteIds.includes(bank.id);
                     const pinned = organization.pinnedIds.includes(bank.id);
@@ -787,7 +796,11 @@ export function QBankWorkspace({
                               )}
                               {!isOwner && role && (
                                 <span className="rounded-full bg-muted px-2 py-1 text-xs font-bold">
-                                  {role}
+                                  {role === 'editor'
+                                    ? 'Editor'
+                                    : role === 'reviewer'
+                                      ? 'Reviewer'
+                                      : 'Viewer'}
                                 </span>
                               )}
                               {pinned && (
@@ -866,7 +879,7 @@ export function QBankWorkspace({
                               className={cx('size-4', pinned && 'fill-current')}
                             />
                           </button>
-                          {managed && (
+                          {editable && (
                             <button
                               onClick={() => onManageBank(bank.id, 'settings')}
                               className="q-button q-button-secondary"
@@ -875,7 +888,7 @@ export function QBankWorkspace({
                               Manage
                             </button>
                           )}
-                          {managed && (
+                          {editable && (
                             <button
                               onClick={() => onManageBank(bank.id, 'questions')}
                               className="q-button q-button-secondary"
@@ -901,8 +914,8 @@ export function QBankWorkspace({
               <h2 className="font-bold">Invite a specific user</h2>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Invite by account email and assign Viewer or Reviewer access for
-              one bank.
+              Invite by account email and assign Viewer, Reviewer, or Editor
+              access for one bank.
             </p>
             <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1.2fr_150px_auto]">
               <select
@@ -961,6 +974,7 @@ export function QBankWorkspace({
               >
                 <option value="viewer">Viewer</option>
                 <option value="reviewer">Reviewer</option>
+                <option value="editor">Editor</option>
               </select>
               <button
                 onClick={invite}

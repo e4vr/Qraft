@@ -13,7 +13,7 @@ export type UserRole =
   | 'student';
 export type AccountTier = 'free' | 'lite' | 'pro' | 'unlimited';
 export type PlatformRole = 'moderator' | 'reviewer' | 'access_manager';
-export type BankRole = 'owner' | 'reviewer' | 'viewer';
+export type BankRole = 'owner' | 'editor' | 'reviewer' | 'viewer';
 export type QBankVisibility = 'public' | 'private';
 export type AccountStatus = 'pending' | 'approved' | 'rejected';
 export type ProposalStatus =
@@ -296,7 +296,7 @@ export interface QBankMembership {
   qbankId: string;
   userId: string;
   userName: string;
-  role: BankRole;
+  role: Exclude<BankRole, 'owner'>;
   grantedById: string;
   grantedByName: string;
   createdAt: string;
@@ -671,8 +671,12 @@ export function normalizeCollaborationState(
     ...input,
     qbanks: normalizedQBanks,
     qbankFolders,
-    memberships: input.memberships ?? [],
-    invitations: input.invitations ?? [],
+    memberships: (input.memberships ?? []).filter((item) =>
+      isBankMembershipRole(item.role),
+    ),
+    invitations: (input.invitations ?? []).filter((item) =>
+      isBankMembershipRole(item.role),
+    ),
     members: (input.members ?? []).map((member) => ({
       ...member,
       tier: member.tier ?? 'lite',
@@ -827,9 +831,16 @@ export function bankRoleFor(
   memberships: QBankMembership[],
 ): BankRole | undefined {
   if (bank.ownerId === user.uid) return 'owner';
-  return memberships.find(
+  const role = memberships.find(
     (item) => item.qbankId === bank.id && item.userId === user.uid,
   )?.role;
+  return isBankMembershipRole(role) ? role : undefined;
+}
+
+export function isBankMembershipRole(
+  value: unknown,
+): value is Exclude<BankRole, 'owner'> {
+  return value === 'editor' || value === 'reviewer' || value === 'viewer';
 }
 
 export function canAccessBank(
@@ -850,6 +861,16 @@ export function canManageBank(user: AppUser, bank: QBank): boolean {
   return bank.ownerId === user.uid;
 }
 
+export function canEditBank(
+  user: AppUser,
+  bank: QBank,
+  memberships: QBankMembership[],
+): boolean {
+  if (canManageBank(user, bank)) return true;
+  if (bank.essential || bank.id === 'smle-gs') return false;
+  return bankRoleFor(user, bank, memberships) === 'editor';
+}
+
 export function canReviewBank(
   user: AppUser,
   bank: QBank,
@@ -857,7 +878,12 @@ export function canReviewBank(
 ): boolean {
   if (hasReviewerRole(user)) return true;
   const bankRole = bankRoleFor(user, bank, memberships);
-  if (bankRole === 'owner' || bankRole === 'reviewer') return true;
+  if (
+    bankRole === 'owner' ||
+    bankRole === 'editor' ||
+    bankRole === 'reviewer'
+  )
+    return true;
   return false;
 }
 
