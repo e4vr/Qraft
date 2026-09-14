@@ -16,6 +16,7 @@ import {
 import type { AppUser } from '@/lib/medguard-types';
 import { parseQuestionImportReport } from '@/lib/question-import';
 import { subscribeLive } from '@/lib/realtime-client';
+import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import type {
   PreformedLeaderboardEntry,
   PreformedLocalAttempt,
@@ -221,11 +222,22 @@ function TestEditor({
   const [messageKind, setMessageKind] = useState<'success' | 'error' | 'info'>(
     'info',
   );
+  const [confirmEditorAction, editorConfirmationDialog] =
+    useConfirmationDialog();
   const dirty = JSON.stringify(draft) !== baseline || passcode !== undefined;
   const question = draft.questions[selected];
 
-  const close = () => {
-    if (!dirty || window.confirm('Discard your unsaved test changes?'))
+  const close = async () => {
+    if (
+      !dirty ||
+      (await confirmEditorAction({
+        title: 'Discard unsaved changes?',
+        description:
+          'Your changes to this ready-made test have not been saved and will be lost.',
+        confirmLabel: 'Discard changes',
+        tone: 'warning',
+      }))
+    )
       onClose();
   };
   useEffect(() => {
@@ -428,10 +440,10 @@ function TestEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-[80] overflow-y-auto bg-background">
+    <div className="q-safe-fullscreen fixed inset-0 z-[80] overflow-y-auto bg-background">
       <header className="sticky top-0 z-20 flex min-h-16 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur sm:px-7">
         <button
-          onClick={close}
+          onClick={() => void close()}
           className="grid size-10 place-items-center rounded-xl hover:bg-muted"
           aria-label="Close editor"
         >
@@ -996,6 +1008,7 @@ function TestEditor({
           )}
         </main>
       </div>
+      {editorConfirmationDialog}
     </div>
   );
 }
@@ -1405,7 +1418,7 @@ export function PreformedTestRunner({
               }
               onClick={() => setIndex(itemIndex)}
               aria-label={`Question ${itemIndex + 1}`}
-              className={`h-2 flex-1 rounded-full ${itemIndex === index ? 'bg-primary' : Number.isInteger(attempt.answers[item.id]) ? 'bg-emerald-400' : 'bg-muted'}`}
+              className={`q-compact-touch h-2 min-w-0 flex-1 rounded-full ${itemIndex === index ? 'bg-primary' : Number.isInteger(attempt.answers[item.id]) ? 'bg-emerald-400' : 'bg-muted'}`}
             />
           ))}
         </div>
@@ -1551,6 +1564,7 @@ export function PreformedTestsWorkspace({
   const [stats, setStats] = useState<ManageResponse>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [confirmAction, confirmationDialog] = useConfirmationDialog();
   const loadSequence = useRef(0);
   const canCreate = ['pro', 'unlimited'].includes(
     user.effectivePlan ?? user.tier,
@@ -1634,9 +1648,13 @@ export function PreformedTestsWorkspace({
     await navigator.clipboard.writeText(testUrl(code));
   };
   const rotate = async (id: string) => {
-    if (
-      !window.confirm('Create a new join code? The old code will stop working.')
-    )
+    if (!(await confirmAction({
+      title: 'Create a new join code?',
+      description:
+        'The current code and its existing share link will stop working immediately.',
+      confirmLabel: 'Create new code',
+      tone: 'warning',
+    })))
       return;
     const value = await api<{ code: string }>('/preformed/rotate-code', {
       method: 'POST',
@@ -1649,11 +1667,13 @@ export function PreformedTestsWorkspace({
     );
   };
   const remove = async (test: PreformedTestSummary) => {
-    if (
-      !window.confirm(
-        `Delete “${test.title}” and all of its results permanently?`,
-      )
-    )
+    if (!(await confirmAction({
+      title: `Delete “${test.title}”?`,
+      description:
+        'The test and all of its participant results will be permanently deleted. This cannot be undone.',
+      confirmLabel: 'Delete permanently',
+      tone: 'destructive',
+    })))
       return;
     setBusy(true);
     try {
@@ -1681,7 +1701,14 @@ export function PreformedTestsWorkspace({
     setError('Report sent. Thank you.');
   };
   const moderate = async (id: string) => {
-    if (!window.confirm('Hide this public test from participants?')) return;
+    if (!(await confirmAction({
+      title: 'Hide this public test?',
+      description:
+        'Participants will no longer be able to find or open this test until it is restored.',
+      confirmLabel: 'Hide test',
+      tone: 'warning',
+    })))
+      return;
     await api('/preformed/moderate', {
       method: 'PUT',
       body: JSON.stringify({ id, hidden: true }),
@@ -1959,7 +1986,7 @@ export function PreformedTestsWorkspace({
         />
       )}
       {stats && (
-        <div className="fixed inset-0 z-[80] overflow-y-auto bg-black/45 p-4 sm:p-8">
+        <div className="q-safe-overlay fixed inset-0 z-[80] overflow-y-auto bg-black/45 p-4 sm:p-8">
           <section className="mx-auto max-w-4xl rounded-3xl bg-card p-5 shadow-2xl sm:p-7">
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
@@ -2029,6 +2056,7 @@ export function PreformedTestsWorkspace({
           </section>
         </div>
       )}
+      {confirmationDialog}
       </div>
     </>
   );

@@ -260,6 +260,29 @@ void test('ending a test uses the branded save confirmation instead of a browser
   assert.match(app, /Keep studying/);
 });
 
+void test('confirmations share a responsive in-app surface across workspaces', async () => {
+  const paths = [
+    'components/classification-manager.tsx',
+    'components/preformed-tests-workspace.tsx',
+    'components/qbank-management.tsx',
+    'components/question-import-review.tsx',
+    'components/review-workspace.tsx',
+    'components/subscription-workspace.tsx',
+  ];
+  const [files, confirmation, alertDialog, styles] = await Promise.all([
+    Promise.all(paths.map((path) => readFile(new URL(path, root), 'utf8'))),
+    readFile(new URL('components/ui/confirmation-dialog.tsx', root), 'utf8'),
+    readFile(new URL('components/ui/alert-dialog.tsx', root), 'utf8'),
+    readFile(new URL('app/globals.css', root), 'utf8'),
+  ]);
+  assert.doesNotMatch(files.join('\n'), /window\.confirm\(/);
+  assert.match(confirmation, /export function useConfirmationDialog/);
+  assert.match(alertDialog, /q-confirm-dialog/);
+  assert.match(alertDialog, /flex flex-col-reverse[\s\S]*sm:flex-row/);
+  assert.match(styles, /\.q-confirm-dialog \{ max-height: calc\(100dvh/);
+  assert.match(styles, /\.q-confirm-dialog-wide/);
+});
+
 void test('the sidebar keeps navigation scrollable and the account footer visible', async () => {
   const app = await readFile(
     new URL('components/medguard-app.tsx', root),
@@ -267,7 +290,7 @@ void test('the sidebar keeps navigation scrollable and the account footer visibl
   );
   assert.match(app, /h-dvh/);
   assert.match(app, /min-h-0 flex-1 space-y-1 overflow-y-auto/);
-  assert.match(app, /<footer className="shrink-0 border-t/);
+  assert.match(app, /<footer className="[^"]*q-sidebar-footer[^"]*shrink-0 border-t/);
   assert.match(app, /aria-current=\{view === item\.id \? 'page'/);
 });
 
@@ -598,10 +621,20 @@ void test('touch input uses one event path, forgiving targets, and touch-safe sc
   assert.doesNotMatch(app, /gesturestart/);
   assert.match(app, /onPointerDown=\{\(event\) => \{/);
   assert.match(styles, /\(hover: none\) and \(pointer: coarse\)/);
-  assert.match(styles, /min-width: 44px;/);
+  assert.match(styles, /:not\(\.q-compact-touch\)[^{]*\{[\s\S]*?min-width: 44px;/);
   assert.match(styles, /min-height: 44px;/);
   assert.match(styles, /touch-action: pan-y pinch-zoom;/);
   assert.match(styles, /q-viewport:has\(> \.q-shell\).*overflow-y: hidden/);
+  assert.match(styles, /--q-safe-top: env\(safe-area-inset-top, 0px\)/);
+  assert.match(styles, /--q-control-safe-bottom: max\(8px, var\(--q-safe-bottom\)\)/);
+  assert.doesNotMatch(app, /env\(safe-area-inset-/);
+  assert.match(styles, /\.q-safe-fullscreen/);
+  assert.match(styles, /\.q-flashcard-review-card/);
+  assert.match(app, /function AppLoadingScreen/);
+  assert.match(app, /<AppLoadingScreen status="Starting Qraft…"/);
+  assert.match(app, /<AppLoadingScreen status="Syncing your workspace…"/);
+  assert.doesNotMatch(app, /q-loading-panel/);
+  assert.match(styles, /\.dark \.q-loading-wordmark \{ filter: brightness\(0\) invert\(1\); \}/);
 });
 
 void test('shared QBank links require an explicit accept or decline decision', async () => {

@@ -651,7 +651,7 @@ function ReviewSession({
             {reviewed + 1} / {reviewed + queue.length}
           </span>
         </div>
-        <article className="grid min-h-[480px] place-items-center rounded-3xl border bg-card p-6 text-center shadow-sm sm:p-12">
+        <article className="q-flashcard-review-card grid place-items-center rounded-3xl border bg-card p-6 text-center shadow-sm sm:p-12">
           <div className="w-full max-w-2xl">
             <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-black uppercase tracking-wide text-primary">
               {card.type}
@@ -660,7 +660,7 @@ function ReviewSession({
               <img
                 src={card.image.url}
                 alt={card.image.caption || card.image.name}
-                className="mx-auto mt-6 max-h-64 rounded-2xl object-contain"
+                className="q-flashcard-review-image mx-auto mt-6 max-h-64 rounded-2xl object-contain"
               />
             )}
             <p

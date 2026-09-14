@@ -261,6 +261,27 @@ function formatDuration(totalSeconds: number) {
     .join(':');
 }
 
+function AppLoadingScreen({ status }: { status: string }) {
+  return (
+    <main className="q-loading-screen grid min-h-full place-items-center bg-background px-6">
+      <output
+        aria-live="polite"
+        aria-busy="true"
+        className="flex flex-col items-center text-center"
+      >
+        <img
+          src="/11.svg"
+          alt="Qraft"
+          className="q-loading-wordmark h-auto"
+        />
+        <p className="q-loading-status mt-7 text-sm font-medium text-muted-foreground">
+          {status}
+        </p>
+      </output>
+    </main>
+  );
+}
+
 function testElapsedSeconds(test: TestSession, now = Date.now()) {
   if (test.elapsedSeconds !== undefined) {
     if (test.timerPaused || test.status !== 'active')
@@ -1423,7 +1444,7 @@ function AppSidebar({
             </button>
           ) : null}
         </nav>
-        <footer className="shrink-0 border-t border-sidebar-border/70 bg-sidebar/90 px-2.5 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] backdrop-blur-xl">
+        <footer className="q-sidebar-footer shrink-0 border-t border-sidebar-border/70 bg-sidebar/90 px-2.5 pt-2.5 backdrop-blur-xl">
           <div className="overflow-hidden rounded-2xl border border-sidebar-border/70 bg-card/95 shadow-[0_14px_34px_-25px_rgba(15,23,42,0.75)] dark:shadow-black/30">
             <div className="flex items-center gap-1 p-1.5">
               <button
@@ -3549,7 +3570,7 @@ function TestView({
             aria-modal="true"
             aria-labelledby="end-test-title"
             aria-describedby="end-test-description"
-            className="w-full max-w-md overflow-hidden rounded-[24px] bg-card shadow-[0_28px_90px_rgba(2,12,27,.35)] ring-1 ring-white/10"
+            className="q-confirm-dialog w-full max-w-md overflow-hidden rounded-[24px] bg-card shadow-[0_28px_90px_rgba(2,12,27,.35)] ring-1 ring-white/10"
           >
             <div className="border-b bg-gradient-to-br from-primary/10 via-card to-card p-6">
               <div className="flex items-start gap-4">
@@ -4096,7 +4117,7 @@ function HistoryView({
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="delete-test-title"
-            className="w-full max-w-md rounded-2xl bg-card p-6 shadow-2xl"
+            className="q-confirm-dialog w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl sm:p-6"
           >
             <h2 id="delete-test-title" className="text-xl font-bold">
               Delete this test?
@@ -4105,7 +4126,7 @@ function HistoryView({
               <strong>{selectedTest.title}</strong> will be removed from your
               history. Your accumulated question progress will remain unchanged.
             </p>
-            <div className="mt-6 grid grid-cols-2 gap-2">
+            <div className="mt-6 grid gap-2 sm:grid-cols-2">
               <button
                 onClick={() => setDeleteId(undefined)}
                 className="h-11 rounded-xl border text-sm font-bold"
@@ -6492,22 +6513,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
         }
       />
     );
-  if (user === undefined)
-    return (
-      <main className="grid min-h-screen place-items-center bg-background px-6">
-        <div className="q-loading-panel w-full max-w-xs rounded-3xl border bg-card/80 p-8 text-center shadow-xl shadow-primary/5 backdrop-blur">
-          <div className="q-loading-logo mx-auto grid size-24 place-items-center rounded-[28px] border bg-white p-4 shadow-lg ring-1 ring-black/5 dark:bg-slate-50">
-            <img src="/2222.svg" alt="Qraft" className="h-full w-full object-contain" />
-          </div>
-          <p className="mt-6 text-sm font-semibold text-foreground">
-            Preparing Qraft…
-          </p>
-          <div className="mx-auto mt-4 h-1 w-28 overflow-hidden rounded-full bg-muted">
-            <div className="q-loading-progress h-full w-1/2 rounded-full bg-primary" />
-          </div>
-        </div>
-      </main>
-    );
+  if (user === undefined) return <AppLoadingScreen status="Starting Qraft…" />;
   if (directTestCode) {
     const participant = user?.status === 'approved' && !user.suspended ? user : null;
     return (
@@ -6550,18 +6556,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       />
     );
   if (!hydrated || !collaborationHydrated)
-    return (
-      <main className="grid min-h-screen place-items-center bg-background px-6">
-        <div className="q-loading-panel w-full max-w-xs rounded-3xl border bg-card/80 p-8 text-center shadow-xl shadow-primary/5 backdrop-blur">
-          <div className="q-loading-logo mx-auto grid size-20 place-items-center rounded-[24px] border bg-white p-3 shadow-lg ring-1 ring-black/5 dark:bg-slate-50">
-            <img src="/2222.svg" alt="Qraft" className="h-full w-full object-contain" />
-          </div>
-          <p className="mt-3 text-sm font-semibold text-muted-foreground">
-            Loading your collaborative workspace…
-          </p>
-        </div>
-      </main>
-    );
+    return <AppLoadingScreen status="Syncing your workspace…" />;
   if (portal === 'superadmin') {
     if (user.role !== 'super_admin' || !user.mfaVerified)
       return (

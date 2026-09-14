@@ -17,6 +17,7 @@ import {
   type QBankTopic,
 } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 export function QuestionImportReview({
   bankId,
   onImported,
@@ -54,6 +55,7 @@ export function QuestionImportReview({
   });
   const [countText, setCountText] = useState('20');
   const [optionsText, setOptionsText] = useState('4');
+  const [confirmAction, confirmationDialog] = useConfirmationDialog();
   useEffect(() => {
     let active = true;
     void api<{ suspended: boolean; endsAt: string | null }>(
@@ -91,7 +93,12 @@ export function QuestionImportReview({
   const draft = drafts[index];
   async function read(file?: File) {
     if (!file || operation.current) return;
-    if (drafts.length && !window.confirm('Replace the current import draft with another file? Your review edits will be replaced only if the new file is valid.')) return;
+    if (drafts.length && !(await confirmAction({
+      title: 'Replace the current import draft?',
+      description: 'Your current review edits will be replaced after the new file is validated successfully.',
+      confirmLabel: 'Replace draft',
+      tone: 'warning',
+    }))) return;
     operation.current = true;
     setReading(true);
     setError('');
@@ -440,6 +447,7 @@ export function QuestionImportReview({
           </div>
         </DialogContent>
       </Dialog>
+      {confirmationDialog}
     </div>
   );
 }

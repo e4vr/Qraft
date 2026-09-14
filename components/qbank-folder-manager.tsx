@@ -344,7 +344,7 @@ export function QBankFolderManager({
         </div>
       </div>
       {renaming && (
-        <div className="fixed inset-0 z-[90] grid place-items-center bg-black/45 p-4">
+        <div className="q-safe-overlay fixed inset-0 z-[90] grid place-items-center overflow-y-auto bg-black/45 p-4">
           <section className="w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl">
             <h3 className="font-bold">Rename folder</h3>
             <input
@@ -370,10 +370,24 @@ export function QBankFolderManager({
         </div>
       )}
       {deleting && (
-        <div className="fixed inset-0 z-[90] grid place-items-center bg-black/50 p-4">
-          <section className="w-full max-w-lg rounded-2xl bg-card p-5 shadow-2xl">
-            <h3 className="text-lg font-bold">Delete “{deleting.name}”</h3>
-            <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className="q-safe-overlay fixed inset-0 z-[90] grid place-items-center overflow-y-auto bg-black/50 p-4">
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-folder-title"
+            aria-describedby="delete-folder-description"
+            className="q-confirm-dialog q-confirm-dialog-wide w-full max-w-lg rounded-2xl bg-card p-5 shadow-2xl sm:p-6"
+          >
+            <h3 id="delete-folder-title" className="text-lg font-bold">
+              Delete “{deleting.name}”
+            </h3>
+            <p
+              id="delete-folder-description"
+              className="mt-2 text-sm leading-6 text-muted-foreground"
+            >
+              Choose what should happen to the QBank contents before confirming.
+            </p>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
               <button
                 onClick={() => setDeleteMode('move')}
                 className={`rounded-xl border p-3 text-left text-sm ${deleteMode === 'move' ? 'border-primary bg-primary/5' : ''}`}
@@ -430,11 +444,11 @@ export function QBankFolderManager({
                 />
               </label>
             )}
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
               <button
                 disabled={busy}
                 onClick={() => setDeleting(undefined)}
-                className="q-button q-button-secondary"
+                className="q-button q-button-secondary w-full"
               >
                 Cancel
               </button>
@@ -445,7 +459,7 @@ export function QBankFolderManager({
                     (confirmation !== 'حذف' || deletingHasEssential))
                 }
                 onClick={() => void removeFolder()}
-                className="q-button bg-red-600 text-white hover:bg-red-700"
+                className="q-button w-full bg-red-600 text-white hover:bg-red-700"
               >
                 {busy ? 'Working…' : 'Confirm'}
               </button>

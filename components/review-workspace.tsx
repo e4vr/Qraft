@@ -40,6 +40,7 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 
 function formatDate(value?: string) {
   return value
@@ -137,6 +138,7 @@ export function ReviewWorkspace({
   const [methodPreset, setMethodPreset] = useState('');
   const [bulkDecision, setBulkDecision] = useState<'approved' | 'rejected'>();
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [confirmAction, confirmationDialog] = useConfirmationDialog();
   type ReviewResult = {
     reviewed: number;
     awaitingSecondReview: number;
@@ -199,13 +201,13 @@ export function ReviewWorkspace({
     };
   }, [user.uid]);
   async function clearHistory() {
-    if (
-      clearing ||
-      !window.confirm(
-        'Clear your review history? This only clears history for your account. Questions, review decisions and other accounts are unaffected.',
-      )
-    )
-      return;
+    if (clearing) return;
+    if (!(await confirmAction({
+      title: 'Clear your review history?',
+      description: 'This only clears history for your account. Questions, review decisions and other accounts are unaffected.',
+      confirmLabel: 'Clear history',
+      tone: 'destructive',
+    }))) return;
     setClearing(true);
     setError('');
     setNotice('');
@@ -835,6 +837,7 @@ export function ReviewWorkspace({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {confirmationDialog}
     </>
   );
 }

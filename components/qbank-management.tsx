@@ -16,6 +16,7 @@ import { canManageBank, optionLabel, type AppUser, type CollaborationState, type
 import { cn } from '@/lib/utils';
 import { hasFeature } from '@/lib/plan-config';
 import { openUpgrade } from '@/components/subscription-workspace';
+import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 
 type Section = 'settings' | 'structure' | 'questions' | 'import';
 
@@ -88,6 +89,7 @@ export function QBankManagement({
   const [bulkSpecialty, setBulkSpecialty] = useState('');
   const [bulkTopic, setBulkTopic] = useState('');
   const [structureDirty, setStructureDirty] = useState(false);
+  const [confirmAction, confirmationDialog] = useConfirmationDialog();
   const bankSpecialties = useMemo(() => collaboration.specialties.filter((item) => item.qbankId === bankId), [bankId, collaboration.specialties]);
   const bankTopics = useMemo(() => collaboration.topics.filter((item) => item.qbankId === bankId), [bankId, collaboration.topics]);
   const noteStructureDirty = useCallback((dirty: boolean) => setStructureDirty(dirty), []);
@@ -670,7 +672,7 @@ export function QBankManagement({
                           )}
                         </div>
                         <span className="truncate text-sm text-muted-foreground">{question.specialty} / {question.topic}</span>
-                        <button aria-label={`Delete Question ID ${question.questionId}`} className="q-button text-destructive" disabled={busy} onClick={async () => { if (!window.confirm('Permanently delete this question? Tickets and history will be retained as #deleted.')) return; setBusy(true); setError(''); try { await api('/platform/question', { method: 'DELETE', body: JSON.stringify({id:question.questionId}) }); confirmUpdate(current=>({...current,approvedQuestions:current.approvedQuestions.filter(q=>q.id!==question.id),proposals:current.proposals.map(p=>p.questionId===question.id?{...p,questionId:'#deleted'}:p)})); setMessage('Question permanently deleted.'); } catch (e) { setError(e instanceof Error?e.message:'Unable to delete.'); } finally {setBusy(false);} }}>Delete</button>
+                        <button aria-label={`Delete Question ID ${question.questionId}`} className="q-button text-destructive" disabled={busy} onClick={async () => { if (!(await confirmAction({title:'Permanently delete this question?',description:'The question will be removed. Related tickets and history will remain detached under #deleted.',confirmLabel:'Delete permanently',tone:'destructive'}))) return; setBusy(true); setError(''); try { await api('/platform/question', { method: 'DELETE', body: JSON.stringify({id:question.questionId}) }); confirmUpdate(current=>({...current,approvedQuestions:current.approvedQuestions.filter(q=>q.id!==question.id),proposals:current.proposals.map(p=>p.questionId===question.id?{...p,questionId:'#deleted'}:p)})); setMessage('Question permanently deleted.'); } catch (e) { setError(e instanceof Error?e.message:'Unable to delete.'); } finally {setBusy(false);} }}>Delete</button>
                         <button onClick={() => openQuestion(question)} className="grid size-9 place-items-center rounded-lg border" aria-label={`Edit Question ID ${question.questionId}`}>
                           <Pencil className="size-4" />
                         </button>
@@ -849,12 +851,12 @@ export function QBankManagement({
       )}
       {deleteOpen && (
         <div className="q-safe-overlay fixed inset-0 z-[60] grid place-items-center bg-slate-950/60 p-4">
-          <section role="alertdialog" aria-modal="true" aria-labelledby="delete-bank-title" className="w-full max-w-md rounded-2xl bg-card p-6 shadow-2xl">
+          <section role="alertdialog" aria-modal="true" aria-labelledby="delete-bank-title" className="q-confirm-dialog w-full max-w-md rounded-2xl bg-card p-5 shadow-2xl sm:p-6">
             <h2 id="delete-bank-title" className="text-xl font-bold">
               Delete {bank.name}?
             </h2>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">This action cannot be undone. Questions are permanently deleted. Their display IDs may be reused; historical tickets remain detached as #deleted.</p>
-            <div className="mt-6 grid grid-cols-2 gap-2">
+            <div className="mt-6 grid gap-2 sm:grid-cols-2">
               <button onClick={() => setDeleteOpen(false)} className="h-11 rounded-xl border text-sm font-bold">
                 Cancel
               </button>
@@ -865,6 +867,7 @@ export function QBankManagement({
           </section>
         </div>
       )}
+      {confirmationDialog}
     </main>
   );
 }

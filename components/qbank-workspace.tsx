@@ -978,7 +978,7 @@ export function QBankWorkspace({
         )}
       </div>
       {quickAccessOpen && (
-        <div className="fixed inset-0 z-[80] grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm">
+        <div className="q-safe-overlay fixed inset-0 z-[80] grid place-items-center overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm">
           <section className="w-full max-w-lg rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border">
             <div className="flex items-start justify-between gap-3">
               <div>

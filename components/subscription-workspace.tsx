@@ -7,6 +7,7 @@ import { api, setApiCache } from '@/lib/api-client';
 import { setAuthenticatedUserCache } from '@/lib/application-services';
 import type { AppUser } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { PLAN_LIMITS, PLAN_ORDER, type PlanId } from '@/lib/plan-config';
 
 export const openUpgrade = () =>
@@ -407,6 +408,7 @@ export function SubscriptionAdmin({
   section: 'discounts' | 'subscriptions';
 }) {
   const [today] = useState(() => Date.now());
+  const [confirmAction, confirmationDialog] = useConfirmationDialog();
   const [codes, setCodes] = useState<Code[]>([]),
     [subscriptions, setSubscriptions] = useState<Subscription[]>([]),
     [events, setEvents] = useState<Usage[]>([]),
@@ -569,7 +571,7 @@ export function SubscriptionAdmin({
               <td data-label="Status"><span className="q-control-badge" data-tone={codeStatus(c) === 'Active' ? 'success' : 'neutral'}>{codeStatus(c)}</span></td>
               <td data-label="Usage"><strong>{c.uses.toLocaleString()} <span className="text-muted-foreground">/ {c.max_uses ?? '∞'}</span></strong><small>redemptions</small></td>
               <td data-label="Validity"><span>{c.starts_at ? date(c.starts_at) : 'Starts immediately'}</span><small>{c.expires_at ? `Until ${date(c.expires_at)}` : 'No expiration'}</small></td>
-              <td data-label="Actions"><div className="q-control-row-actions"><button aria-label={`Edit ${c.code}`} onClick={() => { setDraft(c); setOriginalCode(c); setEditing(true); setError(''); }}><Pencil className="size-4" />Edit</button><button aria-label={`Usage history for ${c.code}`} onClick={() => { setUsageCode(c.id); setUsageOffset(0); }}><History className="size-4" />History</button><details><summary aria-label={`More actions for ${c.code}`}><SlidersHorizontal className="size-4" /></summary><div><button disabled={saving} onClick={() => void save({ ...c, enabled: !c.enabled })}>{c.enabled ? 'Disable code' : 'Enable code'}</button><button disabled={saving} className="text-destructive" onClick={() => { if(window.confirm(`Delete code ${c.code}? Usage history will be retained.`)) void save({id:c.id},'DELETE'); }}>Delete code</button></div></details></div></td>
+              <td data-label="Actions"><div className="q-control-row-actions"><button aria-label={`Edit ${c.code}`} onClick={() => { setDraft(c); setOriginalCode(c); setEditing(true); setError(''); }}><Pencil className="size-4" />Edit</button><button aria-label={`Usage history for ${c.code}`} onClick={() => { setUsageCode(c.id); setUsageOffset(0); }}><History className="size-4" />History</button><details><summary aria-label={`More actions for ${c.code}`}><SlidersHorizontal className="size-4" /></summary><div><button disabled={saving} onClick={() => void save({ ...c, enabled: !c.enabled })}>{c.enabled ? 'Disable code' : 'Enable code'}</button><button disabled={saving} className="text-destructive" onClick={async () => { if(await confirmAction({title:`Delete code ${c.code}?`,description:'The discount code will be removed, while its usage history remains available for auditing.',confirmLabel:'Delete code',tone:'destructive'})) void save({id:c.id},'DELETE'); }}>Delete code</button></div></details></div></td>
             </tr>) : subscriptions.slice(0,50).map(row => <tr key={row.uid}>
               <td data-label="Member"><strong>{row.name}</strong><span className="q-control-email">{row.email}</span><small className="q-control-uid" title={row.uid}>{row.uid}</small></td>
               <td data-label="Effective access"><span className="q-control-badge" data-plan={row.tier}>{PLAN_LIMITS[row.tier]?.name ?? row.tier}</span><small>{row.override_plan ? 'Admin assigned' : row.reward_plan === row.tier ? 'Reward access' : 'Standard access'}</small></td>
@@ -754,6 +756,7 @@ export function SubscriptionAdmin({
           <details className="q-control-billing-details"><summary>Payment & renewal records</summary><p>Update billing history separately. An admin access assignment keeps its priority.</p><label>Billing expiration<input type="date" className={field} value={end} onChange={e => setEnd(e.target.value)} /></label><button className="q-button border" onClick={() => setEnd(new Date(Math.max(Date.now(), Number.isFinite(Date.parse(end)) ? Date.parse(end) : Date.now())+365*86400000).toISOString().slice(0,10))}>Extend one year</button><label>Final amount paid (SAR)<input type="number" min="0" step="0.01" className={field} value={paid} onChange={e => setPaid(e.target.value)} /></label><label>Discount code<input className={field} value={manualCode} onChange={e => setManualCode(e.target.value)} /></label><button disabled={saving || manualPlan==='free' || !end} className="q-button border" onClick={() => void save({userId:selected?.uid,plan:manualPlan,expires_at:`${end}T23:59:59.999Z`,paid:Math.round(Number(paid)*100),code:manualCode})}>Save {PLAN_LIMITS[manualPlan].name} billing record</button><button disabled={saving} className="q-button text-destructive" onClick={() => void save({userId:selected?.uid,operation:'cancel'})}>Cancel paid subscription</button></details>
         </DialogContent>
       </Dialog>
+      {confirmationDialog}
     </section>
   );
 }
