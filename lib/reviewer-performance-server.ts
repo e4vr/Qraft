@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { json } from './cloudflare-server';
+import { json } from '@/server/http/response';
 import type { AppUser } from './medguard-types';
 import { reviewerPeriods } from './reviewer-periods';
 

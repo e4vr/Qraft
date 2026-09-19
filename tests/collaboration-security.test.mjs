@@ -132,6 +132,10 @@ void test('private banks, per-bank roles, and owner boundaries are enforced', as
     'utf8',
   );
   const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  const access = await readFile(
+    new URL('features/access/domain/access-policy.ts', root),
+    'utf8',
+  );
   assert.match(
     types,
     /type AccountTier = 'free' \| 'lite' \| 'pro' \| 'unlimited'/,
@@ -140,7 +144,7 @@ void test('private banks, per-bank roles, and owner boundaries are enforced', as
     types,
     /type BankRole = 'owner' \| 'editor' \| 'reviewer' \| 'viewer'/,
   );
-  assert.match(types, /function canEditBank/);
+  assert.match(access, /function canEditBank/);
   assert.match(server, /canAccessBank\(user, existing/);
   assert.match(server, /value\.ownerId === user\.uid/);
   assert.match(server, /operation\.collection === 'qbankShareLinks'/);
@@ -362,7 +366,10 @@ void test('QBank owners can manage access, links, questions, and deletion', asyn
 });
 
 void test('QBank editors can edit content but owner-only controls stay protected', async () => {
-  const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  const access = await readFile(
+    new URL('features/access/domain/access-policy.ts', root),
+    'utf8',
+  );
   const server = await readFile(
     new URL('lib/cloudflare-server.ts', root),
     'utf8',
@@ -379,8 +386,8 @@ void test('QBank editors can edit content but owner-only controls stay protected
     new URL('components/qbank-workspace.tsx', root),
     'utf8',
   );
-  assert.match(types, /bankRoleFor\(user, bank, memberships\) === 'editor'/);
-  assert.match(types, /bankRole === 'editor'/);
+  assert.match(access, /bankRoleFor\(user, bank, memberships\) === 'editor'/);
+  assert.match(access, /bankRole === 'editor'/);
   assert.match(server, /operation\.type === 'delete'\) return canManage/);
   assert.match(server, /qbankSpecialties'[\s\S]*return canEdit/);
   assert.match(platform, /canEditBank\(user, bank, state\.memberships\)/);
@@ -582,6 +589,10 @@ void test('Essential QBanks are managed only by Superadmin while other users sub
     'utf8',
   );
   const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  const access = await readFile(
+    new URL('features/access/domain/access-policy.ts', root),
+    'utf8',
+  );
   const workspace = await readFile(
     new URL('components/qbank-workspace.tsx', root),
     'utf8',
@@ -596,7 +607,7 @@ void test('Essential QBanks are managed only by Superadmin while other users sub
   );
   assert.match(types, /essential: boolean/);
   assert.match(types, /essential: true/);
-  assert.match(types, /function canManageBank/);
+  assert.match(access, /function canManageBank/);
   assert.match(workspace, /Check to make it an Essential QBank/);
   assert.match(manager, /ESSENTIAL · SUPERADMIN/);
   assert.match(app, /canEditBank\(user, qbank, collaboration\.memberships\)/);
@@ -605,7 +616,10 @@ void test('Essential QBanks are managed only by Superadmin while other users sub
 });
 
 void test('Every subscription can contribute questions and redeem earned rewards', async () => {
-  const plans = await readFile(new URL('lib/plan-config.ts', root), 'utf8');
+  const plans = await readFile(
+    new URL('features/subscriptions/domain/plan-config.ts', root),
+    'utf8',
+  );
   for (const plan of ['free', 'lite', 'pro', 'unlimited']) {
     const block = plans.match(
       new RegExp(`${plan}: \\{([\\s\\S]*?)\\n  \\},`),
@@ -742,6 +756,10 @@ void test('every question change requires independent review with durable attrib
     'utf8',
   );
   const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
+  const access = await readFile(
+    new URL('features/access/domain/access-policy.ts', root),
+    'utf8',
+  );
   const app = await readFile(
     new URL('components/medguard-app.tsx', root),
     'utf8',
@@ -760,7 +778,7 @@ void test('every question change requires independent review with durable attrib
   );
   assert.match(types, /writtenByName\?: string/);
   assert.match(types, /reviewedByName\?: string/);
-  assert.match(types, /hasReviewerRole\(user\)/);
+  assert.match(access, /hasReviewerRole\(user\)/);
   assert.match(server, /current\.proposedById !== user\.uid/);
   assert.match(server, /reviewedQuestionWriteAllowed/);
   assert.match(manager, /QuestionImportReview/);

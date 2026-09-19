@@ -3,7 +3,26 @@
 import { Activity, BarChart3, CreditCard, FileText, Flag, LayoutDashboard, Coins, Ticket, Users, ArrowLeft, ArrowRight, BookOpen, ChevronDown, Clock3, Command, Database, Download, Fingerprint, Inbox, LogOut, Megaphone, Menu, MessageSquareText, RefreshCw, Save, Search, ShieldCheck, Upload, UserCheck, UserRoundX } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { administrativeRoleLabels, canReviewBank, hasAccessManagerRole, hasModeratorRole, hasReviewerRole, isPlatformRole, normalizeEmail, normalizePhone, normalizeUniversityId, type AccessBlocklist, type AccountStatus, type AppUser, type AuditEntry, type CollaborationState, type MemberProfile, type PlatformRole } from '@/lib/medguard-types';
+import {
+  administrativeRoleLabels,
+  canReviewBank,
+  hasAccessManagerRole,
+  hasModeratorRole,
+  hasReviewerRole,
+  isPlatformRole,
+} from '@/features/access/domain/access-policy';
+import {
+  normalizeEmail,
+  normalizePhone,
+  normalizeUniversityId,
+  type AccessBlocklist,
+  type AccountStatus,
+  type AppUser,
+  type AuditEntry,
+  type CollaborationState,
+  type MemberProfile,
+  type PlatformRole,
+} from '@/lib/medguard-types';
 import { cn as cx, nowIso } from '@/lib/utils';
 import { SubscriptionAdmin } from '@/components/subscription-workspace';
 import { ReviewerPerformance } from '@/components/reviewer-performance';

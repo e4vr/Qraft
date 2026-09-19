@@ -1,0 +1,131 @@
+import { deleteOwnAccount } from '@/lib/account-deletion-server';
+import {
+  beginMfa,
+  changeOwnPassword,
+  completeMfa,
+  currentUser,
+  deleteBankMedia,
+  deleteQBankFolder,
+  joinBank,
+  loadCollaboration,
+  loadState,
+  login,
+  logout,
+  previewBankInvite,
+  register,
+  reserveIds,
+  saveCollaboration,
+  saveState,
+  saveStatePatch,
+  serveMedia,
+  updateOwnProfile,
+  uploadMedia,
+  verifyMfa,
+} from '@/lib/cloudflare-server';
+import { contactApi } from '@/lib/contact-server';
+import { platformApi } from '@/lib/platform-server';
+import { preformedTestApi } from '@/lib/preformed-test-server';
+import { connectRealtime } from '@/lib/realtime-server';
+import {
+  cloudflarePathParts,
+  withApiLifecycle,
+} from '@/server/api/request-lifecycle';
+
+function notFound(): Response {
+  return Response.json({ error: 'Not found.' }, { status: 404 });
+}
+
+async function routeGet(request: Request): Promise<Response> {
+  const [scope, action, ...rest] = cloudflarePathParts(request);
+  if (scope === 'realtime') return connectRealtime(request);
+  if (scope === 'preformed' && action)
+    return preformedTestApi(request, action);
+  if (scope === 'auth' && action === 'session') {
+    const user = await currentUser(request);
+    return Response.json(
+      { user: user ?? null },
+      { headers: { 'cache-control': 'no-store' } },
+    );
+  }
+  if (scope === 'platform' && action) return platformApi(request, action);
+  if (scope === 'contact') return contactApi(request);
+  if (scope === 'state') return loadState(request);
+  if (scope === 'collaboration') return loadCollaboration(request);
+  if (scope === 'media' && action)
+    return serveMedia(request, [action, ...rest].join('/'));
+  return notFound();
+}
+
+async function routePost(request: Request): Promise<Response> {
+  const [scope, action] = cloudflarePathParts(request);
+  if (scope === 'preformed' && action)
+    return preformedTestApi(request, action);
+  if (scope === 'platform' && action) return platformApi(request, action);
+  if (scope === 'contact') return contactApi(request);
+  if (scope === 'auth' && action === 'register') return register(request);
+  if (scope === 'auth' && action === 'login') return login(request);
+  if (scope === 'auth' && action === 'mfa') return verifyMfa(request);
+  if (scope === 'auth' && action === 'mfa-begin') return beginMfa(request);
+  if (scope === 'auth' && action === 'mfa-complete') return completeMfa(request);
+  if (scope === 'auth' && action === 'logout') return logout(request);
+  if (scope === 'ids' && action === 'reserve') return reserveIds(request);
+  if (scope === 'qbanks' && action === 'invite-preview')
+    return previewBankInvite(request);
+  if (scope === 'qbanks' && action === 'join') return joinBank(request);
+  if (scope === 'media' && action === 'notes')
+    return uploadMedia(request, 'notes');
+  if (scope === 'media' && action === 'questions')
+    return uploadMedia(request, 'questions');
+  return notFound();
+}
+
+async function routePut(request: Request): Promise<Response> {
+  const [scope, action] = cloudflarePathParts(request);
+  if (scope === 'preformed' && action)
+    return preformedTestApi(request, action);
+  if (scope === 'auth' && action === 'profile')
+    return updateOwnProfile(request);
+  if (scope === 'auth' && action === 'password')
+    return changeOwnPassword(request);
+  if (scope === 'platform' && action) return platformApi(request, action);
+  if (scope === 'contact') return contactApi(request);
+  if (scope === 'state' && action === 'exam')
+    return saveStatePatch(request, 'exam');
+  if (scope === 'state' && action === 'flashcards')
+    return saveStatePatch(request, 'flashcards');
+  if (scope === 'state' && action === 'daily-goal')
+    return saveStatePatch(request, 'daily-goal');
+  if (scope === 'state' && !action) return saveState(request);
+  if (scope === 'collaboration') return saveCollaboration(request);
+  return notFound();
+}
+
+async function routeDelete(request: Request): Promise<Response> {
+  const [scope, action] = cloudflarePathParts(request);
+  if (scope === 'preformed' && action)
+    return preformedTestApi(request, action);
+  if (scope === 'qbank-folders' && action)
+    return deleteQBankFolder(request, action);
+  if (scope === 'auth' && action === 'account')
+    return deleteOwnAccount(request);
+  if (scope === 'contact') return contactApi(request);
+  if (scope === 'platform' && action) return platformApi(request, action);
+  if (scope === 'media' && action) return deleteBankMedia(request, action);
+  return notFound();
+}
+
+export function GET(request: Request): Promise<Response> {
+  return withApiLifecycle(request, () => routeGet(request));
+}
+
+export function POST(request: Request): Promise<Response> {
+  return withApiLifecycle(request, () => routePost(request));
+}
+
+export function PUT(request: Request): Promise<Response> {
+  return withApiLifecycle(request, () => routePut(request));
+}
+
+export function DELETE(request: Request): Promise<Response> {
+  return withApiLifecycle(request, () => routeDelete(request));
+}

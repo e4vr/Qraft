@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { api, setApiCache } from '@/lib/api-client';
 import type { MemberProfile } from '@/lib/medguard-types';
-import type { PlanId } from '@/lib/plan-config';
+import type { PlanId } from '@/features/subscriptions/domain/plan-config';
 
 type EconomyData = {
   account: { credits_balance: number; lifetime_score: number; trust_score: number } | null;

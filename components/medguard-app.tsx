@@ -124,18 +124,20 @@ import {
   saveLocalCollaboration,
 } from '@/lib/application-services';
 import {
-  emptyProgress,
   administrativeRoleLabels,
+  canAccessBank,
+  canEditBank,
+  canReviewBank,
   hasAccessManagerRole,
   hasModeratorRole,
   isPlatformRole,
+} from '@/features/access/domain/access-policy';
+import {
+  emptyProgress,
   initialCollaborationState,
   initialAppState,
   normalizeCollaborationState,
   normalizeAppState,
-  canAccessBank,
-  canEditBank,
-  canReviewBank,
   optionLabel,
   type AppState,
   type AppUser,
@@ -150,7 +152,10 @@ import {
   type TestBuilderConfig,
   type TestSession,
 } from '@/lib/medguard-types';
-import { getPlanLimits, hasFeature } from '@/lib/plan-config';
+import {
+  getPlanLimits,
+  hasFeature,
+} from '@/features/subscriptions/domain/plan-config';
 import {
   AdminDashboard,
   PendingApproval,

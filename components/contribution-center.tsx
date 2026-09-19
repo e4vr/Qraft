@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Award, Check, Coins, Gift, LoaderCircle, PartyPopper, Play, Sparkles, Trophy, WalletCards } from 'lucide-react';
 import { api, setApiCache } from '@/lib/api-client';
-import { PLAN_LIMITS, type PlanId } from '@/lib/plan-config';
+import {
+  PLAN_LIMITS,
+  type PlanId,
+} from '@/features/subscriptions/domain/plan-config';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { subscribeLive } from '@/lib/realtime-client';
 import type { AppUser } from '@/lib/medguard-types';

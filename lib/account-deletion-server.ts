@@ -1,5 +1,7 @@
 import { env } from 'cloudflare:workers';
-import { assertSameOrigin, currentUser, json, readJson } from './cloudflare-server';
+import { currentUser } from './cloudflare-server';
+import { assertSameOrigin, readJson } from '@/server/http/request';
+import { json } from '@/server/http/response';
 import type { AppUser, QBank } from './medguard-types';
 import { r2StorageService } from './storage-service';
 

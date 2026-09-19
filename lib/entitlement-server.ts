@@ -1,6 +1,10 @@
 import { env } from 'cloudflare:workers';
 import type { AppUser, MemberProfile } from './medguard-types';
-import { highestPlan, isPlanId, type PlanId } from './plan-config';
+import {
+  highestPlan,
+  isPlanId,
+  type PlanId,
+} from '@/features/subscriptions/domain/plan-config';
 
 export type EffectiveEntitlement = {
   effectivePlan: PlanId;

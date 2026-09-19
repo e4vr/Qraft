@@ -35,6 +35,8 @@ import {
   canAccessBank,
   canEditBank,
   canManageBank,
+} from '@/features/access/domain/access-policy';
+import {
   type AppUser,
   type BankRole,
   type CollaborationState,
@@ -43,7 +45,10 @@ import {
   type Question,
 } from '@/lib/medguard-types';
 import { cn as cx, nowIso } from '@/lib/utils';
-import { hasFeature, PLAN_LIMITS } from '@/lib/plan-config';
+import {
+  hasFeature,
+  PLAN_LIMITS,
+} from '@/features/subscriptions/domain/plan-config';
 
 function slug(value: string) {
   return value

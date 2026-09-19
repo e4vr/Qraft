@@ -8,7 +8,11 @@ import { setAuthenticatedUserCache } from '@/lib/application-services';
 import type { AppUser } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
-import { PLAN_LIMITS, PLAN_ORDER, type PlanId } from '@/lib/plan-config';
+import {
+  PLAN_LIMITS,
+  PLAN_ORDER,
+  type PlanId,
+} from '@/features/subscriptions/domain/plan-config';
 
 export const openUpgrade = () =>
   window.dispatchEvent(new Event('qraft-upgrade'));

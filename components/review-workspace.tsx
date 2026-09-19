@@ -20,8 +20,8 @@ import { WorkspaceHeader } from '@/components/workspace-header';
 import { api } from '@/lib/api-client';
 import { loadCollaborationState } from '@/lib/application-services';
 import { subscribeLive } from '@/lib/realtime-client';
+import { canReviewBank } from '@/features/access/domain/access-policy';
 import {
-  canReviewBank,
   optionLabel,
   type AppUser,
   type CollaborationState,

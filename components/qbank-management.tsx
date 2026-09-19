@@ -12,9 +12,22 @@ import { ReviewerSearch } from '@/components/reviewer-search';
 import { WorkspaceHeader } from '@/components/workspace-header';
 import { api } from '@/lib/api-client';
 import { deleteQBankImages, uploadQuestionImage } from '@/lib/application-services';
-import { bankRoleFor, canEditBank, canManageBank, optionLabel, type AppUser, type CollaborationState, type NoteImage, type QBank, type Question, type QBankVisibility } from '@/lib/medguard-types';
+import {
+  bankRoleFor,
+  canEditBank,
+  canManageBank,
+} from '@/features/access/domain/access-policy';
+import {
+  optionLabel,
+  type AppUser,
+  type CollaborationState,
+  type NoteImage,
+  type QBank,
+  type Question,
+  type QBankVisibility,
+} from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
-import { hasFeature } from '@/lib/plan-config';
+import { hasFeature } from '@/features/subscriptions/domain/plan-config';
 import { openUpgrade } from '@/components/subscription-workspace';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 

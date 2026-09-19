@@ -19,7 +19,8 @@ import {
   changeCloudflarePassword,
   updateCloudflareProfile,
 } from '@/lib/application-services';
-import { administrativeRoleLabels, normalizePhone, type AppUser } from '@/lib/medguard-types';
+import { administrativeRoleLabels } from '@/features/access/domain/access-policy';
+import { normalizePhone, type AppUser } from '@/lib/medguard-types';
 
 export function AccountProfile({
   user,

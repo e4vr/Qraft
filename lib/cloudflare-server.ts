@@ -17,10 +17,12 @@ import {
   canReviewBank,
   hasAccessManagerRole,
   hasModeratorRole,
+  isBankMembershipRole,
+  isPlatformRole,
+} from '@/features/access/domain/access-policy';
+import {
   initialAppState,
   initialCollaborationState,
-  isPlatformRole,
-  isBankMembershipRole,
   normalizeCollaborationState,
   normalizeAppState,
   normalizeEmail,
@@ -34,7 +36,19 @@ import {
   type QuestionProposal,
 } from './medguard-types';
 import { applyEffectiveEntitlement } from './entitlement-server';
-import { getPlanLimits, utcMonthStart } from './plan-config';
+import {
+  getPlanLimits,
+  utcMonthStart,
+} from '@/features/subscriptions/domain/plan-config';
+import {
+  assertSameOrigin,
+  readJson,
+  readLimitedBytes,
+} from '@/server/http/request';
+import { json } from '@/server/http/response';
+
+export { assertSameOrigin, readJson } from '@/server/http/request';
+export { json } from '@/server/http/response';
 
 const SESSION_COOKIE = '__Host-qraft_session';
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
@@ -98,49 +112,6 @@ async function deleteImageKitFile(fileId: string) {
     },
   );
   return response.ok || response.status === 404;
-}
-
-async function readLimitedBytes(request: Request, maximumBytes: number) {
-  const declaredLength = Number(request.headers.get('content-length') ?? 0);
-  if (declaredLength > maximumBytes)
-    throw new Response('Request payload is too large.', { status: 413 });
-  if (!request.body) return new ArrayBuffer(0);
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maximumBytes) {
-      await reader.cancel();
-      throw new Response('Request payload is too large.', { status: 413 });
-    }
-    chunks.push(value);
-  }
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body.buffer;
-}
-
-async function readLimitedText(request: Request, maximumBytes: number) {
-  return decoder.decode(await readLimitedBytes(request, maximumBytes));
-}
-
-export async function readJson<T>(
-  request: Request,
-  maximumBytes = 64_000,
-): Promise<T> {
-  try {
-    return JSON.parse(await readLimitedText(request, maximumBytes)) as T;
-  } catch (error) {
-    if (error instanceof Response) throw error;
-    throw new Response('Invalid JSON payload.', { status: 400 });
-  }
 }
 
 function bytesToHex(bytes: ArrayBuffer | Uint8Array) {
@@ -221,12 +192,6 @@ async function hashPassword(
   return { salt, hash: bytesToHex(derived) };
 }
 
-export function json(value: unknown, status = 200, headers?: HeadersInit) {
-  const responseHeaders = new Headers(headers);
-  responseHeaders.set('cache-control', 'no-store');
-  return Response.json(value, { status, headers: responseHeaders });
-}
-
 function cookieValue(request: Request, name: string) {
   const source = request.headers.get('cookie') ?? '';
   return source
@@ -238,12 +203,6 @@ function cookieValue(request: Request, name: string) {
 
 function sessionCookie(token: string, maxAge = SESSION_SECONDS) {
   return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
-}
-
-export function assertSameOrigin(request: Request) {
-  const origin = request.headers.get('origin');
-  if (origin && origin !== new URL(request.url).origin)
-    throw new Response('Cross-origin request rejected.', { status: 403 });
 }
 
 async function safeProfile(

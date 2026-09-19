@@ -1,8 +1,13 @@
 import { env } from 'cloudflare:workers';
-import { canAccessBank, type AppUser, type Question, type TestBuilderConfig } from './medguard-types';
+import { canAccessBank } from '@/features/access/domain/access-policy';
+import type {
+  AppUser,
+  Question,
+  TestBuilderConfig,
+} from './medguard-types';
 import { bankAccessState } from './qbank-access-repository';
-import { getPlanLimits } from './plan-config';
-import { json } from './cloudflare-server';
+import { getPlanLimits } from '@/features/subscriptions/domain/plan-config';
+import { json } from '@/server/http/response';
 
 // Count and random selection share this exact predicate. The per-exam limit is
 // applied only to the final SELECT, never to the candidates or count.

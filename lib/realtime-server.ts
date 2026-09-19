@@ -1,7 +1,14 @@
 import { env } from 'cloudflare:workers';
-import { currentUser, json, readJson } from './cloudflare-server';
+import { currentUser } from './cloudflare-server';
+import { readJson } from '@/server/http/request';
+import { json } from '@/server/http/response';
 import { bankAccessState } from './qbank-access-repository';
-import { canAccessBank, canReviewBank, hasAccessManagerRole, hasModeratorRole } from './medguard-types';
+import {
+  canAccessBank,
+  canReviewBank,
+  hasAccessManagerRole,
+  hasModeratorRole,
+} from '@/features/access/domain/access-policy';
 
 type RealtimeStub = DurableObjectStub & {
   publish(resources: string[], originClientId?: string): Promise<void>;
