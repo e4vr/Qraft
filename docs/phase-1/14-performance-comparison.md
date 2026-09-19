@@ -1,21 +1,33 @@
 # Performance Comparison
 
-## Build baseline
+## Production build
 
-| Metric | Before Phase 1 | After Phase 1 |
-| --- | ---: | ---: |
-| Build outcome | PASS | Pending |
-| Build duration | about 22.9 s | Pending |
-| Client modules | 2,158 | Pending |
-| Client output files | 42 | Pending |
-| Total client output | 3,724,763 bytes | Pending |
-| Main application chunk | 702,656 bytes | Pending |
-| Framework chunk | 190,109 bytes | Pending |
-| Vinext chunk | 132,652 bytes | Pending |
+| Metric | Before Phase 1 | After Phase 1 | Delta |
+| --- | ---: | ---: | ---: |
+| Build outcome | PASS | PASS | none |
+| Client output files | 42 | 42 | 0 |
+| Total client output | 3,724,763 bytes | 3,724,763 bytes | 0 |
+| Main application chunk | 702,656 bytes | 702,656 bytes | 0 |
+| Framework chunk | 190,109 bytes | 190,109 bytes | 0 |
+| Vinext chunk | 132,652 bytes | 132,652 bytes | 0 |
+| Index chunk | 111,099 bytes | 111,099 bytes | 0 |
 
-The build reported the existing warning that the main application chunk exceeds 500 kB. Phase 1 will avoid performance regressions; changing loading or caching behavior is `DEFERRED_TO_PHASE_2` unless a behavior-neutral module move improves the result naturally.
+Chunk hashes changed as modules moved, but byte sizes did not. The existing warning for a main chunk above 500 kB remains.
 
-## Network and write baseline
+## Module counts
 
-Use the Phase 0 measurements in `docs/audit/21-performance-baseline.md`. No persistent-data or production-network load tests are authorized for this refactor.
+Module counts rose slightly because large mixed files were divided into feature modules. This is expected structural overhead and did not increase emitted client bytes:
+
+- Baseline client modules: 2,158
+- Final client modules: 2,166
+
+Build duration varied between runs and was not treated as a reliable performance result on the shared development machine. Representative end-to-end builds remained successful and within the same range.
+
+## Network and persistence
+
+Endpoint paths, request counts by code path, payload shapes, cache behavior, invalidation behavior, outbox ordering, and write timing were not intentionally changed. The Phase 0 baseline in `docs/audit/21-performance-baseline.md` remains authoritative.
+
+## Assessment
+
+Phase 1 caused no measured bundle regression. It created boundaries that make code splitting and targeted profiling possible in Phase 2. Actual runtime/network optimization is `DEFERRED_TO_PHASE_2`.
 
