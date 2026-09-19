@@ -25,6 +25,15 @@ import { api, setApiCache } from '@/lib/api-client';
 import { mergeLiveState } from '@/lib/merge-live-state';
 import { appStateFreshness, mergeAppStates } from '@/lib/merge-app-state';
 import { recordStudyActivity } from '@/lib/study-streak';
+import { preserveNewerLocalAnswers } from '@/features/collaboration/domain/preserve-personal-answers';
+import {
+  formatDate,
+  formatDuration,
+  mainProgressCategory,
+  nextTestTitle,
+  normalizedTestTitle,
+} from '@/features/exams/domain/exam-presenters';
+import { mergeRanges } from '@/features/exams/domain/highlight-ranges';
 import { loadActiveLocalTheme, loadLocalTheme, saveLocalTheme, type LocalTheme } from '@/lib/local-preferences';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
@@ -205,24 +214,6 @@ type View =
   | 'test';
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'offline' | 'error';
 
-function preserveNewerLocalAnswers(
-  remote: CollaborationState,
-  local: CollaborationState,
-  uid: string,
-) {
-  const answerStats = { ...remote.answerStats };
-  for (const [id, localStat] of Object.entries(local.answerStats)) {
-    const answer = localStat.selections[uid];
-    if (!Number.isInteger(answer)) continue;
-    const remoteStat = answerStats[id] ?? localStat;
-    answerStats[id] = {
-      ...remoteStat,
-      selections: { ...remoteStat.selections, [uid]: answer },
-    };
-  }
-  return { ...remote, answerStats };
-}
-
 interface ModelContextLike {
   registerTool: (
     tool: {
@@ -247,24 +238,6 @@ const NAV_ITEMS = [
   { id: 'progress' as const, label: 'Progress', icon: BarChart3 },
   { id: 'settings' as const, label: 'Settings', icon: Settings },
 ];
-
-function formatDate(value?: string) {
-  if (!value) return '—';
-  return new Intl.DateTimeFormat('en', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(new Date(value));
-}
-
-function formatDuration(totalSeconds: number) {
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return [hours, minutes, seconds]
-    .map((part) => String(part).padStart(2, '0'))
-    .join(':');
-}
 
 function AppLoadingScreen({ status }: { status: string }) {
   return (
@@ -312,20 +285,6 @@ function getQuestionProgress(
   return state.progress[questionId] ?? emptyProgress();
 }
 
-
-function mergeRanges(ranges: HighlightRange[]): HighlightRange[] {
-  const sorted = ranges
-    .filter((range) => range.end > range.start)
-    .sort((a, b) => a.start - b.start);
-  const merged: HighlightRange[] = [];
-  for (const range of sorted) {
-    const previous = merged.at(-1);
-    if (previous && range.start <= previous.end)
-      previous.end = Math.max(previous.end, range.end);
-    else merged.push({ ...range });
-  }
-  return merged;
-}
 
 function HighlightedText({
   text,
@@ -947,46 +906,6 @@ function subscribeDesktopNavigation(callback: () => void) {
   const media = window.matchMedia('(min-width: 1024px)');
   media.addEventListener('change', callback);
   return () => media.removeEventListener('change', callback);
-}
-
-function normalizedTestTitle(value: string) {
-  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
-}
-
-function nextTestTitle(bankName: string, tests: TestSession[]) {
-  const used = new Set(tests.map((test) => normalizedTestTitle(test.title)));
-  let sequence = 1;
-  while (used.has(normalizedTestTitle(`${bankName} ${sequence}`)))
-    sequence += 1;
-  return `${bankName} ${sequence}`;
-}
-
-function mainProgressCategory(question: Question) {
-  const value = `${question.specialty} ${question.topic}`.toLocaleLowerCase(
-    'en-US',
-  );
-  if (/p(a?ediatr|ediatric|child|neonat)/.test(value)) return 'Pediatrics';
-  if (/obstetric|gyne|gynae|ob\/gyn|maternal|pregnan|labor|labour/.test(value))
-    return 'OB/GYN';
-  if (
-    /anatom|physiolog|patholog|pharmacol|microbi|biochem|immunolog|genetic|histolog|embryolog|basic/.test(
-      value,
-    )
-  )
-    return 'Basics';
-  if (
-    /surg|orthop|urolog|neurosurg|ent\b|ophthalm|trauma|vascular|plastic|anesth/.test(
-      value,
-    )
-  )
-    return 'Surgery';
-  if (
-    /medicine|cardio|respirat|pulmon|gastro|nephro|renal|endocr|rheumat|hemat|infect|neurolog|dermat|psychiatr|emergency|family/.test(
-      value,
-    )
-  )
-    return 'Medicine';
-  return question.specialty.trim() || 'Other';
 }
 
 const LAB_REFERENCE_GROUPS = [

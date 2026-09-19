@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { currentUser } from './cloudflare-server';
+import { currentUser } from '@/features/auth/server/auth-service';
 import { assertSameOrigin, readJson } from '@/server/http/request';
 import { json } from '@/server/http/response';
 import { auditStatement } from './platform-server';

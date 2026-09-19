@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { shareCurrentUserRequest } from '@/lib/cloudflare-server';
+import { shareCurrentUserRequest } from '@/features/auth/server/auth-service';
 import { notifyMutation } from '@/lib/realtime-server';
 
 export function cloudflarePathParts(request: Request): string[] {

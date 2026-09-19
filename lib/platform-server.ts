@@ -5,7 +5,7 @@ import { testPool } from './test-pool-server';
 import {
   currentUser,
   profileById,
-} from './cloudflare-server';
+} from '@/features/auth/server/auth-service';
 import { assertSameOrigin, readJson } from '@/server/http/request';
 import { json } from '@/server/http/response';
 import {

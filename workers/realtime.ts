@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 
 // One object per audience (bank, account, or administrative workspace).
 // Sockets carry invalidations only; data remains behind the authorized D1 APIs.
-export class RealtimeChannel extends DurableObject {
+export class RealtimeChannel extends DurableObject<Cloudflare.Env> {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
@@ -29,5 +29,9 @@ export class RealtimeChannel extends DurableObject {
   webSocketError(socket: WebSocket) { socket.close(1011, 'Connection error'); }
 }
 
-const worker = { fetch() { return new Response('Not found', { status: 404 }); } };
+const worker: ExportedHandler<Cloudflare.Env> = {
+  fetch() {
+    return new Response('Not found', { status: 404 });
+  },
+};
 export default worker;

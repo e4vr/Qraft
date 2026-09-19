@@ -4,24 +4,32 @@ import {
   changeOwnPassword,
   completeMfa,
   currentUser,
-  deleteBankMedia,
-  deleteQBankFolder,
-  joinBank,
-  loadCollaboration,
-  loadState,
   login,
   logout,
-  previewBankInvite,
   register,
-  reserveIds,
+  updateOwnProfile,
+  verifyMfa,
+} from '@/features/auth/server/auth-service';
+import {
+  loadCollaboration,
   saveCollaboration,
+} from '@/features/collaboration/server/collaboration-service';
+import {
+  deleteBankMedia,
+  serveMedia,
+  uploadMedia,
+} from '@/features/media/server/media-service';
+import {
+  deleteQBankFolder,
+  joinBank,
+  previewBankInvite,
+  reserveIds,
+} from '@/features/qbanks/server/qbank-service';
+import {
+  loadState,
   saveState,
   saveStatePatch,
-  serveMedia,
-  updateOwnProfile,
-  uploadMedia,
-  verifyMfa,
-} from '@/lib/cloudflare-server';
+} from '@/features/state/server/state-service';
 import { contactApi } from '@/lib/contact-server';
 import { platformApi } from '@/lib/platform-server';
 import { preformedTestApi } from '@/lib/preformed-test-server';

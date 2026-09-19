@@ -3,10 +3,10 @@ import { connectRealtime, publishChanges } from './lib/realtime-server';
 import { createQuestionBackup } from './lib/question-backup';
 import { cleanDeletedAccountMedia } from './lib/account-deletion-server';
 import { expireSubscriptions } from './lib/platform-server';
-import { cleanStateSyncOperations } from './lib/cloudflare-server';
+import { cleanStateSyncOperations } from './features/state/server/state-service';
 import { cleanPreformedTestOperations } from './lib/preformed-test-server';
 
-const worker = {
+const worker: ExportedHandler<Cloudflare.Env> = {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext) {
     // WebSocket upgrades must reach Cloudflare unchanged (HTTP 101).
     if (new URL(request.url).pathname === '/api/cloudflare/realtime') {

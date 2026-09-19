@@ -71,3 +71,22 @@ void test('client integrations are owned by feature modules', async () => {
     assert.doesNotMatch(content, /from ['"]@\/components\//, file);
   }
 });
+
+void test('server callers enter through named feature boundaries', async () => {
+  const router = await source('server/api/cloudflare-router.ts');
+  const lifecycle = await source('server/api/request-lifecycle.ts');
+  const worker = await source('worker.ts');
+
+  for (const caller of [router, lifecycle, worker]) {
+    assert.doesNotMatch(caller, /lib\/cloudflare-server/);
+  }
+  for (const feature of [
+    'auth',
+    'collaboration',
+    'media',
+    'qbanks',
+    'state',
+  ]) {
+    assert.match(router + lifecycle + worker, new RegExp(`features/${feature}/server/`));
+  }
+});
