@@ -53,3 +53,21 @@ void test('browser components do not depend on server or Cloudflare modules', as
     assert.doesNotMatch(content, /from ['"]cloudflare:workers['"]/, file);
   }
 });
+
+void test('client integrations are owned by feature modules', async () => {
+  const facade = await source('lib/cloudflare-client.ts');
+  const applicationServices = await source('lib/application-services.ts');
+
+  for (const feature of ['auth', 'collaboration', 'exams', 'qbanks', 'state']) {
+    assert.match(facade, new RegExp(`@/features/${feature}/client/`));
+    assert.match(applicationServices, new RegExp(`@/features/${feature}/client/`));
+  }
+  assert.doesNotMatch(facade, /\bfunction\s+/);
+  assert.doesNotMatch(applicationServices, /\bfunction\s+/);
+
+  const featureFiles = await filesBelow('features');
+  for (const file of featureFiles) {
+    const content = await readFile(file, 'utf8');
+    assert.doesNotMatch(content, /from ['"]@\/components\//, file);
+  }
+});

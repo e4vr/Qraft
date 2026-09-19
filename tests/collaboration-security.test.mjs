@@ -352,8 +352,8 @@ void test('QBank owners can manage access, links, questions, and deletion', asyn
     new URL('components/qbank-workspace.tsx', root),
     'utf8',
   );
-  const cloud = await readFile(
-    new URL('lib/cloudflare-client.ts', root),
+  const qbankClient = await readFile(
+    new URL('features/qbanks/client/qbank-client.ts', root),
     'utf8',
   );
   assert.match(workspace, /My QBanks/);
@@ -362,7 +362,7 @@ void test('QBank owners can manage access, links, questions, and deletion', asyn
   assert.match(manager, /Revoke access/);
   assert.match(manager, /Delete permanently/);
   assert.match(manager, /Add question manually/);
-  assert.match(cloud, /deleteQBankImages/);
+  assert.match(qbankClient, /deleteQBankImages/);
 });
 
 void test('QBank editors can edit content but owner-only controls stay protected', async () => {
@@ -402,8 +402,8 @@ void test('Question IDs are reserved atomically and released only by hard deleti
     new URL('lib/cloudflare-server.ts', root),
     'utf8',
   );
-  const cloud = await readFile(
-    new URL('lib/cloudflare-client.ts', root),
+  const qbankClient = await readFile(
+    new URL('features/qbanks/client/qbank-client.ts', root),
     'utf8',
   );
   const allocator = await readFile(
@@ -423,7 +423,7 @@ void test('Question IDs are reserved atomically and released only by hard deleti
   assert.match(allocator, /INSERT INTO question_ids/);
   assert.match(allocator, /RETURNING question_id/);
   assert.match(efficientMigration, /question_id_release_to_pool/);
-  assert.match(cloud, /reserveQuestionIds/);
+  assert.match(qbankClient, /reserveQuestionIds/);
   assert.match(allocator, /99999/);
   assert.doesNotMatch(server, /WITH RECURSIVE numbers/);
 });
