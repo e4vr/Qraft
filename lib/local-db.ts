@@ -1,5 +1,9 @@
 import { normalizeCollaborationState, type AppState, type CollaborationState, type QBankSpecialty, type QBankTopic } from './medguard-types';
 import type { PreformedLocalAttempt } from './preformed-test-types';
+import {
+  coalesceCollaborationSync,
+  type CollaborationSyncSnapshot,
+} from '@/features/collaboration/domain/collaboration-outbox';
 
 const DATABASE = 'medguard-qbank';
 const STORE = 'key-value';
@@ -178,6 +182,56 @@ export async function noteStateSyncAttempt(uid: string, operationId: string): Pr
   );
 }
 
+export async function enqueueCollaborationSync(
+  operation: CollaborationSyncSnapshot,
+): Promise<void> {
+  await updateValue<CollaborationSyncSnapshot>(
+    `collaboration-outbox:${operation.uid}`,
+    current => coalesceCollaborationSync(current, operation),
+  );
+}
+
+export async function loadCollaborationSyncOutbox(
+  uid: string,
+): Promise<CollaborationSyncSnapshot | undefined> {
+  return readValue<CollaborationSyncSnapshot>(`collaboration-outbox:${uid}`);
+}
+
+export async function removeCollaborationSync(
+  uid: string,
+  operationId: string,
+): Promise<void> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE, 'readwrite');
+    const store = transaction.objectStore(STORE);
+    const key = `collaboration-outbox:${uid}`;
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const current = request.result as CollaborationSyncSnapshot | undefined;
+      if (current?.id === operationId) store.delete(key);
+    };
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onerror = () => { db.close(); reject(transaction.error); };
+  });
+}
+
+export async function noteCollaborationSyncAttempt(
+  uid: string,
+  operationId: string,
+): Promise<void> {
+  const current = await loadCollaborationSyncOutbox(uid);
+  if (!current || current.id !== operationId) return;
+  await updateValue<CollaborationSyncSnapshot>(
+    `collaboration-outbox:${uid}`,
+    latest =>
+      latest && latest.id === operationId
+        ? { ...latest, attempts: latest.attempts + 1 }
+        : latest ?? current,
+  );
+}
+
 export async function forgetLocalUser(uid: string): Promise<void> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
@@ -186,6 +240,7 @@ export async function forgetLocalUser(uid: string): Promise<void> {
     store.put(true, `deleted:${uid}`);
     store.delete(`state:${uid}`);
     store.delete(`collaboration:${uid}`);
+    store.delete(`collaboration-outbox:${uid}`);
     store.delete(`state-outbox:${uid}`);
     const cursor = store.openCursor();
     cursor.onsuccess = () => {

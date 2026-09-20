@@ -13,7 +13,9 @@ export {
   updateCloudflareProfile,
 } from '@/features/auth/client/auth-client';
 export {
+  flushPendingCollaborationState,
   loadCollaborationState,
+  queueCollaborationState,
   saveCollaborationState,
 } from '@/features/collaboration/client/collaboration-client';
 export { registerStartedExam } from '@/features/exams/client/exam-client';

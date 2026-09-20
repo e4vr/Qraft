@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, pbkdf2Sync, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
@@ -189,6 +189,27 @@ print(json.dumps(out))`,
     );
     return { status: response.status, data: await response.json() };
   };
+  const emptyState = (changes = {}) => ({
+    version: 1,
+    tests: [],
+    progress: {},
+    reports: [],
+    revisions: [],
+    customQuestions: [],
+    questionOverrides: {},
+    flashcardDecks: [],
+    flashcards: [],
+    flashcardSchedules: {},
+    flashcardReviewLog: [],
+    flashcardSettings: {
+      desiredRetention: 0.9,
+      dailyNewLimit: 20,
+      dailyReviewLimit: 200,
+    },
+    settings: { dailyGoal: 20, theme: 'system', autoSync: true },
+    studyStreak: { current: 0, best: 0, lastActivityDate: '' },
+    ...changes,
+  });
   const uploadImage = async (
     uid,
     name = 'scan.png',
@@ -267,6 +288,52 @@ print(json.dumps(out))`,
     const historyNext=await call('admin','/platform/discounts?search=TABLE_QA_&offset=0&id=table-qa-0&usageOffset=50');
     assert.equal(historyNext.data.codes.length,51); assert.equal(historyNext.data.events.length,2);
     await db.batch([db.prepare("DELETE FROM subscription_events WHERE id LIKE 'table-event-%'"),db.prepare("DELETE FROM discount_codes WHERE id LIKE 'table-qa-%'")]);
+  });
+  await t.test('Subscription and coupon timestamps are compared and stored canonically', async () => {
+    const couponId = randomUUID();
+    const coupon = await call('admin', '/platform/discounts', {
+      id: couponId,
+      code: 'DATE_BOUNDARY',
+      kind: 'percent',
+      amount: 10,
+      enabled: true,
+      max_uses: null,
+      per_user: null,
+      starts_at: '2030-01-01T00:00:00+14:00',
+      expires_at: '2029-12-31T12:00:00Z',
+      allowedPlans: ['pro'],
+    });
+    assert.equal(coupon.status, 200, JSON.stringify(coupon));
+    const storedCoupon = await db
+      .prepare('SELECT starts_at,expires_at FROM discount_codes WHERE id=?')
+      .bind(couponId)
+      .first();
+    assert.deepEqual(storedCoupon, {
+      starts_at: '2029-12-31T10:00:00.000Z',
+      expires_at: '2029-12-31T12:00:00.000Z',
+    });
+
+    const subscription = await call('admin', '/platform/subscriptions', {
+      operation: 'activate',
+      userId: 'manual-member',
+      plan: 'pro',
+      expires_at: 'Wed, 02 Jan 2030 00:00:00 GMT',
+      paid: 5000,
+    });
+    assert.equal(subscription.status, 200, JSON.stringify(subscription));
+    assert.equal(
+      (
+        await db
+          .prepare('SELECT expires_at FROM subscriptions WHERE user_id=?')
+          .bind('manual-member')
+          .first()
+      ).expires_at,
+      '2030-01-02T00:00:00.000Z',
+    );
+    await db.batch([
+      db.prepare('DELETE FROM discount_codes WHERE id=?').bind(couponId),
+      db.prepare("DELETE FROM subscriptions WHERE user_id='manual-member'"),
+    ]);
   });
 
   await t.test('R2 uploads are private, hashed, and deduplicated', async () => {
@@ -776,7 +843,7 @@ print(json.dumps(out))`,
       };
       const make = (id, count) => ({
         id,
-        questionIds: Array(count).fill('gs-001'),
+        questionIds: Array.from({ length: count }, (_, index) => `${id}-q-${index}`),
         currentIndex: 0,
         answers: {},
         revealed: [],
@@ -1170,6 +1237,103 @@ print(json.dumps(out))`,
           )
         ).status,
         200,
+      );
+    },
+  );
+  await t.test(
+    'Personal state rejects first-write private notes and impossible duplicate or cyclic identities',
+    async () => {
+      const privateNote = emptyState({
+        progress: {
+          'gs-001': {
+            attempts: 0,
+            correctAttempts: 0,
+            incorrectAttempts: 0,
+            flagged: false,
+            bookmarked: false,
+            highlights: [],
+            note: 'This must require Pro even on the first save.',
+            noteImages: [],
+          },
+        },
+      });
+      const noteSave = await call('reviewer', '/state', { state: privateNote }, 'PUT');
+      assert.equal(noteSave.status, 403, JSON.stringify(noteSave));
+      assert.equal(
+        await db.prepare("SELECT user_id FROM app_states WHERE user_id='reviewer'").first(),
+        null,
+      );
+
+      const test = {
+        id: 'duplicate-test',
+        title: '',
+        mode: 'tutor',
+        questionIds: ['gs-001'],
+        currentIndex: 0,
+        answers: {},
+        revealed: [],
+        graded: [],
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        status: 'active',
+      };
+      const duplicateTests = await call(
+        'pro',
+        '/state',
+        { state: emptyState({ tests: [test, { ...test }] }) },
+        'PUT',
+      );
+      assert.equal(duplicateTests.status, 400, JSON.stringify(duplicateTests));
+
+      const deckA = {
+        id: 'cycle-a', name: 'A', qbankId: 'smle-gs', parentId: 'cycle-b',
+        color: '#000', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      const deckB = { ...deckA, id: 'cycle-b', name: 'B', parentId: 'cycle-a' };
+      const cyclicDecks = await call(
+        'pro',
+        '/state',
+        { state: emptyState({ flashcardDecks: [deckA, deckB] }) },
+        'PUT',
+      );
+      assert.equal(cyclicDecks.status, 400, JSON.stringify(cyclicDecks));
+      assert.equal(
+        await db.prepare("SELECT user_id FROM app_states WHERE user_id='pro'").first(),
+        null,
+      );
+    },
+  );
+  await t.test(
+    'Invalid exam answer statistics cannot partially persist the checkpoint',
+    async () => {
+      const state = emptyState({
+        tests: [{
+          id: 'checkpoint-invalid-answer',
+          title: '',
+          mode: 'tutor',
+          questionIds: ['gs-001'],
+          currentIndex: 0,
+          answers: { 'gs-001': 0 },
+          revealed: ['gs-001'],
+          graded: ['gs-001'],
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          status: 'active',
+        }],
+      });
+      const result = await call(
+        'pro',
+        '/state/exam',
+        {
+          ...state,
+          answerSelections: [{ qbankId: 'smle-gs', questionId: 'gs-001', answer: 99 }],
+        },
+        'PUT',
+      );
+      assert.equal(result.status, 400, JSON.stringify(result));
+      assert.equal(
+        await db.prepare("SELECT user_id FROM app_states WHERE user_id='pro'").first(),
+        null,
       );
     },
   );
@@ -1981,7 +2145,7 @@ print(json.dumps(out))`,
   await t.test('Expired Pro becomes Lite and expiry is audited', async () => {
     await db
       .prepare(
-        "UPDATE subscriptions SET expires_at='2020-01-01' WHERE user_id='lite'",
+        "UPDATE subscriptions SET starts_at='2019-01-01T00:00:00.000Z', expires_at='2020-01-01T00:00:00.000Z' WHERE user_id='lite'",
       )
       .run();
     assert.equal((await call('lite', '/auth/session')).data.user.tier, 'lite');
@@ -2013,4 +2177,22 @@ print(json.dumps(out))`,
     );
   });
   await improvementsApiTests(t, db, call);
+  await t.test('Read-only integrity checks find no contradictions in the local fixture', async () => {
+    const source = await readFile('scripts/data-integrity-checks.sql', 'utf8');
+    const statements = source
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('--'))
+      .join('\n')
+      .split(';')
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+    for (const statement of statements) {
+      const result = await db.prepare(statement).all();
+      assert.equal(
+        result.results.length,
+        0,
+        `Integrity check returned rows: ${statement.slice(0, 100)}`,
+      );
+    }
+  });
 });

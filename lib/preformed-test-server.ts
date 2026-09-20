@@ -729,8 +729,14 @@ export async function preformedTestApi(request: Request, action: string) {
       };
       const statements: D1PreparedStatement[] = [
         env.DB.prepare(
-          'INSERT INTO preformed_submission_receipts(submission_id,test_id,leaderboard,result_json,created_at) VALUES(?,?,0,?,?)',
-        ).bind(submissionId, row.id, JSON.stringify(preliminaryResult), now),
+          'INSERT INTO preformed_submission_receipts(submission_id,test_id,attempt_token_hash,leaderboard,result_json,created_at) VALUES(?,?,?,0,?,?)',
+        ).bind(
+          submissionId,
+          row.id,
+          tokenHash,
+          JSON.stringify(preliminaryResult),
+          now,
+        ),
       ];
       if (signedIn)
         statements.push(
@@ -815,6 +821,25 @@ export async function preformedTestApi(request: Request, action: string) {
             409,
           );
         if (!String(error).includes('UNIQUE constraint failed')) throw error;
+        const claimed = await env.DB.prepare(
+          'SELECT submission_id,result_json FROM preformed_submission_receipts WHERE attempt_token_hash=?',
+        )
+          .bind(tokenHash)
+          .first<{ submission_id: string; result_json: string | null }>();
+        if (claimed?.submission_id !== submissionId)
+          return json(
+            { error: 'This attempt has already been submitted.' },
+            409,
+          );
+        if (claimed?.result_json)
+          return json({
+            ...(JSON.parse(claimed.result_json) as Record<string, unknown>),
+            duplicate: true,
+          });
+        return json(
+          { error: 'This submission is still being finalized. Try again.' },
+          409,
+        );
       }
       const leaderboard = await rankedLeaderboard(row.id, row.version);
       const rank =

@@ -338,10 +338,11 @@ export const preformedAttemptTokens = sqliteTable('preformed_attempt_tokens', {
 export const preformedSubmissionReceipts = sqliteTable('preformed_submission_receipts', {
   submissionId: text('submission_id').primaryKey(),
   testId: text('test_id').notNull().references(() => preformedTests.id, { onDelete: 'cascade' }),
+  attemptTokenHash: text('attempt_token_hash'),
   leaderboard: integer('leaderboard', { mode: 'boolean' }).notNull().default(false),
   resultJson: text('result_json'),
   createdAt: text('created_at').notNull(),
-});
+}, table => [uniqueIndex('idx_preformed_submission_receipts_attempt_token').on(table.attemptTokenHash)]);
 
 export const preformedReports = sqliteTable(
   'preformed_reports',

@@ -62,6 +62,20 @@ void test('plan policy preserves limits, ordering, and feature gates', async () 
   assert.equal(plans.highestPlan('lite', 'free', 'unlimited'), 'unlimited');
 });
 
+void test('calendar subscription durations clamp end-of-month and leap-day boundaries', async () => {
+  const calendar = await loadTypeScript(
+    'features/subscriptions/domain/calendar-duration.ts',
+  );
+  assert.equal(
+    calendar.addCalendarDuration('2027-01-31T12:30:00.000Z', 1, 'month'),
+    '2027-02-28T12:30:00.000Z',
+  );
+  assert.equal(
+    calendar.addCalendarDuration('2028-02-29T12:30:00.000Z', 1, 'year'),
+    '2029-02-28T12:30:00.000Z',
+  );
+});
+
 void test('exam helpers preserve range, title, and progress behavior', async () => {
   const highlights = await loadTypeScript(
     'features/exams/domain/highlight-ranges.ts',
@@ -108,4 +122,23 @@ void test('collaboration merge preserves only the current local answer', async (
   };
   const result = collaboration.preserveNewerLocalAnswers(remote, local, 'u1');
   assert.deepEqual(result.answerStats.q1.selections, { u1: 3, u2: 2 });
+});
+
+void test('collaboration outbox preserves the first server baseline and latest local state', async () => {
+  const outbox = await loadTypeScript(
+    'features/collaboration/domain/collaboration-outbox.ts',
+  );
+  const base = { qbanks: [{ id: 'bank', name: 'Before' }] };
+  const first = {
+    id: 'first', uid: 'user', base, state: { qbanks: [{ id: 'bank', name: 'First' }] },
+    createdAt: '2026-01-01T00:00:00.000Z', attempts: 0,
+  };
+  const latest = {
+    id: 'latest', uid: 'user', base: first.state, state: { qbanks: [{ id: 'bank', name: 'Latest' }] },
+    createdAt: '2026-01-01T00:01:00.000Z', attempts: 0,
+  };
+  assert.deepEqual(outbox.coalesceCollaborationSync(first, latest), {
+    ...latest,
+    base,
+  });
 });

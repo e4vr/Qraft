@@ -107,6 +107,7 @@ import {
   completeCloudflareMfaSignIn,
   completeTotpEnrollment,
   joinCloudflareQBankByLink,
+  flushPendingCollaborationState,
   loadCollaborationState,
   loadCloudState,
   observeCloudflareUser,
@@ -119,6 +120,7 @@ import {
   saveDailyGoal,
   saveExamCheckpoint,
   saveFlashcardCheckpoint,
+  queueCollaborationState,
   saveCollaborationState,
   setAuthenticatedUserCache,
   signInCloudflare,
@@ -5722,6 +5724,12 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
           localCollaboration ?? initialCollaborationState(),
         );
         if (navigator.onLine && user!.status === 'approved') {
+          let collaborationReplaySucceeded = true;
+          try {
+            await flushPendingCollaborationState(user!.uid);
+          } catch {
+            collaborationReplaySucceeded = false;
+          }
           const [cloud, remoteCollaboration] = await Promise.all([
             loadCloudState(user!.uid),
             loadCollaborationState(user!),
@@ -5736,9 +5744,11 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
               : normalizeAppState(cloud);
             cloudStateSnapshot.current = normalizeAppState(cloud);
           }
-          shared = localIsNewer && localCollaboration
-            ? preserveNewerLocalAnswers(remoteCollaboration, localCollaboration, user!.uid)
-            : remoteCollaboration;
+          shared = !collaborationReplaySucceeded && localCollaboration
+            ? localCollaboration
+            : localIsNewer && localCollaboration
+              ? preserveNewerLocalAnswers(remoteCollaboration, localCollaboration, user!.uid)
+              : remoteCollaboration;
           cloudLoaded.current = true;
           setSyncStatus('synced');
         }
@@ -5948,6 +5958,13 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
     if (!user || !hydrated) return;
     const onlineHandler = () => {
       void flushPendingCloudState(user.uid).catch(() => setSyncStatus('local'));
+      void flushPendingCollaborationState(user.uid)
+        .then((synced) => {
+          if (!synced) return;
+          lastSavedCollaboration.current = synced;
+          setSyncStatus('synced');
+        })
+        .catch(() => setSyncStatus('local'));
     };
     const saveBeforeLeaving = () => {
       const snapshot = stateSnapshot.current;
@@ -6023,7 +6040,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       if (navigator.onLine && cloudLoaded.current) {
         collaborationWriteInFlight.current = true;
         setSyncStatus('syncing');
-        void saveCollaborationState(collaboration, previous)
+        void saveCollaborationState(collaboration, previous, user.uid)
           .then(() => {
             lastSavedCollaboration.current = collaboration;
             setSyncStatus('synced');
@@ -6033,6 +6050,9 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
             collaborationWriteInFlight.current = false;
           });
       } else {
+        void queueCollaborationState(user.uid, collaboration, previous).catch(
+          () => setSyncStatus('error'),
+        );
         setSyncStatus(navigator.onLine ? 'local' : 'offline');
       }
     };
@@ -6213,7 +6233,11 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
       const next = { ...state, lastSyncAt: new Date().toISOString() };
       const [remote] = await Promise.all([
         saveCloudState(user.uid, next),
-        saveCollaborationState(collaboration, lastSavedCollaboration.current),
+        saveCollaborationState(
+          collaboration,
+          lastSavedCollaboration.current,
+          user.uid,
+        ),
       ]);
       const synchronized = remote ? mergeAppStates(next, remote) : next;
       await Promise.all([

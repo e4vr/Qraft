@@ -38,6 +38,7 @@ import {
   utcMonthStart,
   type PlanId,
 } from '@/features/subscriptions/domain/plan-config';
+import { addCalendarDuration } from '@/features/subscriptions/domain/calendar-duration';
 
 export function auditStatement(
   user: AppUser,
@@ -120,9 +121,9 @@ async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'pro')
     const now = new Date().toISOString();
     if (!discount.enabled)
       throw new Error('كود الخصم غير مفعّل / Code disabled.');
-    if (discount.starts_at && discount.starts_at > now)
+    if (discount.starts_at && Date.parse(discount.starts_at) > Date.parse(now))
       throw new Error('لم يبدأ الكود بعد / Code not yet active.');
-    if (discount.expires_at && discount.expires_at <= now)
+    if (discount.expires_at && Date.parse(discount.expires_at) <= Date.parse(now))
       throw new Error('انتهت صلاحية الكود / Code expired.');
     if (discount.max_uses !== null && discount.uses >= discount.max_uses)
       throw new Error(
@@ -156,17 +157,6 @@ async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'pro')
     percent: discount?.kind === 'percent' ? discount.amount : null,
     plan: requestedPlan,
   };
-}
-
-function addRewardDuration(
-  startedAt: string,
-  duration: number,
-  unit: 'month' | 'year',
-) {
-  const expiry = new Date(startedAt);
-  if (unit === 'month') expiry.setUTCMonth(expiry.getUTCMonth() + duration);
-  else expiry.setUTCFullYear(expiry.getUTCFullYear() + duration);
-  return expiry.toISOString();
 }
 
 function normalizeQuestionText(value: string) {
@@ -849,7 +839,7 @@ export async function platformApi(request: Request, action: string) {
         if (pass.status !== 'available')
           return json({ error: 'This reward pass is no longer available.' }, 409);
         const now = new Date().toISOString();
-        const expiresAt = addRewardDuration(now, pass.duration, pass.duration_unit);
+        const expiresAt = addCalendarDuration(now, pass.duration, pass.duration_unit);
         const activated = await env.DB.prepare(
           "UPDATE reward_passes SET status='active',activated_at=?,expires_at=? WHERE id=? AND user_id=? AND status='available'",
         ).bind(now, expiresAt, passId, user.uid).run();
@@ -1193,8 +1183,7 @@ export async function platformApi(request: Request, action: string) {
         return json({ error: `Your account is already ${getPlanLimits(plan).name}.` }, 409);
       const price = await quote(user, text('code'), plan);
       const now = new Date().toISOString();
-      const end = new Date(now);
-      end.setUTCFullYear(end.getUTCFullYear() + 1);
+      const end = addCalendarDuration(now, 1, 'year');
       if (price.final === 0 && price.codeId) {
         try {
           await env.DB.batch([
@@ -1213,7 +1202,7 @@ export async function platformApi(request: Request, action: string) {
               0,
               'success',
               now,
-              end.toISOString(),
+              end,
               now,
               `One year ${getPlanLimits(plan).name}`,
               plan,
@@ -1227,7 +1216,7 @@ export async function platformApi(request: Request, action: string) {
                 tier: plan,
                 ...price,
                 startsAt: now,
-                expiresAt: end.toISOString(),
+                expiresAt: end,
               },
             ),
           ]);
@@ -1327,8 +1316,14 @@ export async function platformApi(request: Request, action: string) {
       const code = text('code').toUpperCase(),
         kind = text('kind'),
         amount = Number(input.amount);
-      const starts = text('starts_at') || null,
-        expires = text('expires_at') || null;
+      const startsInput = text('starts_at'),
+        expiresInput = text('expires_at');
+      const starts = startsInput && Number.isFinite(Date.parse(startsInput))
+        ? new Date(startsInput).toISOString()
+        : startsInput || null;
+      const expires = expiresInput && Number.isFinite(Date.parse(expiresInput))
+        ? new Date(expiresInput).toISOString()
+        : expiresInput || null;
       const allowedPlans = Array.isArray(input.allowedPlans)
         ? [...new Set(input.allowedPlans.filter((plan): plan is PlanId => isPlanId(plan) && plan !== 'free'))]
         : old
@@ -1350,8 +1345,8 @@ export async function platformApi(request: Request, action: string) {
         (kind === 'percent' && amount > 100) ||
         amount > 10000000 ||
         [max, per].some((x) => x !== null && (!Number.isInteger(x) || x < 1)) ||
-        [starts, expires].some((x) => x && !Number.isFinite(Date.parse(x))) ||
-        (starts && expires && starts >= expires)
+        [startsInput, expiresInput].some((x) => x && !Number.isFinite(Date.parse(x))) ||
+        (starts && expires && Date.parse(starts) >= Date.parse(expires))
         || !allowedPlans.length
       )
         throw new Error('Check code, discount amount, dates and usage limits.');
@@ -1443,8 +1438,11 @@ export async function platformApi(request: Request, action: string) {
       const requestedPlan = text('plan');
       const subscriptionPlan = isPlanId(requestedPlan) && requestedPlan !== 'free' ? requestedPlan : 'pro';
       const now = new Date().toISOString(),
-        end = text('expires_at');
-      if (!cancel && (!Number.isFinite(Date.parse(end)) || end <= now))
+        requestedEnd = text('expires_at'),
+        end = requestedEnd && Number.isFinite(Date.parse(requestedEnd))
+          ? new Date(requestedEnd).toISOString()
+          : requestedEnd;
+      if (!cancel && (!Number.isFinite(Date.parse(end)) || Date.parse(end) <= Date.parse(now)))
         throw new Error('Select a future expiration date.');
       const paid = Number(input.paid ?? 0);
       if (!Number.isInteger(paid) || paid < 0)

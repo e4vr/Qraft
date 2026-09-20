@@ -780,9 +780,13 @@ export async function saveState(request: Request) {
       (t) =>
         !t ||
         typeof t.id !== 'string' ||
+        !t.id ||
         !Array.isArray(t.questionIds) ||
-        t.questionIds.some((id) => typeof id !== 'string'),
-    )
+        t.questionIds.some((id) => typeof id !== 'string' || !id) ||
+        new Set(t.questionIds).size !== t.questionIds.length,
+    ) ||
+    new Set(input.state.tests.map((test) => test.id)).size !==
+      input.state.tests.length
   )
     return json({ error: 'Invalid tests.' }, 400);
   const flashcardDecks = input.state.flashcardDecks ?? [];
@@ -848,6 +852,8 @@ export async function saveState(request: Request) {
   const decksById = new Map(flashcardDecks.map((deck) => [deck.id, deck]));
   const cardsById = new Map(flashcards.map((card) => [card.id, card]));
   if (
+    decksById.size !== flashcardDecks.length ||
+    cardsById.size !== flashcards.length ||
     flashcardDecks.some(
       (deck) =>
         deck.parentId === deck.id ||
@@ -859,6 +865,16 @@ export async function saveState(request: Request) {
     )
   )
     return json({ error: 'Every flashcard must belong to a valid deck.' }, 400);
+  for (const deck of flashcardDecks) {
+    const ancestors = new Set<string>([deck.id]);
+    let parentId = deck.parentId;
+    while (parentId) {
+      if (ancestors.has(parentId))
+        return json({ error: 'Flashcard deck nesting cannot contain a cycle.' }, 400);
+      ancestors.add(parentId);
+      parentId = decksById.get(parentId)?.parentId;
+    }
+  }
   if (
     Object.entries(flashcardSchedules).some(
       ([id, schedule]) =>
@@ -906,10 +922,9 @@ export async function saveState(request: Request) {
     );
   if (
     !planLimits.canUsePrivateNotes &&
-    storedState &&
     Object.entries(input.state.progress).some(
       ([questionId, progress]) => {
-        const previous = storedState.progress?.[questionId];
+        const previous = storedState?.progress?.[questionId];
         return (
           (progress.note ?? '') !== (previous?.note ?? '') ||
           JSON.stringify(progress.noteImages ?? []) !==
@@ -1057,6 +1072,25 @@ export async function saveStatePatch(
     state.settings = { ...state.settings, dailyGoal };
     state.clientUpdatedAt = new Date().toISOString();
   }
+  const answerSelections = input.answerSelections;
+  if (
+    kind === 'exam' &&
+    answerSelections !== undefined &&
+    (!Array.isArray(answerSelections) ||
+      answerSelections.length > 500 ||
+      answerSelections.some(
+        (item) =>
+          !isRecord(item) ||
+          typeof item.qbankId !== 'string' ||
+          !item.qbankId ||
+          typeof item.questionId !== 'string' ||
+          !item.questionId ||
+          !Number.isInteger(Number(item.answer)) ||
+          Number(item.answer) < 0 ||
+          Number(item.answer) > 25,
+      ))
+  )
+    return json({ error: 'Invalid answer statistics checkpoint.' }, 400);
   const forwarded = new Request(request.url, {
     method: 'PUT',
     headers: request.headers,
@@ -1068,19 +1102,15 @@ export async function saveStatePatch(
   });
   shareCurrentUserRequest(request, forwarded);
   const stateResponse = await saveState(forwarded);
-  if (!stateResponse.ok || kind !== 'exam' || !Array.isArray(input.answerSelections))
+  if (!stateResponse.ok || kind !== 'exam' || !Array.isArray(answerSelections))
     return stateResponse;
-  const selections = input.answerSelections
+  const selections = answerSelections
     .filter(isRecord)
     .map(item => ({
       qbankId: typeof item.qbankId === 'string' ? item.qbankId : '',
       questionId: typeof item.questionId === 'string' ? item.questionId : '',
       answer: Number(item.answer),
     }));
-  if (
-    selections.length > 500 ||
-    selections.some(item => !item.qbankId || !item.questionId || !Number.isInteger(item.answer) || item.answer < 0 || item.answer > 25)
-  ) return json({ error: 'Invalid answer statistics checkpoint.' }, 400);
   if (!selections.length) return stateResponse;
   const ids = selections.map(item => `${item.qbankId}:${item.questionId}`);
   const rows = await env.DB.prepare(
@@ -2233,6 +2263,38 @@ function qbankFolderChangeSetValid(
   });
 }
 
+function qbankMembershipChangeSetValid(
+  operations: RecordOperation[],
+  state: CollaborationState,
+) {
+  const memberships = new Map(
+    state.memberships.map((membership) => [membership.id, membership]),
+  );
+  for (const operation of operations) {
+    if (operation.collection !== 'qbankMemberships') continue;
+    if (operation.type === 'delete') memberships.delete(operation.id);
+    else if (isRecord(operation.value))
+      memberships.set(
+        operation.id,
+        operation.value as unknown as CollaborationState['memberships'][number],
+      );
+  }
+  const identities = new Set<string>();
+  for (const membership of memberships.values()) {
+    if (
+      !membership.id ||
+      !membership.qbankId ||
+      !membership.userId ||
+      !isBankMembershipRole(membership.role)
+    )
+      return false;
+    const identity = `${membership.qbankId}\u0000${membership.userId}`;
+    if (identities.has(identity)) return false;
+    identities.add(identity);
+  }
+  return true;
+}
+
 export async function saveCollaboration(request: Request) {
   assertSameOrigin(request);
   const user = await currentUser(request);
@@ -2322,6 +2384,11 @@ export async function saveCollaboration(request: Request) {
     )
   )
     return json({ error: 'One or more changes are not permitted.' }, 403);
+  if (!qbankMembershipChangeSetValid(input.operations, state))
+    return json(
+      { error: 'Each account can have only one membership per QBank.' },
+      409,
+    );
   input.operations = input.operations.filter(operation => {
     const current = collaborationValue(state, operation.collection, operation.id);
     return operation.type === 'delete' ? current !== undefined : !sameJson(operation.value, current);
@@ -2417,6 +2484,29 @@ export async function saveCollaboration(request: Request) {
       };
     });
   const statements: D1PreparedStatement[] = [];
+  const deletedQBankIds = input.operations
+    .filter(
+      (operation) =>
+        operation.collection === 'qbanks' && operation.type === 'delete',
+    )
+    .map((operation) => operation.id);
+  if (deletedQBankIds.length) {
+    const encodedIds = JSON.stringify(deletedQBankIds);
+    statements.push(
+      env.DB.prepare(`DELETE FROM records WHERE
+        qbank_id IN (SELECT value FROM json_each(?)) OR
+        (type='qbankShareLinks' AND json_extract(payload,'$.qbankId') IN (SELECT value FROM json_each(?)))`).bind(
+        encodedIds,
+        encodedIds,
+      ),
+      env.DB.prepare(
+        'DELETE FROM qbank_classification_revisions WHERE qbank_id IN (SELECT value FROM json_each(?))',
+      ).bind(encodedIds),
+      env.DB.prepare(
+        'DELETE FROM classification_operations WHERE qbank_id IN (SELECT value FROM json_each(?))',
+      ).bind(encodedIds),
+    );
+  }
   if (recordDeletes.length)
     statements.push(
       env.DB.prepare(`DELETE FROM records WHERE rowid IN (

@@ -223,6 +223,85 @@ export async function improvementsApiTests(t, db, call) {
   );
 
   await t.test(
+    'Direct QBank deletion atomically removes related generic records and classification state',
+    async () => {
+      await account('direct-delete-owner');
+      const bank = makeBank('direct-delete-bank', 'direct-delete-owner', 'private');
+      await record('qbanks', bank, 'direct-delete-owner');
+      await record('qbankMemberships', {
+        id: 'direct-delete-membership',
+        qbankId: bank.id,
+        userId: 'free',
+        userName: 'free',
+        role: 'viewer',
+        grantedById: 'direct-delete-owner',
+        grantedByName: 'Owner',
+        createdAt: now,
+      });
+      await record('questionProposals', {
+        id: 'direct-delete-proposal',
+        qbankId: bank.id,
+        type: 'new_question',
+        editKinds: ['question_text'],
+        payload: { stem: 'Pending', options: ['A', 'B'], answer: 0, explanation: '', sourceReference: 'Fixture' },
+        proposedById: 'free',
+        proposedByName: 'free',
+        proposedAt: now,
+        status: 'pending',
+      }, 'free');
+      await db.prepare(
+        'INSERT INTO qbank_classification_revisions(qbank_id,revision,updated_at) VALUES(?,?,?)',
+      ).bind(bank.id, 1, now).run();
+
+      const duplicateMembership = await call(
+        'direct-delete-owner',
+        '/collaboration',
+        {
+          operations: [{
+            collection: 'qbankMemberships',
+            id: 'direct-delete-membership-duplicate',
+            type: 'set',
+            value: {
+              id: 'direct-delete-membership-duplicate',
+              qbankId: bank.id,
+              userId: 'free',
+              userName: 'free',
+              role: 'reviewer',
+              grantedById: 'direct-delete-owner',
+              grantedByName: 'Owner',
+              createdAt: now,
+            },
+          }],
+        },
+        'PUT',
+      );
+      assert.equal(duplicateMembership.status, 409, JSON.stringify(duplicateMembership));
+
+      const deleted = await call(
+        'direct-delete-owner',
+        '/collaboration',
+        { operations: [{ collection: 'qbanks', id: bank.id, type: 'delete' }] },
+        'PUT',
+      );
+      assert.equal(deleted.status, 200, JSON.stringify(deleted));
+      assert.equal(
+        (
+          await db.prepare(
+            'SELECT count(*) AS n FROM records WHERE qbank_id=? OR (type=\'qbanks\' AND id=?)',
+          ).bind(bank.id, bank.id).first()
+        ).n,
+        0,
+      );
+      assert.equal(
+        await db.prepare(
+          'SELECT qbank_id FROM qbank_classification_revisions WHERE qbank_id=?',
+        ).bind(bank.id).first(),
+        null,
+      );
+    },
+  );
+
+  await t.test(
     '500-question pool is independent of per-test limits, with matching random and status filters',
     async () => {
       await account('pool-learner');
@@ -641,6 +720,36 @@ export async function improvementsApiTests(t, db, call) {
             .first()
         ).n,
         1,
+      );
+
+      const secondAttempt = await call(
+        'free',
+        `/preformed/open?code=${test.code}`,
+      );
+      const concurrent = await Promise.all(
+        [randomUUID(), randomUUID()].map((id) =>
+          call('free', '/preformed/submit', {
+            submissionId: id,
+            attemptToken: secondAttempt.data.test.attemptToken,
+            answers: { [questions[0].id]: 0 },
+            durationSeconds: 10,
+          }),
+        ),
+      );
+      assert.deepEqual(
+        concurrent.map((result) => result.status).sort((left, right) => left - right),
+        [200, 409],
+      );
+      assert.equal(
+        (
+          await db
+            .prepare(
+              'SELECT count(*) AS n FROM preformed_submission_receipts WHERE test_id=?',
+            )
+            .bind(test.id)
+            .first()
+        ).n,
+        2,
       );
 
       const settingsOnly = await call(

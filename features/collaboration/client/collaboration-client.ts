@@ -3,6 +3,12 @@ import type {
   AppUser,
   CollaborationState,
 } from '@/lib/medguard-types';
+import {
+  enqueueCollaborationSync,
+  loadCollaborationSyncOutbox,
+  noteCollaborationSyncAttempt,
+  removeCollaborationSync,
+} from '@/lib/local-db';
 
 type CollaborationResponse = { collaboration: CollaborationState };
 
@@ -31,7 +37,7 @@ export async function loadCollaborationState(
   return (await collaborationRequest(user, force)).collaboration;
 }
 
-export async function saveCollaborationState(
+async function sendCollaborationState(
   next: CollaborationState,
   previous: CollaborationState,
 ): Promise<void> {
@@ -217,4 +223,53 @@ export async function saveCollaborationState(
       );
     }
   }
+}
+
+const collaborationFlushes = new Map<string, Promise<CollaborationState | undefined>>();
+
+export async function queueCollaborationState(
+  uid: string,
+  next: CollaborationState,
+  previous: CollaborationState,
+): Promise<void> {
+  await enqueueCollaborationSync({
+    id: crypto.randomUUID(),
+    uid,
+    base: previous,
+    state: next,
+    createdAt: new Date().toISOString(),
+    attempts: 0,
+  });
+}
+
+export async function flushPendingCollaborationState(
+  uid: string,
+): Promise<CollaborationState | undefined> {
+  const active = collaborationFlushes.get(uid);
+  if (active) return active;
+  const pending = (async () => {
+    let latest: CollaborationState | undefined;
+    for (;;) {
+      const operation = await loadCollaborationSyncOutbox(uid);
+      if (!operation) return latest;
+      await noteCollaborationSyncAttempt(uid, operation.id);
+      await sendCollaborationState(operation.state, operation.base);
+      await removeCollaborationSync(uid, operation.id);
+      latest = operation.state;
+    }
+  })().finally(() => collaborationFlushes.delete(uid));
+  collaborationFlushes.set(uid, pending);
+  return pending;
+}
+
+export async function saveCollaborationState(
+  next: CollaborationState,
+  previous: CollaborationState,
+  uid = collaborationScope,
+): Promise<void> {
+  if (!uid) throw new Error('Collaboration synchronization requires an account.');
+  await queueCollaborationState(uid, next, previous);
+  do {
+    await flushPendingCollaborationState(uid);
+  } while (await loadCollaborationSyncOutbox(uid));
 }
