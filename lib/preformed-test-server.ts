@@ -146,6 +146,26 @@ function document(row: TestRow): PreformedTestDocument {
   };
 }
 
+function authorizePrivateMedia(
+  test: PreformedTestDocument,
+  attemptToken: string,
+): PreformedTestDocument {
+  return {
+    ...test,
+    questions: test.questions.map((question) => ({
+      ...question,
+      images: question.images.map((image) =>
+        image.url.startsWith('/api/cloudflare/media/')
+          ? {
+              ...image,
+              url: `${image.url}${image.url.includes('?') ? '&' : '?'}attempt=${encodeURIComponent(attemptToken)}`,
+            }
+          : image,
+      ),
+    })),
+  };
+}
+
 function validSettings(value: unknown): value is PreformedTestSettings {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
@@ -406,7 +426,11 @@ export async function preformedTestApi(request: Request, action: string) {
           expiresAt,
         )
         .run();
-      return json({ test: { ...document(row), attemptToken: rawToken } }, 200, {
+      const opened = document(row);
+      const authorizedDocument = row.visibility === 'private'
+        ? authorizePrivateMedia(opened, rawToken)
+        : opened;
+      return json({ test: { ...authorizedDocument, attemptToken: rawToken } }, 200, {
         'cache-control': 'no-store',
       });
     }
@@ -555,6 +579,19 @@ export async function preformedTestApi(request: Request, action: string) {
       const row = await rowById(id);
       if (!row || row.status === 'hidden')
         return json({ error: 'Test not found.' }, 404);
+      const owner = row.owner_id === user.uid;
+      const participation = owner
+        ? { allowed: 1 }
+        : await env.DB.prepare(
+            'SELECT 1 AS allowed FROM preformed_participation WHERE test_id=? AND version=? AND user_id=? LIMIT 1',
+          )
+            .bind(row.id, row.version, user.uid)
+            .first<{ allowed: number }>();
+      if (!owner && (!participation || row.status !== 'published'))
+        return json(
+          { error: 'Submit this test before viewing its leaderboard.' },
+          403,
+        );
       return json({
         leaderboard: await rankedLeaderboard(row.id, row.version),
       });

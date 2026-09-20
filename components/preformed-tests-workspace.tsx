@@ -115,8 +115,11 @@ function downloadResults(
   test: PreformedTestDocument,
   entries: PreformedLeaderboardEntry[],
 ) {
-  const escape = (value: string | number) =>
-    `"${String(value).replaceAll('"', '""')}"`;
+  const escape = (value: string | number) => {
+    const text = String(value);
+    const safe = /^[=+\-@\t\r]/.test(text.trimStart()) ? `'${text}` : text;
+    return `"${safe.replaceAll('"', '""')}"`;
+  };
   const rows = [
     [
       'Rank',

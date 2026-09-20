@@ -40,6 +40,62 @@ import {
 } from '@/features/subscriptions/domain/plan-config';
 import { addCalendarDuration } from '@/features/subscriptions/domain/calendar-duration';
 
+const backupEncoder = new TextEncoder();
+
+type PersonalBackupPayload = {
+  format: 'qraft-personal-backup-v1';
+  signatureVersion: 'hmac-sha256-v1';
+  ownerId: string;
+  exportedAt: string;
+  flashcards: Record<string, unknown> | null;
+  records: Array<Record<string, unknown>>;
+};
+
+function backupSigningKey() {
+  const value = env.BACKUP_SIGNING_KEY?.trim() ?? '';
+  return value.length >= 32 ? value : undefined;
+}
+
+function bytesToHex(value: ArrayBuffer) {
+  return [...new Uint8Array(value)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function signPersonalBackup(
+  payload: PersonalBackupPayload,
+  secret: string,
+) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    backupEncoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  return bytesToHex(
+    await crypto.subtle.sign(
+      'HMAC',
+      key,
+      backupEncoder.encode(JSON.stringify(payload)),
+    ),
+  );
+}
+
+async function personalBackupSignatureIsValid(
+  payload: PersonalBackupPayload,
+  signature: unknown,
+  secret: string,
+) {
+  if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/.test(signature))
+    return false;
+  const expected = await signPersonalBackup(payload, secret);
+  let mismatch = expected.length ^ signature.length;
+  for (let index = 0; index < expected.length; index += 1)
+    mismatch |= expected.charCodeAt(index) ^ signature.charCodeAt(index);
+  return mismatch === 0;
+}
+
 export function auditStatement(
   user: AppUser,
   action: string,
@@ -592,6 +648,12 @@ export async function platformApi(request: Request, action: string) {
       const limits = getPlanLimits(plan);
       if (!limits.canUseFlashcards && !limits.canCreatePrivateQBank)
         return json({ error: 'Backup is available with Flashcards or Private QBanks access.' }, 403);
+      const signingKey = backupSigningKey();
+      if (!signingKey)
+        return json(
+          { error: 'Personal backup signing is not configured.' },
+          503,
+        );
       if (request.method === 'GET') {
         const state = limits.canUseFlashcards
           ? await env.DB.prepare('SELECT payload FROM app_states WHERE user_id=?').bind(user.uid).first<{ payload: string }>()
@@ -604,38 +666,128 @@ export async function platformApi(request: Request, action: string) {
           ? await env.DB.prepare(`SELECT type,id,qbank_id,owner_id,payload,updated_at FROM records WHERE qbank_id IN (${bankIds.map(() => '?').join(',')}) AND type IN ('sharedQuestions','questionProposals','sharedNotes','qbankMemberships') ORDER BY type,id`).bind(...bankIds).all<{ type: string; id: string; qbank_id: string | null; owner_id: string | null; payload: string; updated_at: string }>()
           : { results: [] as Array<{ type: string; id: string; qbank_id: string | null; owner_id: string | null; payload: string; updated_at: string }> };
         const app = state ? JSON.parse(state.payload) as Record<string, unknown> : {};
-        return json({
+        const payload: PersonalBackupPayload = {
           format: 'qraft-personal-backup-v1',
+          signatureVersion: 'hmac-sha256-v1',
           ownerId: user.uid,
           exportedAt: new Date().toISOString(),
           flashcards: limits.canUseFlashcards ? {
             flashcardDecks: app.flashcardDecks ?? [], flashcards: app.flashcards ?? [], flashcardSchedules: app.flashcardSchedules ?? {}, flashcardReviewLog: app.flashcardReviewLog ?? [], flashcardSettings: app.flashcardSettings,
           } : null,
           records: [...banks.results.map((bank) => ({ type: 'qbanks', id: bank.id, qbank_id: bank.id, owner_id: user.uid, payload: JSON.parse(bank.payload), updated_at: new Date().toISOString() })), ...related.results.map((row) => ({ ...row, payload: JSON.parse(row.payload) }))],
+        };
+        return json({
+          ...payload,
+          signature: await signPersonalBackup(payload, signingKey),
         });
       }
       if (request.method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
-      const backup = input as { format?: string; ownerId?: string; flashcards?: Record<string, unknown> | null; records?: Array<{ type?: string; id?: string; payload?: unknown; updated_at?: string }> };
-      if (backup.format !== 'qraft-personal-backup-v1' || backup.ownerId !== user.uid || !Array.isArray(backup.records) || backup.records.length > 20_000)
+      const backup = input as { format?: string; signatureVersion?: string; signature?: string; ownerId?: string; exportedAt?: string; flashcards?: Record<string, unknown> | null; records?: Array<{ type?: string; id?: string; payload?: unknown; updated_at?: string }> };
+      if (
+        backup.format !== 'qraft-personal-backup-v1' ||
+        backup.signatureVersion !== 'hmac-sha256-v1' ||
+        backup.ownerId !== user.uid ||
+        !backup.exportedAt ||
+        !Number.isFinite(Date.parse(backup.exportedAt)) ||
+        !Array.isArray(backup.records) ||
+        backup.records.length > 20_000
+      )
         return json({ error: 'This backup does not belong to the signed-in account.' }, 403);
+      const signedPayload: PersonalBackupPayload = {
+        format: backup.format,
+        signatureVersion: backup.signatureVersion,
+        ownerId: backup.ownerId,
+        exportedAt: backup.exportedAt,
+        flashcards: backup.flashcards ?? null,
+        records: backup.records as Array<Record<string, unknown>>,
+      };
+      if (!(await personalBackupSignatureIsValid(signedPayload, backup.signature, signingKey)))
+        return json({ error: 'This personal backup is unsigned or has been changed.' }, 403);
       const bankRecords = backup.records.filter((record) => record.type === 'qbanks');
       const bankIds = new Set(bankRecords.map((record) => record.id).filter((id): id is string => Boolean(id)));
-      if ([...bankRecords].some((record) => !record.payload || typeof record.payload !== 'object' || (record.payload as Record<string, unknown>).ownerId !== user.uid || (record.payload as Record<string, unknown>).visibility !== 'private'))
+      if (
+        bankIds.size !== bankRecords.length ||
+        [...bankRecords].some((record) =>
+          !record.payload ||
+          typeof record.payload !== 'object' ||
+          record.id !== (record.payload as Record<string, unknown>).id ||
+          (record.payload as Record<string, unknown>).ownerId !== user.uid ||
+          (record.payload as Record<string, unknown>).visibility !== 'private',
+        )
+      )
         return json({ error: 'Private QBank ownership could not be verified.' }, 403);
       const allowedRecordTypes = new Set(['qbanks', 'sharedQuestions', 'questionProposals', 'sharedNotes', 'qbankMemberships']);
       const records = backup.records.filter((record) => {
-        const qbankId = record.payload && typeof record.payload === 'object'
-          ? (record.payload as Record<string, unknown>).qbankId
+        const value = record.payload && typeof record.payload === 'object'
+          ? (record.payload as Record<string, unknown>)
           : undefined;
-        return allowedRecordTypes.has(record.type ?? '') && typeof record.id === 'string' && record.payload && typeof record.payload === 'object' && (record.type === 'qbanks' || (typeof qbankId === 'string' && bankIds.has(qbankId)));
+        const qbankId = value?.qbankId;
+        return allowedRecordTypes.has(record.type ?? '') &&
+          typeof record.id === 'string' &&
+          record.id.length > 0 &&
+          record.id.length <= 200 &&
+          value &&
+          value.id === record.id &&
+          (record.type === 'qbanks' || (typeof qbankId === 'string' && bankIds.has(qbankId)));
       });
-      if (records.length !== backup.records.length) return json({ error: 'Backup contains data outside its private QBanks.' }, 403);
+      const identities = records.map((record) => `${record.type}\u0000${record.id}`);
+      if (records.length !== backup.records.length || new Set(identities).size !== identities.length)
+        return json({ error: 'Backup contains data outside its private QBanks.' }, 403);
+      const existingRows: Array<{
+        type: string;
+        id: string;
+        qbank_id: string | null;
+        owner_id: string | null;
+        payload: string;
+      }> = [];
+      for (let offset = 0; offset < records.length; offset += 400) {
+        const keys = records.slice(offset, offset + 400).map((record) => ({
+          type: record.type,
+          id: record.id,
+        }));
+        const rows = await env.DB.prepare(`SELECT record.type,record.id,record.qbank_id,record.owner_id,record.payload
+          FROM json_each(?) AS change
+          JOIN records AS record INDEXED BY idx_records_type_id
+            ON record.type=json_extract(change.value,'$.type')
+           AND record.id=json_extract(change.value,'$.id')`)
+          .bind(JSON.stringify(keys))
+          .all<(typeof existingRows)[number]>();
+        existingRows.push(...rows.results);
+      }
+      const ownedExistingBanks = new Set(
+        existingRows
+          .filter((row) => row.type === 'qbanks')
+          .filter((row) => {
+            const value = JSON.parse(row.payload) as { ownerId?: string };
+            return value.ownerId === user.uid;
+          })
+          .map((row) => row.id),
+      );
+      if (
+        existingRows.some((row) =>
+          row.type === 'qbanks'
+            ? !ownedExistingBanks.has(row.id)
+            : !row.qbank_id ||
+              !bankIds.has(row.qbank_id) ||
+              !ownedExistingBanks.has(row.qbank_id),
+        )
+      )
+        return json(
+          { error: 'Backup record IDs conflict with data owned by another account.' },
+          409,
+        );
       const now = new Date().toISOString();
       for (let offset = 0; offset < records.length; offset += 400) {
         await env.DB.batch(records.slice(offset, offset + 400).map((record) => {
           const value = record.payload as Record<string, unknown>;
           const qbankId = record.type === 'qbanks' ? record.id! : String(value.qbankId);
-          return env.DB.prepare('INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,owner_id=excluded.owner_id,payload=excluded.payload,updated_at=excluded.updated_at').bind(record.type!, record.id!, qbankId, user.uid, JSON.stringify(record.payload), record.updated_at || now);
+          return env.DB.prepare(`INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES(?,?,?,?,?,?)
+            ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,owner_id=excluded.owner_id,payload=excluded.payload,updated_at=excluded.updated_at
+            WHERE (records.type='qbanks' AND json_extract(records.payload,'$.ownerId')=?)
+               OR (records.type<>'qbanks' AND records.qbank_id=excluded.qbank_id AND EXISTS(
+                 SELECT 1 FROM records AS bank
+                 WHERE bank.type='qbanks' AND bank.id=excluded.qbank_id AND json_extract(bank.payload,'$.ownerId')=?
+               ))`).bind(record.type!, record.id!, qbankId, user.uid, JSON.stringify(record.payload), record.updated_at || now, user.uid, user.uid);
         }));
       }
       if (limits.canUseFlashcards && backup.flashcards) {

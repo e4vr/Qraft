@@ -64,7 +64,7 @@ Cloudflare Budget Alerts تنبه فقط ولا توقف الاستخدام. ل�
 
 المصادقة الحالية تستخدم `profiles`, `sessions`, PBKDF2، Cookie HttpOnly وMFA للمسؤول الأعلى. الواجهة تصل إليها عبر `AuthService` في `application-services.ts`. يمكن إضافة Supabase adapter لاحقًا، لكن لا حاجة للهجرة في الـPilot.
 
-الأسرار الوحيدة المطلوبة حاليًا هي `ROOT_ADMIN_EMAIL` و`ROOT_ADMIN_SETUP_TOKEN`. `IMAGEKIT_PRIVATE_KEY` اختياري مؤقتًا فقط إذا كانت هناك صور قديمة تحتاج عمليات حذف من ImageKit.
+الأسرار المطلوبة حاليًا هي `ROOT_ADMIN_EMAIL` و`ROOT_ADMIN_SETUP_TOKEN` و`BACKUP_SIGNING_KEY`. `IMAGEKIT_PRIVATE_KEY` اختياري مؤقتًا فقط إذا كانت هناك صور قديمة تحتاج عمليات حذف من ImageKit.
 
 ## 7. Exam synchronization
 
@@ -104,6 +104,7 @@ Cloudflare Budget Alerts تنبه فقط ولا توقف الاستخدام. ل�
 | `REALTIME` | Durable Object binding | إشعارات التغييرات المهمة فقط |
 | `ROOT_ADMIN_EMAIL` | secret | بريد أول Superadmin |
 | `ROOT_ADMIN_SETUP_TOKEN` | secret | رمز إعداد طويل وعشوائي |
+| `BACKUP_SIGNING_KEY` | secret | مفتاح HMAC بطول 32 محرفًا على الأقل لتوقيع النسخ الاحتياطية الشخصية والتحقق منها |
 | `IMAGEKIT_PRIVATE_KEY` | secret اختياري | حذف ملفات legacy فقط أثناء الانتقال |
 | `R2_PUBLIC_URL` | variable اختياري | محجوز لمسار CDN عام مستقبلي؛ الصور الخاصة لا تستخدمه |
 | `R2_BILLING_CYCLE_DAY` | variable | يوم بداية دورة R2 الظاهر في Billing؛ حاليًا `7` |
@@ -133,6 +134,7 @@ Wrangler ينشئ D1 وR2 محليين من bindings. غيّر القيم الن
 npx wrangler r2 bucket create qraft-assets
 npx wrangler secret put ROOT_ADMIN_EMAIL
 npx wrangler secret put ROOT_ADMIN_SETUP_TOKEN
+npx wrangler secret put BACKUP_SIGNING_KEY
 npx wrangler d1 migrations apply qraft-qbank --remote
 npm.cmd run build
 npm.cmd run deploy:realtime

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 
-export async function improvementsApiTests(t, db, call) {
+export async function improvementsApiTests(t, db, call, runtime) {
   const now = new Date().toISOString();
   async function record(type, value, ownerId = null) {
     await db
@@ -634,15 +634,47 @@ export async function improvementsApiTests(t, db, call) {
         passingPercent: 60,
         allowBackNavigation: true,
       };
+      const questionId = randomUUID();
+      const mediaKey = `questions/preformed-${base.id}/${questionId}/fixture.png`;
+      await runtime.assets.put(
+        mediaKey,
+        new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        { httpMetadata: { contentType: 'image/png' } },
+      );
+      await db
+        .prepare(
+          "INSERT INTO media(key,qbank_id,owner_id,content_type,size,provider,storage_key,file_hash,original_name,purpose,status,created_at,updated_at) VALUES(?,?,?,?,?,'r2',?,?,?,?, 'ready',?,?)",
+        )
+        .bind(
+          mediaKey,
+          `preformed-${base.id}`,
+          'preformed-owner',
+          'image/png',
+          8,
+          mediaKey,
+          '0'.repeat(64),
+          'fixture.png',
+          'questions',
+          now,
+          now,
+        )
+        .run();
       const questions = [
         {
-          id: randomUUID(),
+          id: questionId,
           stem: 'Which option is correct?',
           options: ['Correct', 'Wrong'],
           answer: 0,
           explanation: 'A short explanation.',
           sourceReference: 'Fixture',
-          images: [],
+          images: [
+            {
+              id: randomUUID(),
+              url: `/api/cloudflare/media/${mediaKey}`,
+              name: 'fixture.png',
+              caption: '',
+            },
+          ],
         },
       ];
       const savedQuestion = await call(
@@ -668,6 +700,75 @@ export async function improvementsApiTests(t, db, call) {
       );
       assert.equal(managedDraft.status, 200, JSON.stringify(managedDraft));
       assert.deepEqual(managedDraft.data.test.questions, questions);
+      assert.equal(
+        (await call('free', `/preformed/leaderboard?id=${base.id}`)).status,
+        403,
+      );
+      assert.equal(
+        (
+          await call(
+            'preformed-owner',
+            `/preformed/leaderboard?id=${base.id}`,
+          )
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await runtime.fetch(
+            `https://qraft.test/api/cloudflare/media/${mediaKey}`,
+          )
+        ).status,
+        403,
+      );
+      await db
+        .prepare('UPDATE r2_usage_periods SET class_b_operations=0')
+        .run();
+      assert.equal(
+        (
+          await runtime.fetch(
+            `https://qraft.test/api/cloudflare/media/${mediaKey}`,
+            {
+              headers: {
+                cookie: '__Host-qraft_session=fixture-preformed-owner',
+              },
+            },
+          )
+        ).status,
+        200,
+      );
+
+      const privatePublished = await call(
+        'preformed-owner',
+        '/preformed/save',
+        {
+          test: {
+            ...savedQuestion.data.test,
+            visibility: 'private',
+            status: 'published',
+          },
+        },
+        'PUT',
+      );
+      assert.equal(privatePublished.status, 200, JSON.stringify(privatePublished));
+      const privateOpened = await call(
+        'free',
+        `/preformed/open?code=${privatePublished.data.test.code}`,
+      );
+      assert.equal(privateOpened.status, 200, JSON.stringify(privateOpened));
+      const securedImageUrl = privateOpened.data.test.questions[0].images[0].url;
+      assert.match(securedImageUrl, /\?attempt=[a-f0-9]{64}$/);
+      await db
+        .prepare('UPDATE r2_usage_periods SET class_b_operations=0')
+        .run();
+      assert.equal(
+        (
+          await runtime.fetch(`https://qraft.test${securedImageUrl}`, {
+            headers: { cookie: '__Host-qraft_session=fixture-free' },
+          })
+        ).status,
+        200,
+      );
 
       const published = await call(
         'preformed-owner',
@@ -710,6 +811,10 @@ export async function improvementsApiTests(t, db, call) {
       });
       assert.equal(duplicate.status, 200, JSON.stringify(duplicate));
       assert.equal(duplicate.data.duplicate, true);
+      assert.equal(
+        (await call('free', `/preformed/leaderboard?id=${test.id}`)).status,
+        200,
+      );
       assert.equal(
         (
           await db

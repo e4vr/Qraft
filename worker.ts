@@ -5,18 +5,28 @@ import { cleanDeletedAccountMedia } from './lib/account-deletion-server';
 import { expireSubscriptions } from './lib/platform-server';
 import { cleanStateSyncOperations } from './features/state/server/state-service';
 import { cleanPreformedTestOperations } from './lib/preformed-test-server';
+import { withSecurityHeaders } from './server/http/security-headers';
 
 const worker: ExportedHandler<Cloudflare.Env> = {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext) {
     // WebSocket upgrades must reach Cloudflare unchanged (HTTP 101).
     if (new URL(request.url).pathname === '/api/cloudflare/realtime') {
-      try { return await connectRealtime(request); }
-      catch { return Response.json({ error: 'Live connection unavailable.' }, { status: 503 }); }
+      try {
+        return withSecurityHeaders(request, await connectRealtime(request));
+      } catch {
+        return withSecurityHeaders(
+          request,
+          Response.json(
+            { error: 'Live connection unavailable.' },
+            { status: 503 },
+          ),
+        );
+      }
     }
     const response = await application.fetch(request, env, ctx);
     if (request.method === 'DELETE' && new URL(request.url).pathname === '/api/cloudflare/auth/account' && response.ok)
       ctx.waitUntil(cleanDeletedAccountMedia());
-    return response;
+    return withSecurityHeaders(request, response);
   },
   scheduled(
     controller: ScheduledController,

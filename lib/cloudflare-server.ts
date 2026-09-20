@@ -67,9 +67,14 @@ function preformedMediaTestId(scopeId: string) {
 async function preformedMediaTest(scopeId: string) {
   const testId = preformedMediaTestId(scopeId);
   if (!testId) return null;
-  return env.DB.prepare('SELECT owner_id,status FROM preformed_tests WHERE id=?')
+  return env.DB.prepare('SELECT owner_id,status,visibility,version FROM preformed_tests WHERE id=?')
     .bind(testId)
-    .first<{ owner_id: string; status: 'draft' | 'published' | 'paused' | 'hidden' }>();
+    .first<{
+      owner_id: string;
+      status: 'draft' | 'published' | 'paused' | 'hidden';
+      visibility: 'public' | 'private';
+      version: number;
+    }>();
 }
 
 type RecordOperation = {
@@ -291,6 +296,7 @@ async function resolveCurrentUser(
   return await safeProfile(
     profile,
     Boolean(enrolledTotpSecret(row.totp_secret)),
+    row.verified === 1,
   );
 }
 
@@ -561,9 +567,13 @@ export async function register(request: Request) {
       return json({ error: 'This university ID has already been used.' }, 409);
     throw error;
   }
-  const token = await createSession(uid, true);
-  return json({ user: await safeProfile(profile, false) }, 201, {
-    'set-cookie': sessionCookie(token),
+  const token = await createSession(
+    uid,
+    !isRoot,
+    isRoot ? 300 : SESSION_SECONDS,
+  );
+  return json({ user: await safeProfile(profile, false, !isRoot) }, 201, {
+    'set-cookie': sessionCookie(token, isRoot ? 300 : SESSION_SECONDS),
   });
 }
 
@@ -571,7 +581,12 @@ export async function login(request: Request) {
   assertSameOrigin(request);
   const input = await readJson<{ email?: string; password?: string }>(request);
   const row = await profileByEmail(input.email ?? '');
-  if (!row) return json({ error: 'Incorrect email or password.' }, 401);
+  if (!row) {
+    // Keep the unknown-account path computationally comparable to a real
+    // password check so login timing does not become an email oracle.
+    await hashPassword(input.password ?? '', 'qraft-login-timing-v1');
+    return json({ error: 'Incorrect email or password.' }, 401);
+  }
   const calculated = await hashPassword(
     input.password ?? '',
     row.password_salt,
@@ -582,18 +597,19 @@ export async function login(request: Request) {
   if (profile.suspended)
     return json({ error: 'This account has been suspended.' }, 403);
   const mfaSecret = enrolledTotpSecret(row.totp_secret);
-  const needsMfa = profile.role === 'super_admin' && Boolean(mfaSecret);
+  const isRoot = profile.role === 'super_admin';
+  const needsMfa = isRoot && Boolean(mfaSecret);
   const token = await createSession(
     row.uid,
-    !needsMfa,
-    needsMfa ? 300 : SESSION_SECONDS,
+    !isRoot,
+    isRoot ? 300 : SESSION_SECONDS,
   );
   if (needsMfa)
     return json({ error: 'MFA_REQUIRED' }, 428, {
       'set-cookie': sessionCookie(token, 300),
     });
-  return json({ user: await safeProfile(profile, Boolean(mfaSecret)) }, 200, {
-    'set-cookie': sessionCookie(token),
+  return json({ user: await safeProfile(profile, Boolean(mfaSecret), !isRoot) }, 200, {
+    'set-cookie': sessionCookie(token, isRoot ? 300 : SESSION_SECONDS),
   });
 }
 
@@ -604,18 +620,29 @@ export async function verifyMfa(request: Request) {
   if (!token) return json({ error: 'Start sign-in again.' }, 401);
   const tokenHash = await sha256(token);
   const row = await env.DB.prepare(
-    `SELECT p.profile_json, p.totp_secret FROM sessions s JOIN profiles p ON p.uid = s.user_id WHERE s.token_hash = ? AND s.expires_at > ? LIMIT 1`,
+    `SELECT p.uid,p.profile_json,p.totp_secret FROM sessions s JOIN profiles p ON p.uid = s.user_id WHERE s.token_hash = ? AND s.expires_at > ? LIMIT 1`,
   )
     .bind(tokenHash, Math.floor(Date.now() / 1000))
-    .first<{ profile_json: string; totp_secret: string | null }>();
+    .first<{ uid: string; profile_json: string; totp_secret: string | null }>();
   const secret = enrolledTotpSecret(row?.totp_secret ?? null);
   if (!row || !secret || !(await verifyTotp(secret, input.code?.trim() ?? '')))
     return json({ error: 'The authenticator code is invalid.' }, 401);
-  await env.DB.prepare(
-    'UPDATE sessions SET verified = 1, expires_at = ? WHERE token_hash = ?',
-  )
-    .bind(Math.floor(Date.now() / 1000) + SESSION_SECONDS, tokenHash)
-    .run();
+  const replacementToken = bytesToBase64Url(
+    crypto.getRandomValues(new Uint8Array(32)),
+  );
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare(
+      'INSERT INTO sessions (token_hash,user_id,expires_at,verified,created_at) VALUES (?,?,?,?,?)',
+    ).bind(
+      await sha256(replacementToken),
+      row.uid,
+      Math.floor(Date.now() / 1000) + SESSION_SECONDS,
+      1,
+      now,
+    ),
+    env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(tokenHash),
+  ]);
   return json(
     {
       user: await safeProfile(
@@ -624,14 +651,18 @@ export async function verifyMfa(request: Request) {
       ),
     },
     200,
-    { 'set-cookie': sessionCookie(token) },
+    { 'set-cookie': sessionCookie(replacementToken) },
   );
 }
 
 export async function beginMfa(request: Request) {
   assertSameOrigin(request);
-  const user = await currentUser(request);
-  if (!user || user.role !== 'super_admin')
+  const user = await currentUser(request, false);
+  if (
+    !user ||
+    user.role !== 'super_admin' ||
+    (user.mfaEnrolled && !user.mfaVerified)
+  )
     return json({ error: 'Superadmin authentication is required.' }, 403);
   const secret = encodeBase32(crypto.getRandomValues(new Uint8Array(20)));
   await env.DB.prepare(
@@ -647,7 +678,7 @@ export async function beginMfa(request: Request) {
 
 export async function completeMfa(request: Request) {
   assertSameOrigin(request);
-  const user = await currentUser(request);
+  const user = await currentUser(request, false);
   if (!user || user.role !== 'super_admin')
     return json({ error: 'Superadmin authentication is required.' }, 403);
   const row = await profileById(user.uid);
@@ -657,12 +688,31 @@ export async function completeMfa(request: Request) {
   const input = await readJson<{ code?: string }>(request);
   if (!secret || !(await verifyTotp(secret, input.code?.trim() ?? '')))
     return json({ error: 'The authenticator code is invalid.' }, 400);
-  await env.DB.prepare(
-    'UPDATE profiles SET totp_secret = ?, updated_at = ? WHERE uid = ?',
-  )
-    .bind(secret, new Date().toISOString(), user.uid)
-    .run();
-  return json({ ok: true });
+  const token = cookieValue(request, SESSION_COOKIE);
+  if (!token) return json({ error: 'Start sign-in again.' }, 401);
+  const tokenHash = await sha256(token);
+  const replacementToken = bytesToBase64Url(
+    crypto.getRandomValues(new Uint8Array(32)),
+  );
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare(
+      'UPDATE profiles SET totp_secret = ?, updated_at = ? WHERE uid = ?',
+    ).bind(secret, now, user.uid),
+    env.DB.prepare(
+      'INSERT INTO sessions (token_hash,user_id,expires_at,verified,created_at) VALUES (?,?,?,?,?)',
+    ).bind(
+      await sha256(replacementToken),
+      user.uid,
+      Math.floor(Date.now() / 1000) + SESSION_SECONDS,
+      1,
+      now,
+    ),
+    env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(tokenHash),
+  ]);
+  return json({ ok: true }, 200, {
+    'set-cookie': sessionCookie(replacementToken),
+  });
 }
 
 export async function logout(request: Request) {
@@ -2160,8 +2210,9 @@ function recordAllowed(
     return isRoot;
   if (operation.collection === 'system')
     return operation.id === 'accessControl' ? accessManager : isRoot;
-  if (operation.collection === 'auditLog')
-    return operation.type === 'set' && value.actorId === user.uid;
+  // Audit entries are evidence, not collaborative content. Every accepted
+  // mutation is recorded below from the authenticated server context.
+  if (operation.collection === 'auditLog') return false;
   return false;
 }
 
@@ -2927,8 +2978,44 @@ export async function serveMedia(request: Request, key: string) {
   if (!metadata || metadata.status === 'account_deleted') return new Response('Not found.', { status: 404 });
   const readyMadeTest = await preformedMediaTest(metadata.qbank_id);
   if (readyMadeTest) {
-    if (readyMadeTest.status !== 'published' && (!user || readyMadeTest.owner_id !== user.uid))
-      return new Response('Forbidden.', { status: 403 });
+    const owner = Boolean(user && readyMadeTest.owner_id === user.uid);
+    if (!owner) {
+      if (readyMadeTest.status !== 'published')
+        return new Response('Forbidden.', { status: 403 });
+      let permitted = readyMadeTest.visibility === 'public';
+      if (!permitted && user) {
+        const participation = await env.DB.prepare(
+          'SELECT 1 AS allowed FROM preformed_participation WHERE test_id=? AND version=? AND user_id=? LIMIT 1',
+        )
+          .bind(
+            preformedMediaTestId(metadata.qbank_id),
+            readyMadeTest.version,
+            user.uid,
+          )
+          .first<{ allowed: number }>();
+        permitted = Boolean(participation);
+      }
+      if (!permitted) {
+        const attempt = new URL(request.url).searchParams.get('attempt') ?? '';
+        if (/^[a-f0-9]{64}$/i.test(attempt)) {
+          const token = await env.DB.prepare(
+            `SELECT 1 AS allowed FROM preformed_attempt_tokens
+             WHERE token_hash=? AND test_id=? AND version=? AND expires_at>?
+               AND (user_id IS NULL OR user_id=?) LIMIT 1`,
+          )
+            .bind(
+              await sha256(attempt),
+              preformedMediaTestId(metadata.qbank_id),
+              readyMadeTest.version,
+              new Date().toISOString(),
+              user?.uid ?? '',
+            )
+            .first<{ allowed: number }>();
+          permitted = Boolean(token);
+        }
+      }
+      if (!permitted) return new Response('Forbidden.', { status: 403 });
+    }
   } else {
     if (!user) return new Response('Authentication required.', { status: 401 });
     const state = await bankAccessState(metadata.qbank_id);

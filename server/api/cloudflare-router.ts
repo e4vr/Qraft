@@ -49,7 +49,9 @@ async function routeGet(request: Request): Promise<Response> {
   if (scope === 'preformed' && action)
     return preformedTestApi(request, action);
   if (scope === 'auth' && action === 'session') {
-    const user = await currentUser(request);
+    // An unverified Superadmin session may only discover that MFA enrollment
+    // is required. Protected APIs still call currentUser() in verified mode.
+    const user = await currentUser(request, false);
     return Response.json(
       { user: user ?? null },
       { headers: { 'cache-control': 'no-store' } },

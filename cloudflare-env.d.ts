@@ -1,5 +1,6 @@
 declare namespace Cloudflare {
   interface Env {
+    BACKUP_SIGNING_KEY?: string;
     IMAGEKIT_PRIVATE_KEY?: string;
     R2_PUBLIC_URL?: string;
     R2_BILLING_CYCLE_DAY?: string;

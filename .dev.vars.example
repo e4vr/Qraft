@@ -1,5 +1,6 @@
 ROOT_ADMIN_EMAIL=admin@example.com
 ROOT_ADMIN_SETUP_TOKEN=replace-with-at-least-24-random-characters
+BACKUP_SIGNING_KEY=replace-with-at-least-32-random-characters
 # Optional compatibility fallback for existing ImageKit assets.
 IMAGEKIT_PRIVATE_KEY=private_your_imagekit_private_key
 R2_PUBLIC_URL=http://localhost:3000/api/cloudflare/media

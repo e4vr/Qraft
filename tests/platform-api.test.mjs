@@ -1,12 +1,38 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, pbkdf2Sync, randomUUID } from 'node:crypto';
+import { createHash, createHmac, pbkdf2Sync, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { improvementsApiTests } from './improvements-api.mjs';
+
+function decodeBase32(value) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const character of value.replace(/=+$/g, '').toUpperCase())
+    bits += alphabet.indexOf(character).toString(2).padStart(5, '0');
+  const bytes = Buffer.alloc(Math.floor(bits.length / 8));
+  for (let index = 0; index < bytes.length; index += 1)
+    bytes[index] = Number.parseInt(bits.slice(index * 8, index * 8 + 8), 2);
+  return bytes;
+}
+
+function currentTotp(secret) {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
+  const signature = createHmac('sha1', decodeBase32(secret))
+    .update(counter)
+    .digest();
+  const offset = signature.at(-1) & 0x0f;
+  const number =
+    ((signature[offset] & 0x7f) << 24) |
+    (signature[offset + 1] << 16) |
+    (signature[offset + 2] << 8) |
+    signature[offset + 3];
+  return String(number % 1_000_000).padStart(6, '0');
+}
 
 void test('platform API authorization, import, subscription and ticket workflows', async (t) => {
   await mkdir('.ui-review', { recursive: true });
@@ -34,6 +60,7 @@ void test('platform API authorization, import, subscription and ticket workflows
     },
     bindings: {
       ROOT_ADMIN_EMAIL: 'admin@example.test',
+      BACKUP_SIGNING_KEY: 'phase-4-local-test-backup-signing-key-only',
       R2_BILLING_CYCLE_DAY: '7',
       R2_CLASS_A_MONTHLY_CAP: '1',
       R2_CLASS_B_MONTHLY_CAP: '1',
@@ -82,6 +109,7 @@ void test('platform API authorization, import, subscription and ticket workflows
   );
   t.after(() => mf.dispose());
   const db = await mf.getD1Database('DB', built ? 'app' : undefined);
+  const assets = await mf.getR2Bucket('ASSETS', built ? 'app' : undefined);
   const statements = JSON.parse(
     execFileSync(
       'python',
@@ -1241,6 +1269,230 @@ print(json.dumps(out))`,
     },
   );
   await t.test(
+    'MFA verification rotates the temporary privileged session',
+    async () => {
+      const password = 'superadmin-password-456';
+      const salt = 'phase-4-admin-login-salt';
+      const secret = 'JBSWY3DPEHPK3PXP';
+      const passwordHash = pbkdf2Sync(
+        password,
+        salt,
+        100_000,
+        32,
+        'sha256',
+      ).toString('hex');
+      await db
+        .prepare(
+          'UPDATE profiles SET password_hash=?,password_salt=?,totp_secret=? WHERE uid=?',
+        )
+        .bind(passwordHash, salt, null, 'admin')
+        .run();
+      const enrollmentLogin = await mf.dispatchFetch(
+        'https://qraft.test/api/cloudflare/auth/login',
+        {
+          method: 'POST',
+          headers: {
+            origin: 'https://qraft.test',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            email: 'admin@example.test',
+            password,
+          }),
+        },
+      );
+      assert.equal(enrollmentLogin.status, 200);
+      const enrollmentUser = (await enrollmentLogin.json()).user;
+      assert.equal(enrollmentUser.mfaEnrolled, false);
+      assert.equal(enrollmentUser.mfaVerified, false);
+      const enrollmentCookie = enrollmentLogin.headers
+        .get('set-cookie')
+        ?.split(';')[0];
+      assert.ok(enrollmentCookie);
+      const protectedBeforeMfa = await mf.dispatchFetch(
+        'https://qraft.test/api/cloudflare/platform/discounts',
+        { headers: { cookie: enrollmentCookie } },
+      );
+      assert.equal(protectedBeforeMfa.status, 403);
+      const beginEnrollment = await mf.dispatchFetch(
+        'https://qraft.test/api/cloudflare/auth/mfa-begin',
+        {
+          method: 'POST',
+          headers: {
+            origin: 'https://qraft.test',
+            cookie: enrollmentCookie,
+            'content-type': 'application/json',
+          },
+          body: '{}',
+        },
+      );
+      assert.equal(beginEnrollment.status, 200, await beginEnrollment.text());
+      await db
+        .prepare('UPDATE profiles SET totp_secret=? WHERE uid=?')
+        .bind(secret, 'admin')
+        .run();
+      const login = await mf.dispatchFetch(
+        'https://qraft.test/api/cloudflare/auth/login',
+        {
+          method: 'POST',
+          headers: {
+            origin: 'https://qraft.test',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            email: 'admin@example.test',
+            password,
+          }),
+        },
+      );
+      assert.equal(login.status, 428);
+      const temporaryCookie = login.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(temporaryCookie);
+      const verified = await mf.dispatchFetch(
+        'https://qraft.test/api/cloudflare/auth/mfa',
+        {
+          method: 'POST',
+          headers: {
+            origin: 'https://qraft.test',
+            cookie: temporaryCookie,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ code: currentTotp(secret) }),
+        },
+      );
+      assert.equal(verified.status, 200, await verified.text());
+      const privilegedCookie = verified.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(privilegedCookie);
+      assert.notEqual(privilegedCookie, temporaryCookie);
+      const oldSession = await mf.dispatchFetch(
+        'https://qraft.test/api/cloudflare/auth/session',
+        { headers: { cookie: temporaryCookie } },
+      );
+      assert.equal((await oldSession.json()).user, null);
+      const privilegedSession = await mf.dispatchFetch(
+        'https://qraft.test/api/cloudflare/auth/session',
+        { headers: { cookie: privilegedCookie } },
+      );
+      assert.equal((await privilegedSession.json()).user.uid, 'admin');
+    },
+  );
+  await t.test(
+    'Audit records are server-authored and cannot be forged through collaboration',
+    async () => {
+      const id = `forged-audit-${randomUUID()}`;
+      const forged = await call(
+        'lite',
+        '/collaboration',
+        {
+          operations: [
+            {
+              collection: 'auditLog',
+              type: 'set',
+              id,
+              value: {
+                id,
+                actorId: 'lite',
+                actorName: 'System',
+                action: 'subscription_plan_overridden',
+                entityType: 'account',
+                entityId: 'lite',
+                createdAt: new Date().toISOString(),
+                detail: 'forged',
+              },
+            },
+          ],
+        },
+        'PUT',
+      );
+      assert.equal(forged.status, 403, JSON.stringify(forged));
+      assert.equal(
+        (
+          await db
+            .prepare("SELECT count(*) AS n FROM records WHERE type='auditLog' AND id=?")
+            .bind(id)
+            .first()
+        ).n,
+        0,
+      );
+    },
+  );
+  await t.test(
+    'Personal backup restore rejects unsigned data and cross-owner record collisions',
+    async () => {
+      const id = `backup-victim-${randomUUID()}`;
+      const now = new Date().toISOString();
+      const original = {
+        id,
+        name: 'Other owner bank',
+        visibility: 'private',
+        ownerId: 'other',
+      };
+      await db
+        .prepare(
+          "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES('qbanks',?,?,?,?,?)",
+        )
+        .bind(id, id, 'other', JSON.stringify(original), now)
+        .run();
+      const forged = {
+        format: 'qraft-personal-backup-v1',
+        ownerId: 'pro',
+        exportedAt: now,
+        records: [
+          {
+            type: 'qbanks',
+            id,
+            qbank_id: id,
+            owner_id: 'pro',
+            payload: {
+              ...original,
+              name: 'Overwritten bank',
+              ownerId: 'pro',
+            },
+            updated_at: now,
+          },
+        ],
+        flashcards: null,
+      };
+      const response = await call(
+        'pro',
+        '/platform/personal-backup',
+        forged,
+        'PUT',
+      );
+      const stored = await db
+        .prepare("SELECT owner_id,payload FROM records WHERE type='qbanks' AND id=?")
+        .bind(id)
+        .first();
+      if (response.status === 200) {
+        await db
+          .prepare("UPDATE records SET owner_id=?,payload=? WHERE type='qbanks' AND id=?")
+          .bind('other', JSON.stringify(original), id)
+          .run();
+      }
+      assert.equal(response.status, 403, JSON.stringify(response));
+      assert.equal(stored.owner_id, 'other');
+      assert.deepEqual(JSON.parse(stored.payload), original);
+      await db
+        .prepare("DELETE FROM records WHERE type='qbanks' AND id=?")
+        .bind(id)
+        .run();
+      const exported = await call('pro', '/platform/personal-backup');
+      assert.equal(exported.status, 200, JSON.stringify(exported));
+      assert.equal(exported.data.signatureVersion, 'hmac-sha256-v1');
+      assert.match(exported.data.signature, /^[a-f0-9]{64}$/);
+      const restored = await call(
+        'pro',
+        '/platform/personal-backup',
+        exported.data,
+        'PUT',
+      );
+      assert.equal(restored.status, 200, JSON.stringify(restored));
+      await db
+        .prepare("DELETE FROM app_states WHERE user_id='pro'")
+        .run();
+    },
+  );
+  await t.test(
     'Personal state rejects first-write private notes and impossible duplicate or cyclic identities',
     async () => {
       const privateNote = emptyState({
@@ -2176,7 +2428,10 @@ print(json.dumps(out))`,
       1,
     );
   });
-  await improvementsApiTests(t, db, call);
+  await improvementsApiTests(t, db, call, {
+    assets,
+    fetch: (url, init) => mf.dispatchFetch(url, init),
+  });
   await t.test('Read-only integrity checks find no contradictions in the local fixture', async () => {
     const source = await readFile('scripts/data-integrity-checks.sql', 'utf8');
     const statements = source
