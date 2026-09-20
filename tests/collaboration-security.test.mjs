@@ -191,7 +191,7 @@ void test('shared notes open automatically after grading on desktop only', async
     new URL('components/medguard-app.tsx', root),
     'utf8',
   );
-  assert.match(app, /if \(!isMobile\) setNotesOpen\(true\);/);
+  assert.match(app, /if \(!handheld\) setNotesOpen\(true\);/);
   assert.match(app, /onClick=\{\(\) => setNotesOpen\(!notesOpen\)\}/);
 });
 
@@ -213,7 +213,7 @@ void test('QBank switching, review counters, random tests, private notes, labs, 
   assert.match(review, /activeQBankId/);
   assert.match(app, /Random QBank Test/);
   assert.match(app, /nextTestTitle/);
-  assert.match(app, /Private Note/);
+  assert.match(app, /Private note/);
   assert.match(app, /Laboratory reference values/);
   assert.match(app, /mainProgressCategory/);
   assert.match(types, /highlightSections/);
