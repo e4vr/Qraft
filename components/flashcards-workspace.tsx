@@ -17,6 +17,7 @@ import {
   Play,
   Plus,
   Search,
+  SlidersHorizontal,
   Sparkles,
   Tag,
   Trash2,
@@ -24,6 +25,8 @@ import {
   X,
 } from 'lucide-react';
 import { WorkspaceHeader } from '@/components/workspace-header';
+import { AdaptiveOverlay } from '@/components/ui/adaptive-overlay';
+import { usePresentationEnvironment } from '@/features/presentation/presentation-context';
 import {
   useEffect,
   useMemo,
@@ -748,6 +751,9 @@ export function FlashcardsWorkspace({
   const [selectedCards, setSelectedCards] = useState<string[]>([]);
   const [moveDeckId, setMoveDeckId] = useState('');
   const [reviewCards, setReviewCards] = useState<Flashcard[]>();
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
+  const { mode: presentationMode } = usePresentationEnvironment();
+  const handheld = presentationMode === 'handheld';
 
   useEffect(() => {
     if (!reviewCards) return;
@@ -1129,7 +1135,11 @@ export function FlashcardsWorkspace({
         eyebrow="Active recall"
         title="Flashcards"
         subtitle={`Private decks for ${qbankName} · ${questions.length} bank questions available`}
-        actions={<>
+        actions={handheld ? (
+          <Button variant="outline" onClick={() => setMobileToolsOpen(true)}>
+            <SlidersHorizontal /> Manage
+          </Button>
+        ) : <>
           <Button variant="outline" onClick={() => setDeckDialogOpen(true)}>
             <FolderPlus /> New deck
           </Button>
@@ -1141,22 +1151,43 @@ export function FlashcardsWorkspace({
             {importing ? <Sparkles className="animate-pulse" /> : <Upload />}
             {importing ? 'Importing…' : 'Import Anki'}
           </Button>
-          <input
-            ref={importInput}
-            type="file"
-            accept=".apkg,application/zip"
-            hidden
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void importAnki(file);
-              event.target.value = '';
-            }}
-          />
           <Button onClick={openNewCard}>
             <Plus /> New card
           </Button>
         </>}
       />
+      <input
+        ref={importInput}
+        type="file"
+        accept=".apkg,application/zip"
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void importAnki(file);
+          event.target.value = '';
+        }}
+      />
+      <AdaptiveOverlay
+        open={mobileToolsOpen}
+        onOpenChange={setMobileToolsOpen}
+        title="Manage flashcards"
+        description="Create content or import an existing Anki collection."
+      >
+        <div className="q-mobile-tool-list">
+          <button type="button" onClick={() => { setMobileToolsOpen(false); setDeckDialogOpen(true); }}>
+            <FolderPlus className="size-5" />
+            <span><strong>New deck</strong><small>Organize cards into a focused collection.</small></span>
+          </button>
+          <button type="button" disabled={importing} onClick={() => importInput.current?.click()}>
+            <Upload className="size-5" />
+            <span><strong>{importing ? 'Importing…' : 'Import Anki'}</strong><small>Bring in an .apkg file from your device.</small></span>
+          </button>
+          <button type="button" onClick={() => { setMobileToolsOpen(false); openNewCard(); }}>
+            <Plus className="size-5" />
+            <span><strong>New card</strong><small>Create a private flashcard in this QBank.</small></span>
+          </button>
+        </div>
+      </AdaptiveOverlay>
       <div className="min-h-full p-4 sm:p-6 lg:p-8">
       <AlertDialog open={Boolean(deleteDeckId)} onOpenChange={(open) => { if (!open) setDeleteDeckId(undefined); }}>
         <AlertDialogContent>
@@ -1210,7 +1241,7 @@ export function FlashcardsWorkspace({
           </section>
         )}
 
-        <section className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="q-flashcard-metrics mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {metrics.map(({ label, value, Icon, color }) => (
             <article
               key={String(label)}

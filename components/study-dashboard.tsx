@@ -2,11 +2,13 @@
 
 import { memo } from 'react';
 import { ArrowRight, BookOpenCheck, Check, CheckCircle2, ChevronRight, ClipboardPlus, Flag, Flame, Library, Moon, Play, Sun, Target, TrendingUp } from 'lucide-react';
-import { emptyProgress, type AppState, type Question } from '@/lib/medguard-types';
-import { localStudyDay, visibleStudyStreak } from '@/lib/study-streak';
+import { type AppState, type Question } from '@/lib/medguard-types';
 import { WorkspaceHeader } from '@/components/workspace-header';
+import { MobileStudyDashboard } from '@/components/presentation/mobile-study-dashboard';
+import { buildStudyDashboardModel } from '@/features/dashboard/domain/study-dashboard-model';
+import { usePresentationEnvironment } from '@/features/presentation/presentation-context';
 
-type Destination = 'create' | 'test' | 'library' | 'progress' | 'history';
+type Destination = 'create' | 'test' | 'library' | 'progress' | 'history' | 'flashcards';
 
 export const StudyDashboard = memo(function StudyDashboard({ state, questions, name, bankName, navigate, startQuickTest, theme, onToggleTheme }: {
   state: AppState;
@@ -18,22 +20,34 @@ export const StudyDashboard = memo(function StudyDashboard({ state, questions, n
   theme: AppState['settings']['theme'];
   onToggleTheme: () => void;
 }) {
-  const progress = questions.map((question) => ({ question, progress: state.progress[question.id] ?? emptyProgress() }));
-  const completed = progress.filter(({ progress: item }) => item.attempts > 0).length;
-  const correct = progress.filter(({ question, progress: item }) => item.attempts > 0 && item.lastAnswer === question.answer).length;
-  const flagged = progress.filter(({ progress: item }) => item.flagged).length;
-  const today = new Date().toDateString();
-  const todayCompleted = progress.filter(({ progress: item }) => item.lastAnsweredAt && new Date(item.lastAnsweredAt).toDateString() === today).length;
-  const goal = Math.max(1, state.settings.dailyGoal);
-  const completion = questions.length ? Math.round(completed / questions.length * 100) : 0;
-  const daily = Math.min(100, Math.round(todayCompleted / goal * 100));
-  const streak = visibleStudyStreak(state.studyStreak);
-  const studiedToday = state.studyStreak.lastActivityDate === localStudyDay();
-  const activeTest = state.tests.find((test) => test.status === 'active');
+  const { mode } = usePresentationEnvironment();
+  const model = buildStudyDashboardModel(state, questions, name);
+  if (mode === 'handheld')
+    return (
+      <MobileStudyDashboard
+        model={model}
+        bankName={bankName}
+        navigate={navigate}
+        startQuickTest={startQuickTest}
+        theme={theme}
+        onToggleTheme={onToggleTheme}
+      />
+    );
+  const {
+    completed,
+    correct,
+    flagged,
+    todayCompleted,
+    goal,
+    completionPercent: completion,
+    dailyPercent: daily,
+    streak,
+    studiedToday,
+    activeTest,
+    quickCount,
+    firstName,
+  } = model;
   const specialty = questions[0]?.specialty;
-  const newQuestions = progress.filter(({ question, progress: item }) => !item.attempts && question.specialty === specialty);
-  const quickCount = Math.min(goal, newQuestions.length);
-  const firstName = name ? name.trim().split(/\s+/)[0] : undefined;
   const metrics = [
     { label: 'Questions studied', value: completed, detail: `of ${questions.length} in this bank`, icon: BookOpenCheck, tone: 'blue' },
     { label: 'Accuracy', value: completed ? `${Math.round(correct / completed * 100)}%` : '—', detail: completed ? `${correct} answered correctly` : 'Answer a question to begin', icon: TrendingUp, tone: 'green' },
@@ -49,13 +63,13 @@ export const StudyDashboard = memo(function StudyDashboard({ state, questions, n
         <span className="hidden text-sm text-muted-foreground sm:block">{new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}</span>
         <div
           className={`topbar-streak${studiedToday ? ' is-active' : ''}`}
-          aria-label={`${streak} day study streak. Best streak ${state.studyStreak.best} days.`}
-          title={`Current streak: ${streak} ${streak === 1 ? 'day' : 'days'} · Best: ${state.studyStreak.best}`}
+          aria-label={`${streak} day study streak. Best streak ${model.bestStreak} days.`}
+          title={`Current streak: ${streak} ${streak === 1 ? 'day' : 'days'} · Best: ${model.bestStreak}`}
         >
           <Flame className="size-4 fill-current" />
           <strong dir="ltr">{streak}</strong>
           <span className="hidden sm:inline">{streak === 1 ? 'day' : 'days'}</span>
-          <small>Best {state.studyStreak.best}</small>
+          <small>Best {model.bestStreak}</small>
         </div>
         <button className="q-icon" aria-label="Toggle light and dark mode" title="Toggle theme" onClick={onToggleTheme}>
           {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}

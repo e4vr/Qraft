@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { PresentationProvider } from '@/features/presentation/presentation-context';
 import './globals.css';
 import './admin.css';
 import './billing-admin.css';
@@ -34,11 +35,8 @@ export const metadata: Metadata = {
 
 const themeBootstrap = `(()=>{try{const t=localStorage.getItem('qraft-theme-active')||'system';const d=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light'}catch{}})()`;
 
-// iOS can ignore the viewport's zoom limits, especially in standalone mode.
-// Keep the browser experience accessible while making the installed PWA feel
-// like a native app with a fixed viewport.
-const pwaZoomGuard = `(()=>{try{const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);if(!standalone||!ios)return;document.documentElement.classList.add('q-ios-pwa');const viewportContent='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';const lockViewport=()=>{let metas=document.querySelectorAll('meta[name="viewport"]');if(!metas.length){const meta=document.createElement('meta');meta.name='viewport';document.head.appendChild(meta);metas=[meta]}for(const meta of metas)if(meta.getAttribute('content')!==viewportContent)meta.setAttribute('content',viewportContent)};lockViewport();document.addEventListener('DOMContentLoaded',lockViewport,{once:true});new MutationObserver(lockViewport).observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:['content']});const prevent=(event)=>{if(event.cancelable)event.preventDefault()};for(const type of ['gesturestart','gesturechange','gestureend','dblclick'])document.addEventListener(type,prevent,{passive:false,capture:true});for(const type of ['touchstart','touchmove'])document.addEventListener(type,(event)=>{if(event.touches.length>1)prevent(event)},{passive:false,capture:true});document.addEventListener('wheel',(event)=>{if(event.ctrlKey)prevent(event)},{passive:false,capture:true})}catch{}})()`;
+const presentationBootstrap = `(()=>{try{const standalone=matchMedia('(display-mode:standalone)').matches||navigator.standalone===true;const handheld=matchMedia('(max-width:560px),(max-width:767px) and (hover:none),(max-width:767px) and (pointer:coarse)').matches||(standalone&&matchMedia('(max-width:899px)').matches);const desktop=matchMedia('(min-width:1180px) and (hover:hover) and (pointer:fine)').matches;document.documentElement.dataset.presentation=handheld?'handheld':desktop?'desktop':'tablet';document.documentElement.dataset.standalone=standalone?'true':'false'}catch{}})()`;
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeBootstrap }} /><script dangerouslySetInnerHTML={{ __html: pwaZoomGuard }} /></head><body><div className="q-viewport">{children}</div></body></html>;
+  return <html lang="en" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeBootstrap }} /><script dangerouslySetInnerHTML={{ __html: presentationBootstrap }} /></head><body><PresentationProvider><div className="q-viewport">{children}</div></PresentationProvider></body></html>;
 }

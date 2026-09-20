@@ -2,6 +2,7 @@
 
 import { ReviewerSearch } from '@/components/reviewer-search';
 import { WorkspaceHeader } from '@/components/workspace-header';
+import { AdaptiveOverlay } from '@/components/ui/adaptive-overlay';
 import {
   openUpgrade,
   UpgradeButton,
@@ -27,9 +28,9 @@ import {
   SlidersHorizontal,
   UserPlus,
   Users,
-  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { usePresentationEnvironment } from '@/features/presentation/presentation-context';
 import {
   bankRoleFor,
   canAccessBank,
@@ -105,6 +106,8 @@ export function QBankWorkspace({
     section: 'settings' | 'structure' | 'questions',
   ) => void;
 }) {
+  const { coarsePointer, mode: presentationMode } = usePresentationEnvironment();
+  const handheld = presentationMode === 'handheld';
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState('');
   const [name, setName] = useState('');
@@ -121,17 +124,28 @@ export function QBankWorkspace({
   >('mine');
   const [activeFolderId, setActiveFolderId] = useState('');
   const [quickAccessOpen, setQuickAccessOpen] = useState(false);
+  const [mobileActionsBankId, setMobileActionsBankId] = useState('');
   const [draggingId, setDraggingId] = useState('');
-  const [coarsePointer, setCoarsePointer] = useState(false);
   useEffect(() => {
-    const media = window.matchMedia(
-      '(hover: none) and (pointer: coarse), (any-pointer: coarse) and (max-width: 1023px)',
+    const bank = collaboration.qbanks.find((item) => item.id === activeQBankId);
+    if (!bank) return;
+    const shared = collaboration.memberships.some(
+      (membership) =>
+        membership.qbankId === bank.id && membership.userId === user.uid,
     );
-    const updatePointerMode = () => setCoarsePointer(media.matches);
-    updatePointerMode();
-    media.addEventListener('change', updatePointerMode);
-    return () => media.removeEventListener('change', updatePointerMode);
-  }, []);
+    const nextSection = bank.essential || (bank.visibility === 'public' && bank.ownerId !== user.uid)
+      ? 'public'
+      : bank.ownerId === user.uid
+        ? 'mine'
+        : shared
+          ? 'shared'
+          : 'public';
+    const timer = window.setTimeout(() => {
+      setActiveSection(nextSection);
+      setActiveFolderId(bank.folderId ?? '');
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeQBankId, collaboration.memberships, collaboration.qbanks, user.uid]);
   const accessible = useMemo(
     () =>
       collaboration.qbanks.filter(
@@ -274,6 +288,9 @@ export function QBankWorkspace({
       }))
       .filter((group) => group.questions.length > 0);
   }, [accessible, bookmarkedQuestionIds, questionPool]);
+  const mobileActionsBank = accessible.find(
+    (bank) => bank.id === mobileActionsBankId,
+  );
 
   function toggleList(key: 'favoriteIds' | 'pinnedIds', bankId: string) {
     const values = organization[key];
@@ -710,7 +727,7 @@ export function QBankWorkspace({
                 </div>
               )}
               {(displayedBanks.length > 0 || visibleFolders.length === 0) && (
-                <div className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
+                <div className="q-bank-list overflow-hidden rounded-2xl bg-card ring-1 ring-border">
                   {!displayedBanks.length ? (
                     <div className="p-12 text-center">
                       <p className="font-bold">No QBanks here</p>
@@ -821,7 +838,7 @@ export function QBankWorkspace({
                             </span>
                           </span>
                         </button>
-                        <div className="flex shrink-0 flex-wrap gap-2">
+                        {!handheld && <div className="flex shrink-0 flex-wrap gap-2">
                           {sortable && (
                             <div
                               className="q-coarse-pointer-only items-center gap-2"
@@ -902,7 +919,33 @@ export function QBankWorkspace({
                               Questions
                             </button>
                           )}
-                        </div>
+                        </div>}
+                        {handheld && (
+                          <div className="q-bank-mobile-actions">
+                            <button
+                              onClick={() => onSelect(bank.id)}
+                              className="q-button q-button-study"
+                            >
+                              Study
+                              <ArrowRight className="size-4" />
+                            </button>
+                            <button
+                              onClick={() => toggleList('favoriteIds', bank.id)}
+                              aria-label={favorite ? `Remove ${bank.name} from favorites` : `Add ${bank.name} to favorites`}
+                              aria-pressed={favorite}
+                              className={cx('q-icon border', favorite && 'bg-rose-50 text-rose-600')}
+                            >
+                              <Heart className={cx('size-4', favorite && 'fill-current')} />
+                            </button>
+                            <button
+                              onClick={() => setMobileActionsBankId(bank.id)}
+                              aria-label={`More actions for ${bank.name}`}
+                              className="q-icon border"
+                            >
+                              <Settings2 className="size-4" />
+                            </button>
+                          </div>
+                        )}
                       </article>
                     );
                     })
@@ -996,24 +1039,73 @@ export function QBankWorkspace({
           </section>
         )}
       </div>
-      {quickAccessOpen && (
-        <div className="q-safe-overlay fixed inset-0 z-[80] grid place-items-center overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm">
-          <section className="w-full max-w-lg rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="font-bold">Quick Access QBanks</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Choose up to five banks for the menu above the sidebar.
-                </p>
+      <AdaptiveOverlay
+        open={Boolean(mobileActionsBank)}
+        onOpenChange={(open) => {
+          if (!open) setMobileActionsBankId('');
+        }}
+        title={mobileActionsBank?.name ?? 'QBank actions'}
+        description="Organize this bank or open its management tools."
+      >
+        {mobileActionsBank && (
+          <div className="q-mobile-tool-list">
+            <button
+              type="button"
+              aria-pressed={organization.pinnedIds.includes(mobileActionsBank.id)}
+              onClick={() => toggleList('pinnedIds', mobileActionsBank.id)}
+            >
+              <Pin className="size-5" />
+              <span>
+                <strong>{organization.pinnedIds.includes(mobileActionsBank.id) ? 'Unpin QBank' : 'Pin QBank'}</strong>
+                <small>Keep important banks at the top of this section.</small>
+              </span>
+            </button>
+            {(activeSection === 'mine' || activeSection === 'shared') && (
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => moveBank(mobileActionsBank.id, -1)}>
+                  <ArrowUp className="size-5" />
+                  <span><strong>Move up</strong><small>Change list order</small></span>
+                </button>
+                <button type="button" onClick={() => moveBank(mobileActionsBank.id, 1)}>
+                  <ArrowDown className="size-5" />
+                  <span><strong>Move down</strong><small>Change list order</small></span>
+                </button>
               </div>
-              <button
-                onClick={() => setQuickAccessOpen(false)}
-                className="q-icon"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-            <p className="mt-4 text-xs font-bold text-primary">
+            )}
+            {canEditBank(user, mobileActionsBank, collaboration.memberships) && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileActionsBankId('');
+                    onManageBank(mobileActionsBank.id, 'settings');
+                  }}
+                >
+                  <Settings2 className="size-5" />
+                  <span><strong>Manage QBank</strong><small>Settings, access, and sharing.</small></span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileActionsBankId('');
+                    onManageBank(mobileActionsBank.id, 'questions');
+                  }}
+                >
+                  <ListChecks className="size-5" />
+                  <span><strong>Manage questions</strong><small>Review and edit this bank’s content.</small></span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </AdaptiveOverlay>
+      <AdaptiveOverlay
+        open={quickAccessOpen}
+        onOpenChange={setQuickAccessOpen}
+        title="Quick Access QBanks"
+        description="Choose up to five banks for the navigation shortcut."
+      >
+            <p className="text-xs font-bold text-primary">
               {organization.quickAccessIds.length}/5 selected
             </p>
             <div className="mt-3 max-h-[55dvh] space-y-2 overflow-y-auto pr-1">
@@ -1061,33 +1153,19 @@ export function QBankWorkspace({
             >
               Done
             </button>
-          </section>
-        </div>
-      )}
-      {creating && (
-        <div className="q-safe-overlay fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm">
+      </AdaptiveOverlay>
+      <AdaptiveOverlay
+        open={creating}
+        onOpenChange={setCreating}
+        title="Create a QBank from scratch"
+        description="You become the Bank Owner."
+        className="sm:max-w-xl"
+      >
           <form
             onSubmit={createBank}
-            className="my-8 w-full max-w-xl rounded-2xl bg-card p-6 shadow-2xl ring-1 ring-border"
+            className="w-full"
           >
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold">
-                  Create a QBank from scratch
-                </h2>
-                <p className="text-xs text-muted-foreground">
-                  You become the Bank Owner.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setCreating(false)}
-                aria-label="Close"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-            <div className="mt-5 space-y-4">
+            <div className="space-y-4">
               <label className="block">
                 <span className="mb-1.5 block text-sm font-semibold">
                   QBank name
@@ -1192,8 +1270,7 @@ export function QBankWorkspace({
               </button>
             </div>
           </form>
-        </div>
-      )}
+      </AdaptiveOverlay>
     </>
   );
 }

@@ -11,6 +11,7 @@ import {
 } from '@/components/subscription-workspace';
 import { ContactWorkspace } from '@/components/contact-workspace';
 import { WorkspaceHeader } from '@/components/workspace-header';
+import { QraftAppShell } from '@/components/presentation/qraft-app-shell';
 import { ContributionCenter } from '@/components/contribution-center';
 import { AccountProfile } from '@/components/account-profile';
 import { SystemStatePage } from '@/components/system-state-page';
@@ -36,6 +37,7 @@ import {
 import { mergeRanges } from '@/features/exams/domain/highlight-ranges';
 import { loadActiveLocalTheme, loadLocalTheme, saveLocalTheme, type LocalTheme } from '@/lib/local-preferences';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { AdaptiveOverlay } from '@/components/ui/adaptive-overlay';
 import {
   Award,
   ArrowRight,
@@ -56,6 +58,7 @@ import {
   Cloud,
   CloudOff,
   Download,
+  Ellipsis,
   FileText,
   FlaskConical,
   Globe2,
@@ -100,6 +103,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import Link from 'next/link';
+import { usePresentationEnvironment } from '@/features/presentation/presentation-context';
 
 import {
   createCloudflareAccount,
@@ -191,12 +195,11 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { StudyMobileNav } from '@/components/study-mobile-nav';
+import { StudyMobileNav, StudyTabletRail } from '@/components/study-mobile-nav';
 import { StudyDashboard } from '@/components/study-dashboard';
-import { useIsMobile } from '@/hooks/use-mobile';
 import { cn as cx } from '@/lib/utils';
 
-type View =
+export type QraftView =
   | 'subscribe'
   | 'contact'
   | 'account'
@@ -214,6 +217,39 @@ type View =
   | 'contribution-center'
   | 'admin'
   | 'test';
+type View = QraftView;
+
+const VIEW_PATHS: Partial<Record<View, string>> = {
+  dashboard: '/',
+  library: '/qbanks',
+  create: '/exams/new',
+  preformed: '/ready-tests',
+  history: '/history',
+  flashcards: '/flashcards',
+  progress: '/progress',
+  settings: '/settings',
+  account: '/account',
+  subscribe: '/subscription',
+  contact: '/support',
+  review: '/review',
+  manager: '/contribute/questions',
+  'contribution-center': '/contributions',
+  admin: '/access',
+};
+
+function viewFromPath(pathname: string): View {
+  if (pathname === '/' || pathname === '/study') return 'dashboard';
+  if (pathname === '/qbanks' || pathname.startsWith('/qbanks/')) return 'library';
+  if (pathname === '/exams/new') return 'create';
+  if (pathname.startsWith('/exams/')) return 'test';
+  const entry = Object.entries(VIEW_PATHS).find(([, path]) => path === pathname);
+  return (entry?.[0] as View | undefined) ?? 'dashboard';
+}
+
+function pathForView(view: View, activeTestId?: string) {
+  if (view === 'test') return `/exams/${activeTestId ?? 'active'}`;
+  return VIEW_PATHS[view] ?? '/';
+}
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'offline' | 'error';
 
 interface ModelContextLike {
@@ -904,12 +940,6 @@ function MfaEnrollmentGate({
   );
 }
 
-function subscribeDesktopNavigation(callback: () => void) {
-  const media = window.matchMedia('(min-width: 1024px)');
-  media.addEventListener('change', callback);
-  return () => media.removeEventListener('change', callback);
-}
-
 const LAB_REFERENCE_GROUPS = [
   {
     name: 'Complete blood count',
@@ -995,6 +1025,7 @@ function AppSidebar({
   showReview,
   pendingReviewCount,
   dueFlashcardCount,
+  persistent,
 }: {
   view: View;
   setView: (view: View) => void;
@@ -1010,13 +1041,9 @@ function AppSidebar({
   showReview: boolean;
   pendingReviewCount: number;
   dueFlashcardCount: number;
+  persistent: boolean;
 }) {
   const [countdownNow, setCountdownNow] = useState(() => Date.now());
-  const desktop = useSyncExternalStore(
-    subscribeDesktopNavigation,
-    () => window.matchMedia('(min-width: 1024px)').matches,
-    () => false,
-  );
   const sidebarRef = useRef<HTMLElement>(null);
   const qbankMenuRef = useRef<HTMLDivElement>(null);
   const [qbankMenuOpen, setQbankMenuOpen] = useState(false);
@@ -1049,7 +1076,7 @@ function AppSidebar({
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
-    if (!mobileOpen || desktop) return;
+    if (!mobileOpen || persistent) return;
     const previous = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -1083,7 +1110,7 @@ function AppSidebar({
       document.body.style.overflow = previousOverflow;
       previous?.focus();
     };
-  }, [mobileOpen, closeMobile, desktop]);
+  }, [mobileOpen, closeMobile, persistent]);
   const navigate = (next: View) => {
     setView(next);
     closeMobile();
@@ -1109,20 +1136,24 @@ function AppSidebar({
       : 'No expiry';
   return (
     <>
-      {mobileOpen && (
+      {mobileOpen && !persistent && (
         <button
           aria-label="Close menu"
           onClick={closeMobile}
-          className="fixed inset-0 z-40 bg-slate-950/30 backdrop-blur-sm lg:hidden"
+          className="fixed inset-0 z-40 bg-slate-950/30 backdrop-blur-sm"
         />
       )}
       <aside
         ref={sidebarRef}
-        inert={!desktop && !mobileOpen}
+        inert={!persistent && !mobileOpen}
         aria-label="Workspace navigation"
         className={cx(
-          'q-sidebar fixed inset-y-0 left-0 z-50 flex h-dvh w-[270px] shrink-0 flex-col overflow-hidden border-r border-sidebar-border/70 bg-sidebar transition-transform duration-200 lg:z-20 lg:w-[254px] lg:translate-x-0',
-          mobileOpen ? 'translate-x-0' : '-translate-x-full',
+          'q-sidebar fixed inset-y-0 left-0 z-50 flex h-dvh shrink-0 flex-col overflow-hidden border-r border-sidebar-border/70 bg-sidebar transition-transform duration-200',
+          persistent
+            ? 'z-20 w-[264px] translate-x-0'
+            : mobileOpen
+              ? 'w-[min(88vw,340px)] translate-x-0'
+              : 'w-[min(88vw,340px)] -translate-x-full',
         )}
       >
         <div className="flex h-[66px] shrink-0 items-center justify-between border-b border-sidebar-border/70 px-4">
@@ -1154,7 +1185,10 @@ function AppSidebar({
           <button
             aria-label="Close navigation"
             onClick={closeMobile}
-            className="grid size-9 place-items-center rounded-xl text-muted-foreground hover:bg-muted lg:hidden"
+            className={cx(
+              'size-9 place-items-center rounded-xl text-muted-foreground hover:bg-muted',
+              persistent ? 'hidden' : 'grid',
+            )}
           >
             <X className="size-5" />
           </button>
@@ -1524,6 +1558,8 @@ function CreateTest({
   maxQuestionsPerExam: number;
   onStart: (config: TestBuilderConfig) => void;
 }) {
+  const { mode: presentationMode } = usePresentationEnvironment();
+  const handheld = presentationMode === 'handheld';
   const topics = useMemo(
     () =>
       Array.from(new Set(questions.map((question) => question.topic))).sort(),
@@ -1550,6 +1586,7 @@ function CreateTest({
     title: '',
   });
   const [message, setMessage] = useState('');
+  const [mobileStep, setMobileStep] = useState<'pool' | 'mode' | 'filters' | 'review'>('pool');
   // The complete accessible question metadata and personal progress are already
   // hydrated. Eligibility counting is therefore local; only final randomized
   // selection needs the authoritative server.
@@ -1591,6 +1628,51 @@ function CreateTest({
         : [...current.topics, topic],
     }));
   }
+  const mobileSteps: ReadonlyArray<typeof mobileStep> = config.randomAll
+    ? ['pool', 'mode', 'review']
+    : ['pool', 'mode', 'filters', 'review'];
+  const mobileStepIndex = Math.max(0, mobileSteps.indexOf(mobileStep));
+
+  function startConfiguredTest() {
+    if (!eligibleCount) {
+      setMessage(
+        'No questions match these filters. Try a different status or topic.',
+      );
+      return;
+    }
+    if (config.count > eligibleCount) {
+      setMessage(
+        `Only ${eligibleCount} questions are currently available in this QBank.`,
+      );
+      return;
+    }
+    const requestedTitle = (config.title ?? '').trim().replace(/\s+/g, ' ');
+    if (
+      requestedTitle &&
+      state.tests.some(
+        (test) =>
+          normalizedTestTitle(test.title) ===
+          normalizedTestTitle(requestedTitle),
+      )
+    ) {
+      setMessage('This test title already exists. Choose another name.');
+      return;
+    }
+    onStart({
+      ...config,
+      title: requestedTitle,
+    });
+  }
+
+  function moveMobileStep(direction: -1 | 1) {
+    const nextIndex = Math.min(
+      mobileSteps.length - 1,
+      Math.max(0, mobileStepIndex + direction),
+    );
+    setMessage('');
+    setMobileStep(mobileSteps[nextIndex]);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
   return (
     <>
       <PageHeader
@@ -1598,10 +1680,32 @@ function CreateTest({
         subtitle="Build a focused question block"
         openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
       />
-      <div className="mx-auto max-w-5xl p-4 sm:p-7">
+      <div className={cx('mx-auto max-w-5xl p-4 sm:p-7', handheld && 'pb-24')}>
+        {handheld && (
+          <div className="q-test-builder-progress" aria-label="Test setup progress">
+            <div className="flex items-center justify-between text-xs font-bold">
+              <span>Step {mobileStepIndex + 1} of {mobileSteps.length}</span>
+              <span className="text-muted-foreground">
+                {mobileStep === 'pool'
+                  ? 'Question pool'
+                  : mobileStep === 'mode'
+                    ? 'Study mode'
+                    : mobileStep === 'filters'
+                      ? 'Filters'
+                      : 'Review'}
+              </span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-[width]"
+                style={{ width: `${((mobileStepIndex + 1) / mobileSteps.length) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
         <div className="grid gap-5 lg:grid-cols-[1fr_310px]">
           <div className="space-y-5">
-            <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
+            <section className={cx('rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6', handheld && mobileStep !== 'pool' && 'hidden')}>
               <span className="text-xs font-bold text-primary">01</span>
               <h2 className="mt-1 text-lg font-bold">
                 Choose the question pool
@@ -1647,7 +1751,7 @@ function CreateTest({
                 ))}
               </div>
             </section>
-            <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
+            <section className={cx('rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6', handheld && mobileStep !== 'mode' && 'hidden')}>
               <span className="text-xs font-bold text-primary">02</span>
               <h2 className="mt-1 text-lg font-bold">Choose your test mode</h2>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -1704,7 +1808,7 @@ function CreateTest({
               </div>
             </section>
             {!config.randomAll && (
-              <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
+              <section className={cx('rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6', handheld && mobileStep !== 'filters' && 'hidden')}>
                 <span className="text-xs font-bold text-primary">03</span>
                 <h2 className="mt-1 text-lg font-bold">Question status</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
@@ -1731,7 +1835,7 @@ function CreateTest({
               </section>
             )}
             {!config.randomAll && (
-              <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
+              <section className={cx('rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6', handheld && mobileStep !== 'filters' && 'hidden')}>
                 <span className="text-xs font-bold text-primary">04</span>
                 <h2 className="mt-1 text-lg font-bold">Specialty & topics</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
@@ -1815,7 +1919,7 @@ function CreateTest({
               </section>
             )}
           </div>
-          <aside className="order-first h-fit rounded-2xl bg-card p-5 ring-1 ring-border lg:order-last lg:sticky lg:top-[92px]">
+          <aside className={cx('order-first h-fit rounded-2xl bg-card p-5 ring-1 ring-border lg:order-last lg:sticky lg:top-[92px]', handheld && mobileStep !== 'review' && 'hidden')}>
             <span className="q-eyebrow">Ready when you are</span>
             <h3 className="mt-1 text-lg font-bold">Your session</h3>
             <p className="mt-2 text-sm text-muted-foreground lg:hidden">
@@ -1902,40 +2006,7 @@ function CreateTest({
             <PrimaryButton
               tone="study"
               disabled={!eligibleCount}
-              onClick={() => {
-                if (!eligibleCount) {
-                  setMessage(
-                    'No questions match these filters. Try a different status or topic.',
-                  );
-                  return;
-                }
-                if (config.count > (eligibleCount ?? 0)) {
-                  setMessage(
-                    `Only ${eligibleCount} questions are currently available in this QBank.`,
-                  );
-                  return;
-                }
-                const requestedTitle = (config.title ?? '')
-                  .trim()
-                  .replace(/\s+/g, ' ');
-                if (
-                  requestedTitle &&
-                  state.tests.some(
-                    (test) =>
-                      normalizedTestTitle(test.title) ===
-                      normalizedTestTitle(requestedTitle),
-                  )
-                ) {
-                  setMessage(
-                    'This test title already exists. Choose another name.',
-                  );
-                  return;
-                }
-                onStart({
-                  ...config,
-                  title: requestedTitle,
-                });
-              }}
+              onClick={startConfiguredTest}
               className="mt-6 w-full"
             >
               <ClipboardPlus className="size-4" />
@@ -1943,6 +2014,24 @@ function CreateTest({
             </PrimaryButton>
           </aside>
         </div>
+        {handheld && (
+          <div className="q-test-builder-actions" aria-label="Test setup navigation">
+            {mobileStepIndex > 0 ? (
+              <button type="button" className="q-button q-button-secondary" onClick={() => moveMobileStep(-1)}>
+                <ChevronLeft className="size-4" />
+                Back
+              </button>
+            ) : (
+              <span />
+            )}
+            {mobileStep !== 'review' && (
+              <button type="button" className="q-button q-button-primary" onClick={() => moveMobileStep(1)}>
+                Continue
+                <ChevronRight className="size-4" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </>
   );
@@ -1989,29 +2078,25 @@ function TestQuestionPanel({
 }
 
 function NotesSurface({
-  mobile,
+  handheld,
   onClose,
   children,
 }: {
-  mobile: boolean;
+  handheld: boolean;
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  return mobile ? (
-    <Dialog
+  return handheld ? (
+    <AdaptiveOverlay
       open
-      onOpenChange={(o) => {
-        if (!o) onClose();
+      onOpenChange={(open) => {
+        if (!open) onClose();
       }}
+      title="Shared notes"
     >
-      <DialogContent className="sm:max-w-2xl">
-        <DialogTitle>Notes</DialogTitle>
-        {children}
-      </DialogContent>
-    </Dialog>
-  ) : (
-    <>{children}</>
-  );
+      {children}
+    </AdaptiveOverlay>
+  ) : <>{children}</>;
 }
 
 function TestView({
@@ -2039,6 +2124,7 @@ function TestView({
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [privateNotesOpen, setPrivateNotesOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [labsOpen, setLabsOpen] = useState(false);
   const [flashcardOpen, setFlashcardOpen] = useState(false);
   const [explanationOpen, setExplanationOpen] = useState(false);
@@ -2060,7 +2146,8 @@ function TestView({
     QuestionProgress['noteImages']
   >([]);
   const [uploading, setUploading] = useState(false);
-  const isMobile = useIsMobile();
+  const { mode: presentationMode } = usePresentationEnvironment();
+  const handheld = presentationMode === 'handheld';
   const stemRef = useRef<HTMLParagraphElement>(null);
   const navigatorRef = useRef<HTMLDialogElement>(null);
   const navigatorCurrentRef = useRef<HTMLButtonElement>(null);
@@ -2248,7 +2335,7 @@ function TestView({
         },
       };
     });
-    if (!isMobile) setNotesOpen(true);
+    if (!handheld) setNotesOpen(true);
   }
 
   function finishTest() {
@@ -2810,9 +2897,11 @@ function TestView({
         open={flashcardOpen}
         onOpenChange={setFlashcardOpen}
       />
-      <Dialog open={explanationOpen} onOpenChange={setExplanationOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogTitle>Explanation</DialogTitle>
+      <AdaptiveOverlay
+        open={explanationOpen}
+        onOpenChange={setExplanationOpen}
+        title="Explanation"
+      >
           <p
             dir="auto"
             onPointerUp={(event) =>
@@ -2826,15 +2915,14 @@ function TestView({
               onRemove={(range) => removeHighlight('explanation', range)}
             />
           </p>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={labsOpen} onOpenChange={setLabsOpen}>
-        <DialogContent className="max-h-[88dvh] overflow-y-auto sm:max-w-3xl">
-          <DialogTitle>Laboratory reference values</DialogTitle>
-          <p className="text-sm leading-6 text-muted-foreground">
-            Quick study reference based on ABIM adult ranges. Local laboratory
-            ranges and the clinical context may differ.
-          </p>
+      </AdaptiveOverlay>
+      <AdaptiveOverlay
+        open={labsOpen}
+        onOpenChange={setLabsOpen}
+        title="Laboratory reference values"
+        description="Quick study reference based on ABIM adult ranges. Local laboratory ranges and the clinical context may differ."
+        className="sm:max-w-3xl"
+      >
           <div className="grid gap-3 sm:grid-cols-2">
             {LAB_REFERENCE_GROUPS.map((group) => (
               <section
@@ -2858,15 +2946,13 @@ function TestView({
               </section>
             ))}
           </div>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={privateNotesOpen} onOpenChange={setPrivateNotesOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogTitle>Private Note</DialogTitle>
-          <p className="text-sm leading-6 text-muted-foreground">
-            Only you can see this note. It follows this question across every
-            test and saves automatically.
-          </p>
+      </AdaptiveOverlay>
+      <AdaptiveOverlay
+        open={privateNotesOpen}
+        onOpenChange={setPrivateNotesOpen}
+        title="Private note"
+        description="Only you can see this note. It follows this question across every test and saves automatically."
+      >
           <textarea
             dir="auto"
             value={progress.note}
@@ -2888,8 +2974,36 @@ function TestView({
               Delete note
             </button>
           </div>
-        </DialogContent>
-      </Dialog>
+      </AdaptiveOverlay>
+      <AdaptiveOverlay
+        open={toolsOpen}
+        onOpenChange={setToolsOpen}
+        title="Study tools"
+        description="Tools for this question. Your place in the exam will not change."
+      >
+        <div className="q-mobile-tool-list">
+          <button type="button" aria-pressed={markerActive} onClick={() => setMarkerActive((value) => !value)}>
+            <Highlighter className="size-5" /><span><strong>{markerActive ? 'Marker on' : 'Highlight text'}</strong><small>Select text in the question or explanation.</small></span>
+          </button>
+          <button type="button" onClick={() => { setToolsOpen(false); setPrivateNotesOpen(true); }}>
+            <StickyNote className="size-5" /><span><strong>Private note</strong><small>{progress.note.trim() ? 'Edit your saved note.' : 'Add a note only you can see.'}</small></span>
+          </button>
+          <button type="button" onClick={() => { setToolsOpen(false); setLabsOpen(true); }}>
+            <FlaskConical className="size-5" /><span><strong>Laboratory values</strong><small>Open the quick reference.</small></span>
+          </button>
+          <button type="button" onClick={() => { setToolsOpen(false); setFlashcardOpen(true); }}>
+            <Layers3 className="size-5" /><span><strong>Create flashcard</strong><small>Turn this question into a study card.</small></span>
+          </button>
+          <button type="button" disabled={selected === undefined && !revealed} onClick={() => { restartQuestion(); setToolsOpen(false); }}>
+            <RotateCcw className="size-5" /><span><strong>Restart question</strong><small>Clear this answer and try again.</small></span>
+          </button>
+          {progress.highlights.length > 0 && (
+            <button type="button" onClick={clearHighlights}>
+              <Trash2 className="size-5" /><span><strong>Clear highlights</strong><small>Remove highlights from this question.</small></span>
+            </button>
+          )}
+        </div>
+      </AdaptiveOverlay>
       <Dialog
         open={Boolean(zoomImage)}
         onOpenChange={(open) => {
@@ -3015,10 +3129,10 @@ function TestView({
             </div>
             <TestPanels
               key={`${question.id}:${revealed ? 'revealed' : 'answering'}`}
-              mobile={isMobile}
+              mobile={handheld}
             >
               <TestQuestionPanel
-                mobile={isMobile}
+                mobile={handheld}
                 explanation={Boolean(revealed && displayedExplanation)}
               >
                 <article className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-border dark:bg-card sm:p-8">
@@ -3034,7 +3148,7 @@ function TestView({
                         </span>
                       )}
                     </div>
-                    <div className="flex flex-wrap justify-end gap-2">
+                    <div className="q-exam-inline-tools flex flex-wrap justify-end gap-2">
                       <IconButton
                         label="Open laboratory reference values"
                         onClick={() => setLabsOpen(true)}
@@ -3079,6 +3193,15 @@ function TestView({
                         </IconButton>
                       )}
                     </div>
+                    {handheld && (
+                      <button
+                        type="button"
+                        className="q-exam-tools-trigger"
+                        onClick={() => setToolsOpen(true)}
+                      >
+                        <Ellipsis className="size-5" /> Tools
+                      </button>
+                    )}
                   </div>
                   <p
                     ref={stemRef}
@@ -3209,17 +3332,17 @@ function TestView({
                   )}
                 </article>
               </TestQuestionPanel>
-              {revealed && displayedExplanation && !isMobile && (
+              {revealed && displayedExplanation && !handheld && (
                 <>
                   <ResizableHandle
                     withHandle
-                    className={cx('bg-transparent', isMobile ? 'my-4' : 'mx-4')}
+                    className="mx-4 bg-transparent"
                   />
                   <ResizablePanel
                     id="explanation-panel"
                     defaultSize="32%"
-                    minSize={isMobile ? '12rem' : '22%'}
-                    maxSize={isMobile ? '34rem' : '58%'}
+                    minSize="22%"
+                    maxSize="58%"
                   >
                     <aside
                       className="h-full rounded-2xl border border-primary/15 bg-white p-5 shadow-sm dark:bg-card sm:p-6"
@@ -3280,7 +3403,7 @@ function TestView({
                 Previous
               </SecondaryButton>
               <div className="flex min-w-0 flex-wrap justify-center gap-2">
-                {isMobile && revealed && displayedExplanation && (
+                {handheld && revealed && displayedExplanation && (
                   <SecondaryButton onClick={() => setExplanationOpen(true)}>
                     Explanation
                   </SecondaryButton>
@@ -3305,7 +3428,7 @@ function TestView({
             </div>
             {notesOpen && (
               <NotesSurface
-                mobile={isMobile}
+                handheld={handheld}
                 onClose={() => setNotesOpen(false)}
               >
                 <section className="mt-4 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-border dark:bg-card">
@@ -4083,6 +4206,7 @@ function ProgressView({
   state: AppState;
   questions: Question[];
 }) {
+  const { mode: presentationMode } = usePresentationEnvironment();
   const summary = useMemo(() => {
     const completed = questions.filter(
       (question) => getQuestionProgress(state, question.id).attempts > 0,
@@ -4167,6 +4291,70 @@ function ProgressView({
   const accuracy = summary.completed
     ? Math.round((summary.correct / summary.completed) * 100)
     : 0;
+  if (presentationMode === 'handheld') {
+    return (
+      <>
+        <PageHeader
+          title="Progress"
+          subtitle="Your QBank performance"
+          openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
+        />
+        <div className="q-mobile-progress">
+          <section className="q-mobile-progress-hero">
+            <div
+              className="q-mobile-progress-ring"
+              style={{ background: `conic-gradient(var(--study) ${completion}%, var(--muted) 0)` }}
+              aria-label={`${completion}% of this QBank completed`}
+            >
+              <div><strong>{completion}%</strong><span>complete</span></div>
+            </div>
+            <div className="min-w-0 flex-1">
+              <span className="q-eyebrow">QBank overview</span>
+              <h2>{summary.completed} of {questions.length} completed</h2>
+              <p>{accuracy}% accuracy across answered questions.</p>
+            </div>
+          </section>
+          <div className="q-mobile-progress-signals">
+            <article><CircleAlert className="size-5 text-red-500" /><strong>{summary.incorrect}</strong><span>Incorrect</span></article>
+            <article><Flag className="size-5 text-amber-500" /><strong>{summary.flagged}</strong><span>Flagged</span></article>
+            <article><CheckCircle2 className="size-5 text-emerald-500" /><strong>{summary.correct}</strong><span>Correct</span></article>
+          </div>
+          <section className="q-mobile-progress-topics">
+            <div className="mobile-section-heading">
+              <div><span className="q-eyebrow">Breakdown</span><h2>Topics</h2></div>
+            </div>
+            <div className="mt-3 space-y-3">
+              {summary.categories.map((category) => {
+                const categoryCompletion = category.total
+                  ? Math.round((category.completed / category.total) * 100)
+                  : 0;
+                return (
+                  <details key={category.category} className="group rounded-2xl border bg-card">
+                    <summary className="list-none p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <strong>{category.category}</strong>
+                        <span className="text-xs text-muted-foreground">{category.accuracy}% accuracy <ChevronRight className="ml-1 inline size-4 transition group-open:rotate-90" /></span>
+                      </div>
+                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${categoryCompletion}%` }} /></div>
+                      <p className="mt-2 text-xs text-muted-foreground">{category.completed}/{category.total} questions · {categoryCompletion}% complete</p>
+                    </summary>
+                    <div className="space-y-2 border-t p-3">
+                      {category.topics.map((topic) => (
+                        <div key={topic.topic} className="rounded-xl bg-muted/35 p-3">
+                          <div className="flex items-start justify-between gap-3 text-sm"><strong>{topic.topic}</strong><span className="shrink-0 text-xs text-muted-foreground">{topic.accuracy}%</span></div>
+                          <p className="mt-1 text-xs text-muted-foreground">{topic.completed}/{topic.total} completed</p>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+      </>
+    );
+  }
   return (
     <>
       <PageHeader
@@ -4175,7 +4363,7 @@ function ProgressView({
         openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
       />
       <div className="mx-auto max-w-6xl p-4 sm:p-7">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="q-progress-stats grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             label="Completed"
             value={summary.completed}
@@ -5310,7 +5498,18 @@ function QuestionManager({
   );
 }
 
-export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'superadmin' }) {
+export default function MedGuardApp({
+  portal = 'app',
+  initialView = 'dashboard',
+  initialTestId,
+  initialQBankId,
+}: {
+  portal?: 'app' | 'superadmin';
+  initialView?: View;
+  initialTestId?: string;
+  initialQBankId?: string;
+}) {
+  const presentation = usePresentationEnvironment();
   const [user, setUser] = useState<AppUser | null | undefined>(undefined);
   const [state, setStateRaw] = useState<AppState>(initialAppState);
   const setState = useCallback((update: React.SetStateAction<AppState>) => {
@@ -5341,7 +5540,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
   );
   const [hydrated, setHydrated] = useState(false);
   const [collaborationHydrated, setCollaborationHydrated] = useState(false);
-  const [view, setView] = useState<View>('dashboard');
+  const [view, setViewState] = useState<View>(initialView);
   const [directTestCode, setDirectTestCode] = useState(() => {
     if (typeof window === 'undefined') return '';
     return new URL(window.location.href).searchParams.get('join_test')?.trim().toUpperCase() ?? '';
@@ -5349,7 +5548,17 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
   const [testError, setTestError] = useState('');
   const creatingTest = useRef(false);
   const [examPool, setExamPool] = useState<Question[]>([]);
-  const [activeTestId, setActiveTestId] = useState<string>();
+  const [activeTestId, setActiveTestId] = useState<string | undefined>(initialTestId);
+  const setView = useCallback(
+    (next: View) => {
+      setViewState(next);
+      if (portal !== 'app' || typeof window === 'undefined') return;
+      const nextPath = pathForView(next, activeTestId);
+      if (window.location.pathname === nextPath) return;
+      window.history.pushState({ qraftView: next }, '', nextPath);
+    },
+    [activeTestId, portal],
+  );
   const [managedBank, setManagedBank] = useState<{
     id: string;
     section: 'settings' | 'structure' | 'questions';
@@ -5361,6 +5570,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
     () => true,
   );
   const [offlineDismissed, setOfflineDismissed] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [flashcardClock, setFlashcardClock] = useState(() => Date.now());
   const [announcement, setAnnouncement] = useState({ enabled: false, content: '', href: '' });
@@ -5369,12 +5579,26 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
   >(null);
   const [linkInvitationBusy, setLinkInvitationBusy] = useState(false);
   const [linkInvitationError, setLinkInvitationError] = useState('');
+  const activateAppUpdate = useCallback(async () => {
+    if (!('serviceWorker' in navigator)) return;
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration?.waiting) {
+      window.location.reload();
+      return;
+    }
+    navigator.serviceWorker.addEventListener(
+      'controllerchange',
+      () => window.location.reload(),
+      { once: true },
+    );
+    registration.waiting.postMessage({ type: 'QRAFT_SKIP_WAITING' });
+  }, []);
   const saveTimer = useRef<number | undefined>(undefined);
   const stateDirty = useRef(false);
   const stateSyncInFlight = useRef(false);
   const checkpointInFlight = useRef(false);
   const flashcardReviewActive = useRef(false);
-  const viewSnapshot = useRef<View>('dashboard');
+  const viewSnapshot = useRef<View>(initialView);
   const activeTestIdSnapshot = useRef<string | undefined>(undefined);
   const outboxReplayedFor = useRef('');
   const lastLeaveCheckpoint = useRef('');
@@ -5621,6 +5845,66 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
   );
 
   useEffect(() => {
+    if (!hydrated || view !== 'test' || activeTest) return;
+    const timer = window.setTimeout(() => setViewState('history'), 0);
+    if (portal === 'app')
+      window.history.replaceState({ qraftView: 'history' }, '', '/history');
+    return () => window.clearTimeout(timer);
+  }, [activeTest, hydrated, portal, view]);
+
+  useEffect(() => {
+    if (!hydrated || view !== 'review' || showReview) return;
+    const timer = window.setTimeout(() => setViewState('dashboard'), 0);
+    if (portal === 'app')
+      window.history.replaceState({ qraftView: 'dashboard' }, '', '/');
+    return () => window.clearTimeout(timer);
+  }, [hydrated, portal, showReview, view]);
+
+  useEffect(() => {
+    if (portal !== 'app') return;
+    const onPopState = () => {
+      const pathname = window.location.pathname;
+      const next = viewFromPath(pathname);
+      setViewState(next);
+      if (next === 'test') {
+        const id = decodeURIComponent(pathname.slice('/exams/'.length));
+        setActiveTestId(id === 'active' ? undefined : id);
+      }
+      setMobileOpen(false);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [portal]);
+
+  useEffect(() => {
+    if (portal !== 'app' || view !== 'test' || !activeTestId) return;
+    const nextPath = `/exams/${encodeURIComponent(activeTestId)}`;
+    if (window.location.pathname !== nextPath)
+      window.history.replaceState({ qraftView: 'test' }, '', nextPath);
+  }, [activeTestId, portal, view]);
+
+  useEffect(() => {
+    if (!initialQBankId || !collaborationHydrated || !user) return;
+    const accessible = collaboration.qbanks.some(
+      (bank) =>
+        bank.id === initialQBankId &&
+        canAccessBank(user, bank, collaboration.memberships),
+    );
+    if (!accessible) return;
+    const timer = window.setTimeout(() => {
+      setState((current) =>
+        current.settings.activeQBankId === initialQBankId
+          ? current
+          : {
+              ...current,
+              settings: { ...current.settings, activeQBankId: initialQBankId },
+            },
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [collaboration.qbanks, collaboration.memberships, collaborationHydrated, initialQBankId, setState, user]);
+
+  useEffect(() => {
     if (view !== 'test' || !activeTestHasQuestion) return;
     const timer = window.setTimeout(recordStudyVisit, 0);
     return () => window.clearTimeout(timer);
@@ -5638,7 +5922,18 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
     if ('serviceWorker' in navigator)
       navigator.serviceWorker
         .register('/sw.js')
-        .then((registration) => registration.update())
+        .then((registration) => {
+          if (registration.waiting && navigator.serviceWorker.controller)
+            setUpdateAvailable(true);
+          registration.addEventListener('updatefound', () => {
+            const worker = registration.installing;
+            worker?.addEventListener('statechange', () => {
+              if (worker.state === 'installed' && navigator.serviceWorker.controller)
+                setUpdateAvailable(true);
+            });
+          });
+          return registration.update();
+        })
         .catch(() => undefined);
     const openMenu = () => setMobileOpen(true);
     window.addEventListener('medguard-open-menu', openMenu);
@@ -6362,7 +6657,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
         creatingTest.current = false;
       }
     },
-    [state, collaboration.qbanks, activeQBankId, setState, user],
+    [state, collaboration.qbanks, activeQBankId, setState, setView, user],
   );
 
   const quickTest = useCallback(() => {
@@ -6585,19 +6880,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
     );
 
   return (
-    <main
-      className="q-shell bg-background text-foreground"
-      data-navigation-open={mobileOpen}
-      data-announcement-visible={
-        portal === 'app' && announcement.enabled && Boolean(announcement.content)
-          ? 'true'
-          : 'false'
-      }
-    >
-      <a className="skip-navigation" href="#main-content">
-        Skip to content
-      </a>
-      <StudyMobileNav view={view} onNavigate={setView} />
+    <>
       <UpgradeDialog user={user} onUser={setUser} />
       <AlertDialog open={Boolean(linkInvitation)}>
         <AlertDialogContent>
@@ -6644,8 +6927,40 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <div className="q-frame flex lg:pl-[254px]">
-        <AppSidebar
+      {updateAvailable && (
+        <output className="q-update-toast" aria-live="polite">
+          <div>
+            <strong>A Qraft update is ready</strong>
+            <span>Your current work is saved before refresh.</span>
+          </div>
+          <button type="button" onClick={() => void activateAppUpdate()}>
+            <RefreshCw className="size-4" /> Update
+          </button>
+          <button
+            type="button"
+            className="q-update-dismiss"
+            aria-label="Dismiss update notice"
+            onClick={() => setUpdateAvailable(false)}
+          >
+            <X className="size-4" />
+          </button>
+        </output>
+      )}
+      <QraftAppShell
+        contentKey={view}
+        navigationOpen={mobileOpen}
+        handheldNavigation={
+          <StudyMobileNav view={view} onNavigate={setView} />
+        }
+        tabletNavigation={
+          <StudyTabletRail
+            view={view}
+            onNavigate={setView}
+            onMore={() => setMobileOpen(true)}
+          />
+        }
+        navigation={
+          <AppSidebar
           view={view}
           setView={setView}
           user={user}
@@ -6674,13 +6989,10 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
           showReview={showReview}
           pendingReviewCount={pendingReviewCount}
           dueFlashcardCount={dueFlashcardCount}
+          persistent={presentation.mode === 'desktop'}
         />
-        <section
-          id="main-content"
-          tabIndex={-1}
-          key={view}
-          className="q-stage q-enter"
-        >
+        }
+      >
           {portal === 'app' && announcement.enabled && announcement.content && (
             <output className="q-announcement flex min-h-10 items-center justify-center gap-3 bg-gradient-to-r from-primary via-cyan-600 to-teal-600 px-4 py-2 text-center text-xs font-bold text-white shadow-sm sm:text-sm">
               <span>{announcement.content}</span>
@@ -6939,8 +7251,7 @@ export default function MedGuardApp({ portal = 'app' }: { portal?: 'app' | 'supe
               scope="access"
             />
           )}
-        </section>
-      </div>
-    </main>
+      </QraftAppShell>
+    </>
   );
 }
