@@ -174,3 +174,11 @@ Use at least five samples for browser journeys when practical and report median 
 Keep Workers, D1, R2, and the hibernating Durable Object design. The measured problem was query and request shape rather than platform capacity. Production should use Workers Paid because observed Free D1 reads were about 9.2 times the daily allowance and the first-pass audit encountered the hard daily read limit. Current aggregate usage fits within Paid included D1/request allowances; the expected minimum remains about **$5/month**, plus measured R2 and Durable Object usage.
 
 No production deployment was performed as part of this work.
+
+## Phase 11 validation attempt
+
+Phase 11 stopped at the clean pre-deployment gate on 2026-09-24. A detached checkout of commit `d8969e1eb9bd0bb1a4d7e6391072318d1d2c6aaa`, installed from `package-lock.json`, ran 117 tests: 116 passed and one failed because `tests/duplicate-detection.test.mjs` references `drizzle/0021_duplicate_review_system.sql`, which is not committed. The branch tracks migrations only through `0020`; migrations `0021`-`0023` and additional tests exist only in the dirty development checkout.
+
+The 129-test Phase 10 result therefore describes the working checkout used during implementation, not a reproducible clean build of `d8969e1`. This contradicts the required one-build validation identity and blocks canary deployment. TypeScript, lint, build, and dry-run were stopped after the failed gate as required.
+
+The repository also has no isolated staging environment: its only configured bindings point to `qraft-qbank`, `qraft-assets`, and `qraft-realtime`. No Worker was deployed and no Cloudflare data was queried or changed. Consequently, all production/canary claims remain unvalidated. See [Phase 11 validation](./phase-11-validation.md) and [rollout readiness](./phase-11-rollout-readiness.md).

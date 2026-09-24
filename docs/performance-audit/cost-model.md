@@ -110,3 +110,9 @@ The production share of the 101,000 daily rows written is not yet attributed to 
 ## Recommended operating choice
 
 Use Workers Paid for production reliability while implementing and validating the high-confidence query/request fixes. Keep staging/local development on the least costly appropriate tier. Revisit product choices only after route-level CPU, R2 and Durable Object metrics show a specific cost or scaling constraint.
+
+## Phase 11 cost-validation status
+
+Phase 11 produced no canary resource measurements because the pinned candidate failed the clean pre-deployment gate and no isolated staging resources are configured. The monthly figures in this document remain Phase 0-10 baseline measurements and scenario projections; they are not Phase 11 after-values.
+
+Do not reduce the estimate by applying the local `-89.9%` collaboration result or `-61.37%` duplicate benchmark to aggregate production totals. A future staging/canary run must measure collaboration-load frequency, Worker CPU-ms, D1 rows by logical query, R2 operations/storage, and Durable Object requests/messages before updating the monthly projection. The current recommendation—Workers Paid with an expected minimum near $5/month plus measured R2/DO usage—remains an operating recommendation, not a newly validated Phase 11 cost result.

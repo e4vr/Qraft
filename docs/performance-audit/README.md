@@ -15,6 +15,8 @@ This directory records the production performance, reliability, and cost investi
 - [Request policy](./request-policy.md) — allowed request reasons, cache scope, invalidation, retry, cancellation and reconnect rules.
 - [Data lifecycle](./data-lifecycle.md) — resource ownership, authority, freshness and navigation behavior.
 - [Phase 10 results](./results.md) — implemented changes, before/after evidence, validation and remaining risks.
+- [Phase 11 validation](./phase-11-validation.md) — pinned-build gate, canary feasibility, evidence classifications and rerun procedure.
+- [Phase 11 rollout readiness](./phase-11-rollout-readiness.md) — NO-GO decision, blockers, rollback requirements and monitoring gates.
 
 ## Guardrails and outcome
 
@@ -28,3 +30,5 @@ This directory records the production performance, reliability, and cost investi
 ## Next decision gate
 
 Review and approve the Phase 10 branch before any staging, canary or production rollout. Deeper write-model, payload-slicing, delta-sync, schema and audit-semantics changes remain separate decisions.
+
+Phase 11 found that the current candidate is not reproducible from a clean checkout and that no isolated staging environment is configured. The rollout decision is **NO-GO** until the blockers in the rollout-readiness document are closed.
