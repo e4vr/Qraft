@@ -1,8 +1,8 @@
 # Qraft performance audit
 
-Status: **first pass complete through Phase 9; Phase 10 has not started**.
+Status: **Phases 0-10 complete on the audit branch; not deployed**.
 
-This directory records the production performance, reliability, and cost investigation requested for Qraft. The first pass is deliberately read-only with respect to application behavior. It adds documentation only and proposes changes for approval.
+This directory records the production performance, reliability, and cost investigation requested for Qraft. Phases 0-9 established the read-only baseline. Phase 10 implemented the approved query, request, reconnect, CPU, and idempotency changes in separate commits and recorded their evidence without deploying them.
 
 ## Documents
 
@@ -12,21 +12,19 @@ This directory records the production performance, reliability, and cost investi
 - [Measurement plan](./measurement-plan.md) — instrumentation, representative journeys, and acceptance thresholds for a before/after comparison.
 - [Cost model](./cost-model.md) — present usage, Cloudflare allowance comparison, and scenario estimates.
 - [First-pass report](./first-pass-report.md) — ranked root causes and the proposed Phase 10 implementation queue.
+- [Request policy](./request-policy.md) — allowed request reasons, cache scope, invalidation, retry, cancellation and reconnect rules.
+- [Data lifecycle](./data-lifecycle.md) — resource ownership, authority, freshness and navigation behavior.
+- [Phase 10 results](./results.md) — implemented changes, before/after evidence, validation and remaining risks.
 
-## Guardrails
+## Guardrails and outcome
 
-- No implementation code or schema was changed during Phases 0–9.
+- No implementation code or schema was changed during Phases 0-9.
 - No write was issued to production D1. Production probes were `SELECT` and `EXPLAIN QUERY PLAN` only.
 - Production probing stopped when D1 reported that the Free daily row-read allowance had been exhausted.
-- Project tests and a production build were run for baseline validation only.
+- Phase 10 made no schema change, production write, runtime configuration change or deployment.
+- Every Phase 10 wave passed tests, TypeScript, lint and a production build; the final suite has 129 passing tests.
 - The checked-out source has extensive pre-existing uncommitted work. Every future measurement must pin the deployed commit and D1 schema version because the working tree may not equal production.
 
-## Decision gate
+## Next decision gate
 
-Phase 10 may begin only after approval. The recommended first implementation group is limited to:
-
-1. rewrite the collaboration read using existing indexes;
-2. coalesce per-channel reconnect reconciliation into one refresh wave;
-3. add route/query resource instrumentation and performance regression tests.
-
-Write-model or audit-semantics changes remain separate decisions because they alter storage or audit granularity.
+Review and approve the Phase 10 branch before any staging, canary or production rollout. Deeper write-model, payload-slicing, delta-sync, schema and audit-semantics changes remain separate decisions.
