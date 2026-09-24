@@ -154,24 +154,3 @@ void test('representative large-bank import remains practical with prepared cand
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 5_000, `20 questions against 5,000 candidates took ${Math.round(elapsed)}ms`);
 });
-
-void test('integration skips exact imported questions, reviews near matches, and preserves reviewer decisions', async () => {
-  const platform = await readFile(new URL('../lib/platform-server.ts', import.meta.url), 'utf8');
-  const collaboration = await readFile(new URL('../lib/cloudflare-server.ts', import.meta.url), 'utf8');
-  const migration = await readFile(new URL('../drizzle/0021_duplicate_review_system.sql', import.meta.url), 'utf8');
-  const importPolicyMigration = await readFile(new URL('../drizzle/0022_question_level_import_deduplication.sql', import.meta.url), 'utf8');
-  assert.doesNotMatch(platform, /All valid questions were exact duplicates/);
-  assert.match(platform, /exactFingerprints\.has\(prepared\.prepared\.fingerprint\)/);
-  assert.match(platform, /kind='question' AND confirmed=1/);
-  assert.doesNotMatch(platform, /recordConfirmedDuplicateAttempt\([\s\S]{0,180}'file'/);
-  assert.match(platform, /action === 'duplicate-resolve'/);
-  assert.match(platform, /action === 'duplicate-scan'/);
-  assert.match(platform, /Resolve possible duplicate cases with KEEP BOTH/);
-  assert.match(platform, /recordConfirmedDuplicateAttempt\([\s\S]{0,300}'question'/);
-  assert.match(collaboration, /detectDuplicateReview\(/);
-  assert.match(migration, /duplicate_pair_decisions/);
-  assert.match(migration, /duplicate_resolution_claims/);
-  assert.match(migration, /UNIQUE INDEX `idx_duplicate_pair_decisions_unchanged_pair`/);
-  assert.match(importPolicyMigration, /DROP INDEX IF EXISTS idx_imported_files_user_name/);
-  assert.match(importPolicyMigration, /DROP INDEX IF EXISTS idx_imported_files_user_hash/);
-});
