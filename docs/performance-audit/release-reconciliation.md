@@ -2,7 +2,7 @@
 
 ## Decision
 
-The release candidate is built from commit `0c68d6e` in a separate clean branch. None of the uncommitted development-checkout changes are included. The only Phase 10 provenance defect is a future-work integration assertion accidentally committed with the duplicate-detection domain tests. It is removed while retaining the Phase 10 algorithm, semantic cases, large-candidate regression, and all three performance-regression tests.
+The release candidate is derived from commit `0c68d6e` in a separate clean branch. None of the uncommitted development-checkout changes are included wholesale. Two Phase 10 provenance defects were isolated: a future-work integration assertion accidentally committed with the duplicate-detection domain tests, and two detector-only TypeScript contracts that existed only within a much larger dirty type-file change. The assertion is removed and only the two required contracts are restored. The Phase 10 algorithm, semantic cases, large-candidate regression, and all three performance-regression tests remain.
 
 Classifications use the Phase 11A labels. “Included” refers to the release-candidate branch, not the dirty development checkout.
 
@@ -29,7 +29,7 @@ Classifications use the Phase 11A labels. “Included” refers to the release-c
 | `lib/api-client.ts` | E — unrelated work | Export/API surface adjustment | No | Uncommitted clients | Outside release scope |
 | `lib/application-services.ts` | E — unrelated work | Export/service surface adjustment | No | Uncommitted services | Outside release scope |
 | `lib/cloudflare-server.ts` | E — unrelated work | Duplicate-review integration plus unrelated server changes | No | `0021`, modified schema/UI/tests | Authorization and persistence risk |
-| `lib/medguard-types.ts` | E — unrelated work | Types for new duplicate/import/UI features | No | Future feature code | Contract change |
+| `lib/medguard-types.ts` | A/E — split | Most dirty changes describe future duplicate/import/UI features; `DuplicateCandidate` and `DuplicateReview` are required by the already committed Phase 10 detector | Required two-interface subset only | Phase 10 detector | Low for isolated contracts; high if entire dirty file were included |
 | `lib/platform-server.ts` | E — unrelated work | Advanced duplicate workflow and JSON-import observability | No | `0021`-`0023`, new UI/tests | Large API/persistence change |
 | `lib/preformed-test-types.ts` | E — unrelated work | Type/export adjustment | No | Preformed-test import work | Outside release scope |
 | `lib/question-import.ts` | E — unrelated work | Import report/parser changes | No | New import UX | Behavior change |
@@ -86,3 +86,4 @@ The current release schema remains committed migrations `0000` through `0020`. N
 |---|---|---|---|---|---|
 | `tests/duplicate-detection.test.mjs` | B — required test correction | Removes the future integration assertion while retaining all Phase 10 algorithm/semantic/performance coverage | Yes | Phase 10 detector | Low; narrows test to shipped behavior |
 | `tests/release-provenance.test.mjs` | B — required release guard | Fails when tests/scripts reference an untracked migration and checks migration prefix ordering | Yes | Git checkout | Low |
+| `lib/medguard-types.ts` detector contracts | A — required release source | Restores the two interfaces imported by the committed Phase 10 detector so clean TypeScript builds reproduce | Yes | `features/duplicates/domain/duplicate-detection.ts` | Low; type-only contract |
