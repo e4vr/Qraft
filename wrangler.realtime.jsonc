@@ -10,5 +10,19 @@
     "redact_query_string": true
   },
   "durable_objects": { "bindings": [{ "name": "REALTIME", "class_name": "RealtimeChannel" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RealtimeChannel"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RealtimeChannel"] }],
+  "env": {
+    "staging": {
+      "name": "qraft-realtime-staging",
+      "workers_dev": true,
+      "compatibility_date": "2026-09-09",
+      "routes": [],
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "redact_query_string": true
+      },
+      "durable_objects": { "bindings": [{ "name": "REALTIME", "class_name": "RealtimeChannel" }] }
+    }
+  }
 }

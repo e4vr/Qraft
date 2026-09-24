@@ -11,12 +11,10 @@ Connections renew authorization every five minutes, reconnect with backoff, and 
 Run from the application directory:
 
 ```powershell
-npm.cmd run build
-npm.cmd run deploy:realtime
-npm.cmd run deploy:app
+npm.cmd run deploy:staging
 ```
 
-The first deployment provisions the `RealtimeChannel` SQLite Durable Object in the private `qraft-realtime` Worker. The app references that Worker through its `REALTIME` binding. Deploy the realtime Worker before the app. This adds a Worker migration, not a D1 migration; existing D1 data is unchanged. Subsequent deployments retain the same Worker and class migration tag.
+The staging command builds with `CLOUDFLARE_ENV=staging`, verifies every generated binding, refuses a dirty Git tree, and deploys `qraft-realtime-staging` before `qraft-staging`. Production entry points are deliberately named `deploy:production:realtime` and `deploy:production:app`; Phase 11A does not run them.
 
 `npm.cmd run dev` runs both Workers through the Vite plugin. `npm.cmd start` runs both built Workers locally. Tests use isolated databases and synthetic accounts:
 
