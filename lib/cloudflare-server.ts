@@ -1221,7 +1221,8 @@ function recordData(value: Record<string, unknown>) {
 async function recordsByTypes(types: string[]) {
   const placeholders = types.map(() => '?').join(',');
   const result = await env.DB.prepare(
-    `SELECT type,id,payload FROM records WHERE type IN (${placeholders})`,
+    `SELECT type,id,payload FROM records INDEXED BY idx_records_type_id
+     WHERE type IN (${placeholders}) ORDER BY rowid`,
   )
     .bind(...types)
     .all<StoredRecord>();
@@ -1237,14 +1238,22 @@ async function scopedRecordsByTypes(
   types: string[],
 ) {
   const ids = [...new Set([...qbankIds].filter(Boolean))];
-  const scope = ids.length
-    ? `qbank_id IS NULL OR qbank_id IN (${ids.map(() => '?').join(',')})`
-    : 'qbank_id IS NULL';
   const requestedTypes = types.map(() => '?').join(',');
+  const scoped = ids.length
+    ? `SELECT rowid AS source_rowid,type,id,payload
+       FROM records INDEXED BY idx_records_qbank_type
+       WHERE qbank_id IN (${ids.map(() => '?').join(',')})
+         AND type IN (${requestedTypes})
+       UNION ALL `
+    : '';
   const result = await env.DB.prepare(
-    `SELECT type,id,payload FROM records WHERE (${scope}) AND type IN (${requestedTypes})`,
+    `SELECT type,id,payload FROM (
+       ${scoped}SELECT rowid AS source_rowid,type,id,payload
+       FROM records INDEXED BY idx_records_qbank_type
+       WHERE qbank_id IS NULL AND type IN (${requestedTypes})
+     ) ORDER BY source_rowid`,
   )
-    .bind(...ids, ...types)
+    .bind(...(ids.length ? [...ids, ...types, ...types] : types))
     .all<StoredRecord>();
   return result.results.map((row) => ({
     collection: row.type,
