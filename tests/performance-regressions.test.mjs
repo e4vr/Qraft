@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
 import test from 'node:test';
 
 const root = new URL('../', import.meta.url);
@@ -85,4 +87,36 @@ print(json.dumps({'current': current, 'optimized': optimized, 'plan': plan}))
     false,
     JSON.stringify(result.plan),
   );
+});
+
+void test('one reconnect wave produces one reconciliation', async () => {
+  await mkdir('.ui-review', { recursive: true });
+  const output = '.ui-review/realtime-client-performance-test.mjs';
+  await build({
+    entryPoints: ['lib/realtime-client.ts'],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    outfile: output,
+  });
+  const { createReconnectCoordinator } = await import(
+    `${pathToFileURL(output).href}?test=${Date.now()}`
+  );
+  let reconciliations = 0;
+  const coordinator = createReconnectCoordinator(() => {
+    reconciliations += 1;
+  });
+
+  coordinator.disconnected('user:1');
+  coordinator.disconnected('catalog');
+  coordinator.disconnected('bank:1');
+  coordinator.connected('catalog');
+  coordinator.connected('user:1');
+  coordinator.connected('bank:1');
+  assert.equal(reconciliations, 1);
+
+  coordinator.disconnected('bank:1');
+  coordinator.disconnected('bank:1');
+  coordinator.connected('bank:1');
+  assert.equal(reconciliations, 2, 'a later recovery remains observable');
 });

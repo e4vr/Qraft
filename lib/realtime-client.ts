@@ -39,6 +39,25 @@ export function subscribeLive(callback: (topic: string) => void, topics?: string
   return () => window.removeEventListener(LIVE_CHANGE, listener);
 }
 
+export function createReconnectCoordinator(reconcile: () => void) {
+  const pending = new Set<string>();
+  let reconciled = true;
+  return {
+    disconnected(channel: string) {
+      if (reconciled) {
+        pending.clear();
+        reconciled = false;
+      }
+      pending.add(channel);
+    },
+    connected(channel: string) {
+      if (!pending.delete(channel) || reconciled) return;
+      reconciled = true;
+      reconcile();
+    },
+  };
+}
+
 // Each bank/account has its own audience. A reconnect always triggers a refresh
 // to recover changes made while the browser was asleep or disconnected.
 export function openLiveChannels(
@@ -55,6 +74,7 @@ export function openLiveChannels(
     changed(topic);
     window.dispatchEvent(new CustomEvent(LIVE_CHANGE, { detail: topic }));
   };
+  const reconnects = createReconnectCoordinator(() => emit());
   function connect(channel: string) {
     if (stopped || !navigator.onLine || sockets.has(channel)) return;
     const url = new URL('/api/cloudflare/realtime', window.location.origin);
@@ -65,7 +85,7 @@ export function openLiveChannels(
     sockets.set(channel, socket);
     socket.onopen = () => {
       attempts.set(channel, 0);
-      if (connectedBefore.has(channel)) emit();
+      if (connectedBefore.has(channel)) reconnects.connected(channel);
       else connectedBefore.add(channel);
     };
     socket.onmessage = event => {
@@ -81,7 +101,9 @@ export function openLiveChannels(
     socket.onclose = () => {
       if (sockets.get(channel) !== socket) return;
       sockets.delete(channel);
-      if (stopped || !navigator.onLine) return;
+      if (stopped) return;
+      if (connectedBefore.has(channel)) reconnects.disconnected(channel);
+      if (!navigator.onLine) return;
       const attempt = (attempts.get(channel) ?? 0) + 1;
       attempts.set(channel, attempt);
       retries.set(channel, setTimeout(() => { retries.delete(channel); connect(channel); }, Math.min(30_000, 500 * 2 ** Math.min(attempt, 6)) + Math.random() * 500));
