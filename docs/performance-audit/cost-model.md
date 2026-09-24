@@ -1,5 +1,11 @@
 # Phase 9: Cloudflare cost model
 
+## Phase 11 staging measurement boundary (2026-09-24)
+
+**Measured on the pinned staging candidate, not the intended final website:** 15 collaboration HTTP responses (five each for owner, reviewer, student) and one read-only SQL comparison of the two collaboration query shapes at 242 staging `records` rows. The indexed catalog/scoped pair read 539 D1 rows; forced full-scan comparison read 484, with the same ordered 244 rows returned by those statements. Response bodies were 189,319 bytes for owner/reviewer and 189,077 bytes for student. The SQL probe does **not** include session, invitation, classification, or any other request-level D1 operation. Worker CPU, complete request-level D1 reads, DO messages/duration, R2 operations, and route-specific errors were not captured.
+
+**Projected values below remain Phase 9/10 scenarios, not Phase 11 actuals.** The user identified the deployed staging UI as an older website; its build excludes substantial current source changes. No production cost projection for the intended final release is defensible until a new clean candidate is staged and the full Phase 11 request and resource measurements are repeated. The small staging dataset also demonstrates that the indexed collaboration SQL can bill *more* rows than a full scan at low cardinality; the production-sized 10,184-row saving must not be multiplied across all dataset sizes or traffic without a measured distribution.
+
 Captured 2026-09-24. Prices and allowances can change; verify the official pages before a plan or deployment decision.
 
 ## Pricing assumptions
