@@ -1167,9 +1167,11 @@ export async function saveStatePatch(
     "SELECT id,payload FROM records WHERE type='answerStats' AND id IN (SELECT value FROM json_each(?))",
   ).bind(JSON.stringify(ids)).all<{ id: string; payload: string }>();
   const existing = new Map(rows.results.map(row => [row.id, JSON.parse(row.payload) as { selections?: Record<string, number> }]));
-  const operations = selections.map(item => {
+  const operations = selections.flatMap(item => {
     const id = `${item.qbankId}:${item.questionId}`;
-    return {
+    const previous = existing.get(id)?.selections?.[user.uid];
+    if (previous === item.answer) return [];
+    return [{
       collection: 'answerStats',
       id,
       type: 'set',
@@ -1179,8 +1181,9 @@ export async function saveStatePatch(
         questionId: item.questionId,
         selections: { ...existing.get(id)?.selections, [user.uid]: item.answer },
       },
-    };
+    }];
   });
+  if (!operations.length) return stateResponse;
   const collaborationRequest = new Request(request.url, {
     method: 'PUT',
     headers: request.headers,

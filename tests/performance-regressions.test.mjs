@@ -120,3 +120,20 @@ void test('one reconnect wave produces one reconciliation', async () => {
   coordinator.connected('bank:1');
   assert.equal(reconciliations, 2, 'a later recovery remains observable');
 });
+
+void test('unchanged exam answers stop before collaboration persistence', async () => {
+  const server = await readFile(
+    new URL('lib/cloudflare-server.ts', root),
+    'utf8',
+  );
+  assert.match(
+    server,
+    /const previous = existing\.get\(id\)\?\.selections\?\.\[user\.uid\];[\s\S]{0,120}if \(previous === item\.answer\) return \[\];/,
+  );
+  const guard = server.indexOf('if (!operations.length) return stateResponse;');
+  const downstream = server.indexOf(
+    'const collaborationRequest = new Request(request.url',
+    guard,
+  );
+  assert.ok(guard > 0 && downstream > guard);
+});

@@ -511,6 +511,51 @@ export async function improvementsApiTests(t, db, call, runtime) {
         .bind(`${bank.id}:${approvedQuestion.id}`)
         .first();
       assert.equal(JSON.parse(statistic.payload).selections[uid], 1);
+      const auditBeforeReplay = await db
+        .prepare("SELECT count(*) AS value FROM records WHERE type='auditLog'")
+        .first();
+      const operationsBeforeReplay = await db
+        .prepare(
+          'SELECT count(*) AS value FROM state_sync_operations WHERE user_id=?',
+        )
+        .bind(uid)
+        .first();
+      const replay = await call(
+        uid,
+        '/state/exam',
+        {
+          tests: exam.data.state.tests,
+          progress: exam.data.state.progress,
+          clientUpdatedAt: examTime,
+          answerSelections: [
+            { qbankId: bank.id, questionId: approvedQuestion.id, answer: 1 },
+          ],
+          baseRevision: exam.data.revision,
+          operationId: randomUUID(),
+        },
+        'PUT',
+      );
+      assert.equal(replay.status, 200, JSON.stringify(replay));
+      assert.equal(replay.data.unchanged, true);
+      assert.equal(
+        (
+          await db
+            .prepare("SELECT count(*) AS value FROM records WHERE type='auditLog'")
+            .first()
+        ).value,
+        auditBeforeReplay.value,
+      );
+      assert.equal(
+        (
+          await db
+            .prepare(
+              'SELECT count(*) AS value FROM state_sync_operations WHERE user_id=?',
+            )
+            .bind(uid)
+            .first()
+        ).value,
+        operationsBeforeReplay.value,
+      );
     },
   );
 
