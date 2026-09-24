@@ -395,6 +395,34 @@ export interface QuestionProposalPayload {
   images: NoteImage[];
 }
 
+export type DuplicateClassification = 'exact' | 'high_confidence' | 'possible';
+
+export interface DuplicateCandidate {
+  entityId: string;
+  entityType: 'approved_question' | 'pending_proposal';
+  questionId?: string;
+  similarity: number;
+  classification: DuplicateClassification;
+  signals: {
+    stem: number;
+    optionsSet: number;
+    optionsOrdered: number;
+    correctAnswer: number;
+    specialty: number;
+    topic: number;
+  };
+  candidateFingerprint: string;
+  detectedAt: string;
+}
+
+export interface DuplicateReview {
+  status: 'flagged' | 'resolved';
+  detectorVersion: string;
+  sourceFingerprint: string;
+  detectedAt: string;
+  candidates: DuplicateCandidate[];
+}
+
 export interface QuestionProposal {
   id: string;
   qbankId: string;
