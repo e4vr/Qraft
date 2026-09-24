@@ -44,11 +44,11 @@ npx.cmd wrangler deployments list --name qraft-realtime-staging --json
 
 ## Rollback
 
-For an existing staging deployment, restore its recorded version IDs independently:
+For the current staging deployment, restore the recorded previous version IDs independently:
 
 ```powershell
-npx.cmd wrangler rollback <APP_VERSION_ID> --name qraft-staging --message "Phase 11A rollback" --yes
-npx.cmd wrangler rollback <REALTIME_VERSION_ID> --name qraft-realtime-staging --message "Phase 11A rollback" --yes
+npx.cmd wrangler rollback 77b9aa6f-ea44-49c9-ab7f-7e749859f457 --name qraft-staging --message "Phase 11A rollback" --yes
+npx.cmd wrangler rollback 1910720b-b0b4-45d6-ba77-4bba51cbd197 --name qraft-realtime-staging --message "Phase 11A rollback" --yes
 ```
 
 For a first deployment with no earlier version, disable the app by deleting the two staging Workers. This affects no production resource:

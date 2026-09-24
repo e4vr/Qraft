@@ -1,13 +1,13 @@
 # Qraft staging release manifest
 
-This file is completed after the clean-checkout gate and staging deployment. The release candidate is the commit immediately before the post-deployment evidence commit, avoiding a Git commit that attempts to contain its own hash.
+The release candidate is the commit immediately before the post-deployment evidence commit, avoiding a Git commit that attempts to contain its own hash.
 
 | Field | Value |
 |---|---|
-| Candidate SHA | Pending clean-checkout gate |
+| Candidate SHA | `68a97cc9cfd478846a469bb7056a2da37bc17b10` |
 | Build version | Git SHA injected as `x-qraft-build` |
-| Build timestamp | UTC timestamp injected as `x-qraft-build-time` |
-| Node / npm | Pending gate capture |
+| Build timestamp | `2026-09-24T16:45:01.748Z` |
+| Node / npm | Node `v22.14.0`; npm `10.9.2` |
 | Wrangler | `4.135.0` from lockfile |
 | Compatibility date | `2026-09-09` |
 | Migration set | `0000`–`0020` |
@@ -15,11 +15,12 @@ This file is completed after the clean-checkout gate and staging deployment. The
 | Staging realtime Worker | `qraft-realtime-staging` |
 | Staging D1 | `qraft-qbank-staging` / `f788be6b-f763-49e8-840b-4c107c7e5874` |
 | Staging R2 | `qraft-assets-staging` |
-| App version ID | Pending deployment |
-| Realtime version ID | Pending deployment |
-| Hostname | Pending deployment |
-| Migration state | Empty resource; pending reviewed apply |
-| Previous app version | None observed before first deployment |
-| Previous realtime version | None observed before first deployment |
+| App version ID | `fa427ae6-7c7e-4274-98dd-1935c20e5ad0` |
+| Realtime version ID | `c44eac2b-aaf5-4b78-8315-91274c6697a8` |
+| Hostname | `https://qraft-staging.eduhelp.workers.dev` |
+| Realtime hostname | `https://qraft-realtime-staging.eduhelp.workers.dev` |
+| Migration state | `0000`–`0020` applied; no pending migrations |
+| Previous app version | `77b9aa6f-ea44-49c9-ab7f-7e749859f457` |
+| Previous realtime version | `1910720b-b0b4-45d6-ba77-4bba51cbd197` |
 
-The pre-deployment inventory contained no staging Workers. The safe first-release rollback point is therefore “no staging Worker”: delete `qraft-staging` and `qraft-realtime-staging`. Production Workers and storage are outside this rollback path.
+The initial inventory contained no staging Workers. After the first deployment exposed a seed-fixture defect, the corrected candidate was rebuilt, retested and redeployed. The immediately previous Worker versions shown above are the precise rollback point. Deleting both staging Workers remains the full-disable path. Production Workers and storage are outside both procedures.
