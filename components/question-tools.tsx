@@ -115,7 +115,7 @@ export function QuestionId({
           }}
         >
           <Copy className="size-3.5" />
-          <span className={compact ? 'sr-only' : undefined}>Copy ID</span>
+          <span className="sr-only">Copy ID</span>
         </button>
       )}
       <output className={compact ? 'sr-only' : 'text-xs text-emerald-600'}>

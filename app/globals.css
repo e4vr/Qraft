@@ -55,6 +55,16 @@ button, input, textarea, select { font-family: inherit; }
 button { cursor: pointer; }
 ::selection { background: #ffe66d; color: #172536; }
 
+.q-exam-progress {
+  appearance: none;
+  display: block;
+  border: 0;
+  background-color: var(--muted);
+}
+.q-exam-progress::-webkit-progress-bar { background-color: var(--muted); }
+.q-exam-progress::-webkit-progress-value { background-color: var(--primary); transition: width 200ms; }
+.q-exam-progress::-moz-progress-bar { background-color: var(--primary); }
+
 /* Native select menus inherit the browser's light defaults on some platforms.
    Keep the QBank picker readable and visually aligned with the sidebar in both themes. */
 .qbank-selector,
@@ -304,7 +314,9 @@ button { cursor: pointer; }
 :root {
   --q-safe-top: env(safe-area-inset-top, 0px);
   --q-safe-right: env(safe-area-inset-right, 0px);
-  --q-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --q-safe-bottom-raw: env(safe-area-inset-bottom, 0px);
+  --q-safe-bottom-offset: 0px;
+  --q-safe-bottom: max(0px, calc(var(--q-safe-bottom-raw) - var(--q-safe-bottom-offset)));
   --q-safe-left: env(safe-area-inset-left, 0px);
   --q-app-header-height: 64px;
   --q-control-safe-bottom: max(8px, var(--q-safe-bottom));
@@ -316,7 +328,10 @@ html, body { background: var(--card); }
 /* The document stays still; each workspace owns its scroll position. */
 html { width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; }
 body { position: fixed; inset: 0; margin: 0; min-width: 0; width: 100%; height: 100%; box-sizing: border-box; overflow: hidden; overscroll-behavior: none; }
-.q-viewport { position: fixed; inset: 0; box-sizing: border-box; min-width: 0; background: var(--background); overflow-x: hidden; overflow-y: auto; overscroll-behavior: none; scroll-padding-top: calc(1rem + var(--q-safe-top)); scroll-padding-bottom: calc(1rem + var(--q-safe-bottom)); transition: background-color 160ms ease; }
+/* One geometry owner: fixed inset fills the complete viewport, including the
+   areas exposed by viewport-fit=cover. Never clamp this root to visualViewport;
+   doing so removes the lower safe-area before child chrome can consume it. */
+.q-viewport { position: fixed; inset: 0; box-sizing: border-box; min-width: 0; min-height: 0; background: var(--background); overflow-x: hidden; overflow-y: auto; overscroll-behavior: none; scroll-padding-top: calc(1rem + var(--q-safe-top)); scroll-padding-bottom: calc(1rem + var(--q-safe-bottom)); transition: background-color 160ms ease; }
 /* WebKit cannot reserve any outer safe-area strip: each screen paints the full
    viewport and owns the inset required by its controls. */
 .q-viewport > main { min-height: 100%; }
@@ -332,9 +347,17 @@ body { position: fixed; inset: 0; margin: 0; min-width: 0; width: 100%; height: 
 .q-frame > .q-stage.q-enter { animation: none; }
 .q-viewport :where(button, a, input, select, textarea, [role='button']) { touch-action: manipulation; }
 .q-viewport :where(button, a, [role='button']):focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
-/* iOS may ignore viewport zoom limits in an installed PWA. The root gesture
-   policy wins over descendant scroll areas that normally permit pinch zoom. */
-.q-ios-pwa, .q-ios-pwa body, .q-ios-pwa .q-viewport { touch-action: pan-x pan-y !important; }
+/* Installed mode owns viewport gestures; normal browser mode remains zoomable. */
+html[data-standalone='true'],
+html[data-standalone='true'] body,
+html[data-standalone='true'] .q-viewport,
+html[data-standalone='true'] .q-stage,
+html[data-standalone='true'] [data-slot='dialog-content'],
+html[data-standalone='true'] [data-slot='alert-dialog-content'] { touch-action: pan-x pan-y !important; }
+html[data-standalone='true'] *,
+html[data-standalone='true'] *::before,
+html[data-standalone='true'] *::after { scrollbar-width: none !important; }
+html[data-standalone='true'] *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
 @media (max-width: 1023px) {
   .q-shell[data-navigation-open='true'] .q-stage { overflow: hidden; }
   .q-sidebar button, .q-test-bottom button { min-height: 44px; }
@@ -383,7 +406,6 @@ body > main, .q-stage { min-width: 0; }
   animation: qraft-loading-breathe 2.2s ease-in-out infinite;
   transition: filter 160ms ease, opacity 160ms ease;
 }
-.dark .q-loading-wordmark { filter: brightness(0) invert(1); }
 .q-loading-status { display: inline-flex; align-items: center; gap: .625rem; }
 .q-loading-status::before {
   content: '';
@@ -395,19 +417,6 @@ body > main, .q-stage { min-width: 0; }
   animation: qraft-loading-pulse 1.4s ease-in-out infinite;
 }
 .q-stage, .q-test-screen { padding-left: var(--q-safe-left); padding-right: var(--q-safe-right); }
-@media (display-mode: standalone) {
-  :root {
-    --q-control-safe-bottom: max(8px, calc(var(--q-safe-bottom) - 10px));
-    --q-navigation-safe-bottom: max(0px, calc(var(--q-safe-bottom) - 45px));
-  }
-  .q-stage > header, .q-test-screen > header, .q-sidebar, .q-mobile-nav, .q-test-bottom { background-clip: border-box; }
-}
-@media (display-mode: standalone) and (max-width: 767px) and (pointer: coarse) {
-  :root { --q-navigation-safe-bottom: max(0px, calc(var(--q-safe-bottom) - 65px)); }
-}
-@media (display-mode: standalone) and (min-width: 768px) and (pointer: coarse) {
-  :root { --q-workspace-safe-bottom: max(0px, calc(var(--q-safe-bottom) - 70px)); }
-}
 .q-stage :where(p, h1, h2, h3, dd), .q-test-screen p { overflow-wrap: anywhere; }
 .q-stage :where(input, textarea, select), [data-slot='dialog-content'] :where(input, textarea, select) { max-width: 100%; }
 [data-slot='dialog-content'], [data-slot='alert-dialog-content'] { max-height: calc(100dvh - var(--q-safe-top) - var(--q-safe-bottom) - 2rem); overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y pinch-zoom; -webkit-overflow-scrolling: touch; }
@@ -422,7 +431,7 @@ body > main, .q-stage { min-width: 0; }
 .q-button:disabled { cursor: not-allowed; opacity: .5; }
 @media (max-width: 767px) {
   input, textarea, select { font-size: 16px; }
-  .q-frame > .q-stage { padding-bottom: 0; }
+  html[data-presentation='handheld'] .q-frame > .q-stage { padding-bottom: 0; }
   .q-test-screen > header { gap: 4px; }
   .q-test-screen > header > div { min-width: 0; }
   .q-test-screen article { padding: 16px; }
@@ -440,23 +449,23 @@ body > main, .q-stage { min-width: 0; }
 @keyframes q-question-drawer-in { from { opacity: .72; transform: translateX(-18px); } to { opacity: 1; transform: translateX(0); } }
 .q-question-drawer { width: min(84vw, 420px); max-width: calc(100vw - var(--q-safe-left) - 48px); height: 100%; overflow: hidden; padding-top: max(20px, var(--q-safe-top)); padding-bottom: max(12px, var(--q-safe-bottom)); padding-left: var(--q-safe-left); border-radius: 0 24px 24px 0; animation: q-question-drawer-in 180ms ease-out both; }
 .q-question-drawer-list { overscroll-behavior: contain; scroll-padding-block: 45%; scrollbar-gutter: stable; touch-action: pan-y pinch-zoom; -webkit-overflow-scrolling: touch; }
+.q-question-drawer-footer { padding-bottom: max(12px, var(--q-safe-bottom)); }
+.q-question-navigator-row { contain: layout paint style; }
 @media (min-width: 640px) { .q-question-drawer { width: min(62vw, 520px); } }
 @media (min-width: 1024px) { .q-question-drawer { width: min(48vw, 560px); } }
 @media (min-width: 1280px) { .q-question-drawer { width: 440px; } }
-@media (min-width: 768px) and (max-width: 1023px) { .q-frame > .q-stage { padding-bottom: 0; } }
+@media (min-width: 768px) and (max-width: 1023px) { html[data-presentation='handheld'] .q-frame > .q-stage { padding-bottom: 0; } }
 /* A single continuous surface extends from the tab controls to the home indicator. */
 @media (max-width: 1023px) {
   .q-mobile-nav { gap: 4px; padding: 6px max(12px, var(--q-safe-right)) var(--q-navigation-safe-bottom) max(12px, var(--q-safe-left)); background: var(--card); border-top-color: color-mix(in srgb, var(--border) 55%, transparent); box-shadow: 0 -6px 24px #192a4004; }
   .q-mobile-nav button { flex: 1; min-width: 0; max-width: 160px; min-height: 50px; border-radius: 16px; gap: 3px; padding: 5px 8px; }
   .q-mobile-nav .mobile-start:not([aria-current='page']) { background: transparent; color: var(--study); }
 }
-.q-test-bottom { padding-bottom: var(--q-control-safe-bottom); }
+.q-test-bottom { padding-bottom: calc(var(--q-control-safe-bottom) + 8px); }
 /* Custom full-screen overlays also keep their interactive contents inside the safe rect. */
 .q-safe-overlay { padding-top: max(1rem, var(--q-safe-top)); padding-right: max(1rem, var(--q-safe-right)); padding-bottom: max(1rem, var(--q-safe-bottom)); padding-left: max(1rem, var(--q-safe-left)); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .q-safe-overlay.grid { align-items: safe center; justify-items: center; }
 .q-safe-fullscreen { box-sizing: border-box; padding-top: var(--q-safe-top); padding-right: var(--q-safe-right); padding-bottom: var(--q-safe-bottom); padding-left: var(--q-safe-left); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-.q-test-save-actions { order: 1; flex-shrink: 0; justify-content: flex-end; padding: 8px 12px; background: var(--card); }
-.q-test-save-actions button { min-height: 44px; }
 [data-slot="dialog-content"], [data-slot="alert-dialog-content"] { top: calc((100% + var(--q-safe-top) - var(--q-safe-bottom)) / 2); left: calc((100% + var(--q-safe-left) - var(--q-safe-right)) / 2); width: calc(100vw - var(--q-safe-left) - var(--q-safe-right) - 2rem); }
 
 /* Confirmation surfaces share one safe, scrollable footprint on phone, tablet, and desktop. */
@@ -507,7 +516,6 @@ body > main, .q-stage { min-width: 0; }
   .q-test-screen > header { position: static; }
   .q-test-bottom, .q-mobile-nav { padding-top: 3px; }
   .q-mobile-nav button { min-height: 44px; gap: 0; padding-block: 2px; }
-  .q-test-save-actions { padding-block: 4px; }
   .q-flashcard-review-card { min-height: min(280px, 52dvh); padding-block: 1rem; }
   .q-flashcard-review-image { max-height: min(9rem, 32dvh); }
 }
@@ -531,30 +539,17 @@ body > main, .q-stage { min-width: 0; }
   --q-ease-standard: cubic-bezier(.2, .8, .2, 1);
   --q-desktop-navigation: 264px;
   --q-tablet-navigation: 72px;
-  --q-mobile-navigation: 68px;
+  --q-mobile-navigation: 76px;
   --q-readable-width: 72ch;
   --q-layer-sticky: 30;
   --q-layer-navigation: 40;
   --q-layer-scrim: 50;
   --q-layer-overlay: 60;
   --q-visual-height: 100dvh;
-  --q-visual-offset-top: 0px;
 }
 
 html,
-body {
-  min-height: 100%;
-}
-
-body {
-  position: static;
-}
-
-.q-viewport {
-  height: 100dvh;
-  max-height: var(--q-visual-height);
-  top: var(--q-visual-offset-top);
-}
+body { min-height: 100%; }
 
 .q-frame-desktop { padding-left: var(--q-desktop-navigation); }
 .q-frame-tablet { padding-left: var(--q-tablet-navigation); }
@@ -568,7 +563,7 @@ body {
   display: flex;
   width: var(--q-tablet-navigation);
   flex-direction: column;
-  gap: var(--q-space-2);
+  gap: clamp(2px, .55vh, var(--q-space-2));
   overflow-y: auto;
   border-right: 1px solid var(--border);
   background: color-mix(in srgb, var(--card) 97%, transparent);
@@ -578,7 +573,7 @@ body {
 
 .q-tablet-rail button {
   display: grid;
-  min-height: 56px;
+  min-height: clamp(48px, 6vh, 56px);
   place-items: center;
   gap: 3px;
   border-radius: var(--q-radius-control);
@@ -603,8 +598,8 @@ html[data-presentation='handheld'] .q-tablet-rail { display: none; }
 
 html[data-presentation='handheld'] .q-mobile-nav {
   display: flex;
-  min-height: calc(var(--q-mobile-navigation) + var(--q-safe-bottom));
-  padding: 6px max(8px, var(--q-safe-right)) max(6px, var(--q-safe-bottom)) max(8px, var(--q-safe-left));
+  min-height: calc(var(--q-mobile-navigation) + var(--q-navigation-safe-bottom));
+  padding: 6px max(8px, var(--q-safe-right)) calc(var(--q-navigation-safe-bottom) + 8px) max(8px, var(--q-safe-left));
 }
 
 html[data-presentation='handheld'][data-keyboard='open'] .q-mobile-nav { display: none; }
@@ -631,16 +626,64 @@ html[data-presentation='handheld'] .q-mobile-nav button {
 html[data-presentation='handheld'] .q-mobile-nav button:active { transform: scale(.94); }
 
 /* Safe-area ownership: shell chrome owns the fixed edges exactly once. */
-@media (display-mode: standalone) {
-  :root {
-    --q-control-safe-bottom: max(8px, var(--q-safe-bottom));
-    --q-navigation-safe-bottom: max(6px, var(--q-safe-bottom));
-    --q-workspace-safe-bottom: 0px;
-  }
+html[data-standalone='true'] {
+  --q-safe-bottom-offset: 30px;
+  --q-control-safe-bottom: max(8px, var(--q-safe-bottom));
+  --q-navigation-safe-bottom: var(--q-safe-bottom);
+  --q-workspace-safe-bottom: var(--q-safe-bottom);
 }
 
-/* Text zoom and pinch zoom remain available; installed mode never installs a
-   global gesture interceptor. */
+/* WebKit reports 100dvh, 100svh, percentage heights and fixed insets without
+   the lower unsafe strip in installed apps using viewport-fit=cover. Keep the
+   document non-fixed and size the app explicitly with legacy 100vh, which is
+   the WebKit standalone unit that includes both safe-area strips. Absolute
+   descendants then resolve against this complete edge-to-edge app canvas. */
+html[data-standalone='true'] {
+  width: 100%;
+  height: 100vh;
+  min-height: 100vh;
+  max-height: 100vh;
+  background: var(--background);
+}
+html[data-standalone='true'] body {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 100vh;
+  min-height: 100vh;
+  max-height: 100vh;
+  background: var(--background);
+}
+html[data-standalone='true'] .q-viewport {
+  position: absolute;
+  top: 0;
+  right: auto;
+  bottom: auto;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  min-height: 100vh;
+  max-height: 100vh;
+}
+html[data-standalone='true'] .q-sidebar {
+  position: absolute;
+  top: 0;
+  bottom: auto;
+  height: 100%;
+}
+html[data-standalone='true'] .q-tablet-rail {
+  position: absolute;
+}
+html[data-standalone='true'] :is(.q-stage > header, .q-test-screen > header, .q-sidebar, .q-mobile-nav, .q-test-bottom) { background-clip: border-box; }
+
+/* iPadOS often reports itself as macOS, so runtime detection sets data-ipad.
+   This final, more-specific rule cannot be shadowed by the generic PWA block. */
+html[data-standalone='true'][data-ipad='true'] {
+  --q-safe-bottom-offset: 20px;
+}
+
+/* Browser mode remains zoomable. Installed mode is overridden by the PWA
+   gesture policy above. */
 .q-test-screen .select-text,
 .q-frame > .q-stage,
 [data-slot='dialog-content'],
@@ -739,7 +782,7 @@ html[data-presentation='handheld'] .q-mobile-nav button:active { transform: scal
 .q-update-toast span { margin-top: 2px; color: var(--muted-foreground); font-size: .72rem; line-height: 1.35; }
 .q-update-toast > button:not(.q-update-dismiss) { display: inline-flex; min-height: 44px; align-items: center; gap: 6px; border-radius: var(--q-radius-control); background: var(--primary); padding: 0 var(--q-space-4); color: var(--primary-foreground); font-size: .78rem; font-weight: 750; }
 .q-update-dismiss { display: grid; min-width: 44px; min-height: 44px; place-items: center; border-radius: var(--q-radius-control); color: var(--muted-foreground); }
-html[data-presentation='handheld'] .q-update-toast { right: max(var(--q-space-3), var(--q-safe-right)); bottom: calc(var(--q-mobile-navigation) + var(--q-safe-bottom) + var(--q-space-3)); left: max(var(--q-space-3), var(--q-safe-left)); }
+html[data-presentation='handheld'] .q-update-toast { right: max(var(--q-space-3), var(--q-safe-right)); bottom: calc(var(--q-mobile-navigation) + var(--q-navigation-safe-bottom) + var(--q-space-3)); left: max(var(--q-space-3), var(--q-safe-left)); }
 html[data-presentation='handheld'][data-keyboard='open'] .q-update-toast { display: none; }
 
 .q-sheet-backdrop {
@@ -792,13 +835,17 @@ html[data-keyboard='open'] .q-sheet { max-height: var(--q-visual-height); }
 .q-mobile-tool-list button:disabled { opacity: .42; }
 
 html[data-presentation='handheld'] .q-exam-inline-tools { display: none; }
-html[data-presentation='handheld'] .q-exam-tools-trigger { display: inline-flex; min-height: 44px; align-items: center; gap: 6px; border-radius: var(--q-radius-control); background: var(--muted); padding: 0 var(--q-space-3); color: var(--foreground); font-size: .78rem; font-weight: 750; }
+html[data-presentation='handheld'] .q-exam-tools-trigger { display: grid; width: 44px; min-width: 44px; height: 44px; place-items: center; border: 1px solid var(--border); border-radius: var(--q-radius-control); background: var(--muted); color: var(--foreground); }
 html[data-presentation='handheld'] .q-test-screen article { border: 0; border-radius: var(--q-radius-card); padding: var(--q-space-4); box-shadow: none; }
 html[data-presentation='handheld'] .q-test-body > section { padding: var(--q-space-3); }
 html[data-presentation='handheld'] .q-test-choices button { min-height: 68px; border-radius: var(--q-radius-control); }
 html[data-presentation='handheld'] .q-test-bottom > button:last-child:not(:disabled) { border-color: var(--study); background: var(--study); color: white; }
 html[data-presentation='handheld'] .q-test-bottom > button:first-child,
 html[data-presentation='handheld'] .q-test-bottom > button:last-child { flex: 1; }
+html[data-presentation='handheld'] .q-test-actions { display: block; padding-bottom: 12px; }
+html[data-presentation='handheld'] .q-test-secondary-actions { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+html[data-presentation='handheld'] .q-test-secondary-actions > button { width: 100%; min-width: 0; min-height: 48px; justify-content: center; padding-inline: 8px; white-space: normal; }
+html[data-presentation='handheld'] .q-test-secondary-actions > .q-test-explanation-action { grid-column: 1 / -1; }
 
 /* Handheld test creation is a short, progressive flow. The same controls and
    validation remain visible together on wider presentations. */
@@ -813,7 +860,7 @@ html[data-presentation='handheld'] .q-test-bottom > button:last-child { flex: 1;
   position: fixed;
   z-index: var(--q-layer-sticky);
   right: 0;
-  bottom: calc(var(--q-mobile-navigation) + var(--q-safe-bottom));
+  bottom: calc(var(--q-mobile-navigation) + var(--q-navigation-safe-bottom));
   left: 0;
   display: flex;
   min-height: 68px;

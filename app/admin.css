@@ -16,7 +16,7 @@
 .q-admin-quick-actions .q-button { min-height: 42px; padding: 10px 14px; border-radius: 10px; font-size: 12px; }
 .q-admin-navigation { grid-column: 1; grid-row: 1 / 3; min-height: 0; overflow: hidden; overscroll-behavior: contain; display: flex; flex-direction: column; padding: 28px 16px max(16px, var(--q-safe-bottom)) max(16px, var(--q-safe-left)); background: var(--card); border-right: 1px solid var(--border); scrollbar-width: thin; }
 .q-admin-brand { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 0 10px 28px; }
-.q-admin-brand > span { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; color: white; background: #176b61; }
+.q-admin-brand > span { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; background: #f3fafa; box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 75%, transparent); }
 .q-admin-brand strong { font-size: 24px; letter-spacing: -1px; }
 .q-admin-brand strong span { display: inline-block; margin-left: 7px; padding: 3px 5px; border: 1px solid var(--border); border-radius: 5px; font-size: 10px; letter-spacing: 0; color: var(--muted-foreground); vertical-align: middle; }
 .q-admin-brand p { margin-top: 2px; font-size: 10px; color: var(--muted-foreground); }

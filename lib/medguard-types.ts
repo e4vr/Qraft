@@ -415,12 +415,22 @@ export interface DuplicateCandidate {
   detectedAt: string;
 }
 
+export interface DuplicateResolution {
+  decision: 'kept_both' | 'rejected_as_duplicate';
+  candidateEntityId: string;
+  reviewerId: string;
+  reviewerName: string;
+  reviewedAt: string;
+  note?: string;
+}
+
 export interface DuplicateReview {
   status: 'flagged' | 'resolved';
   detectorVersion: string;
   sourceFingerprint: string;
   detectedAt: string;
   candidates: DuplicateCandidate[];
+  resolutions?: DuplicateResolution[];
 }
 
 export interface QuestionProposal {
@@ -434,11 +444,14 @@ export interface QuestionProposal {
   rationale: string;
   submissionMethod?: 'manual' | 'json';
   importBatchId?: string;
+  duplicateScanId?: string;
   duplicateInfo?: {
     type: 'possible';
     similarity: number;
     matchedQuestionId?: string;
   };
+  /** Reviewer-controlled duplicate evidence. duplicateInfo remains for legacy records. */
+  duplicateReview?: DuplicateReview;
   status: ProposalStatus;
   proposedById: string;
   proposedByName: string;
@@ -546,6 +559,7 @@ export interface TestBuilderConfig {
   statuses: QuestionStatus[];
   specialty: string;
   topics: string[];
+  includedTopics?: Array<{ specialty: string; topic: string }>;
   count: number;
   randomAll?: boolean;
   title?: string;

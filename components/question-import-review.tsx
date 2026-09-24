@@ -18,11 +18,45 @@ import {
 } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
+
+const MAX_CHUNK_BYTES = 900_000;
+const MAX_CHUNK_QUESTIONS = 25;
+
+function splitImport(
+  questions: QuestionProposalPayload[],
+  skipped: SkippedImportedQuestion[],
+) {
+  const encoder = new TextEncoder();
+  const chunks: Array<{ questions: QuestionProposalPayload[]; skipped: SkippedImportedQuestion[]; bytes: number }> = [];
+  for (const question of questions) {
+    const bytes = encoder.encode(JSON.stringify(question)).byteLength + 1;
+    if (bytes > MAX_CHUNK_BYTES) throw new Error('One question is too large to upload.');
+    let chunk = chunks[chunks.length - 1];
+    if (!chunk || chunk.questions.length >= MAX_CHUNK_QUESTIONS || chunk.bytes + bytes > MAX_CHUNK_BYTES) {
+      chunk = { questions: [], skipped: [], bytes: 0 };
+      chunks.push(chunk);
+    }
+    chunk.questions.push(question);
+    chunk.bytes += bytes;
+  }
+  let nextChunk = 0;
+  for (const item of skipped) {
+    const bytes = encoder.encode(JSON.stringify(item)).byteLength + 1;
+    while (nextChunk < chunks.length && chunks[nextChunk].bytes + bytes > MAX_CHUNK_BYTES) nextChunk += 1;
+    if (nextChunk >= chunks.length) break;
+    chunks[nextChunk].skipped.push(item);
+    chunks[nextChunk].bytes += bytes;
+  }
+  return chunks;
+}
+
 export function QuestionImportReview({
   bankId,
+  unlimited = false,
   onImported,
 }: {
   bankId: string;
+  unlimited?: boolean;
   onImported: (result: { proposals: QuestionProposal[]; specialties: QBankSpecialty[]; topics: QBankTopic[]; classificationRevision?: number }) => void;
 }) {
   const [drafts, setDrafts] = useState<QuestionProposalPayload[]>([]),
@@ -31,7 +65,10 @@ export function QuestionImportReview({
     [error, setError] = useState(''),
     [message, setMessage] = useState(''),
     [busy, setBusy] = useState(false),
-    [requestId, setRequestId] = useState(() => crypto.randomUUID());
+    [requestId, setRequestId] = useState(() => crypto.randomUUID()),
+    [uploadSessionId, setUploadSessionId] = useState(() =>
+      crypto.randomUUID(),
+    );
   const [reading, setReading] = useState(false);
   const [fileName, setFileName] = useState('');
   const [fileHash, setFileHash] = useState('');
@@ -40,6 +77,15 @@ export function QuestionImportReview({
   const [repaired, setRepaired] = useState(false);
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const operation = useRef(false);
+  const uploadChunks = useRef<ReturnType<typeof splitImport> | null>(null);
+  const uploadedChunks = useRef(0);
+  const importedCount = useRef(0);
+  const flaggedCount = useRef(0);
+  const skippedDuplicateCount = useRef(0);
+  const batchIds = useRef<string[]>([]);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadTotal, setUploadTotal] = useState(0);
+  const [lastImportCount, setLastImportCount] = useState<number | null>(null);
   const panelId = useId();
   const [selectedSource, setSelectedSource] = useState<QuestionPromptSettings['source'] | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -105,14 +151,14 @@ export function QuestionImportReview({
     setMessage('');
     if (!drafts.length) setSkipped([]);
     try {
-      if (file.size > 1500000)
+      if (!unlimited && file.size > 1500000)
         throw new Error('JSON file must be smaller than 1.5 MB.');
       if (!/\.(json|txt|text)$/i.test(file.name)) throw new Error('اختر ملف JSON أو TXT يحتوي على أسئلة بصيغة JSON.');
       const bytes = await file.arrayBuffer();
       const content = new TextDecoder().decode(bytes).replace(/^\uFEFF/, '').trim();
       const digest = await crypto.subtle.digest('SHA-256', bytes);
       const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
-      const report = parseQuestionImportReport(content);
+      const report = parseQuestionImportReport(content, '', unlimited ? Number.POSITIVE_INFINITY : 200);
       if (!report.questions.length) {
         if (!drafts.length) setSkipped(report.skipped);
         throw new Error('لم يتم العثور على أي سؤال مكتمل وصالح. راجع تقرير الأسئلة المتخطاة أدناه.');
@@ -128,6 +174,16 @@ export function QuestionImportReview({
       setOpen(true);
       setMessage('');
       setRequestId(crypto.randomUUID());
+      setUploadSessionId(crypto.randomUUID());
+      uploadChunks.current = null;
+      uploadedChunks.current = 0;
+      importedCount.current = 0;
+      flaggedCount.current = 0;
+      skippedDuplicateCount.current = 0;
+      batchIds.current = [];
+      setUploadProgress(0);
+      setUploadTotal(0);
+      setLastImportCount(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Invalid JSON.');
     } finally {
@@ -136,6 +192,7 @@ export function QuestionImportReview({
     }
   }
   function edit(patch: Partial<QuestionProposalPayload>) {
+    if (uploadedChunks.current) return;
     setDrafts((current) =>
       current.map((d, i) => (i === index ? { ...d, ...patch } : d)),
     );
@@ -146,45 +203,77 @@ export function QuestionImportReview({
     setBusy(true);
     setError('');
     try {
-      const validated = parseQuestionImportReport({ sourceFile, questions: drafts, skipped });
+      const validated = parseQuestionImportReport({ sourceFile, questions: drafts, skipped }, '', unlimited ? Number.POSITIVE_INFINITY : 200);
       if (!validated.questions.length) throw new Error('لا يوجد سؤال صالح للإرسال.');
-      const result = await api<{
-        proposals: QuestionProposal[];
-        total: number;
-        successful: number;
-        failed: number;
-        skipped: SkippedImportedQuestion[];
-        repaired: boolean;
-        skippedDuplicates?: number;
-        pendingReview?: number;
-        specialties: QBankSpecialty[];
-        topics: QBankTopic[];
-        classificationRevision?: number;
-      }>('/platform/import', {
-        method: 'POST',
-        body: JSON.stringify({
-          questions: validated.questions,
-          skipped: validated.skipped,
-          sourceFile: validated.sourceFile,
-          repaired: repaired || validated.repaired,
-          fileName,
-          fileHash,
-          qbankId: bankId,
-          requestId,
-          rightsConfirmed,
-        }),
-      });
-      onImported({ proposals: result.proposals, specialties: result.specialties ?? [], topics: result.topics ?? [], classificationRevision: result.classificationRevision });
-      setSkipped(result.skipped);
+      const chunks = uploadChunks.current ?? (unlimited
+        ? splitImport(validated.questions, validated.skipped)
+        : [{ questions: validated.questions, skipped: validated.skipped, bytes: 0 }]);
+      uploadChunks.current = chunks;
+      setUploadTotal(chunks.length);
+      if (!batchIds.current.length) batchIds.current = chunks.map((_, chunkIndex) => chunkIndex === 0 ? requestId : crypto.randomUUID());
+      for (let chunkIndex = uploadedChunks.current; chunkIndex < chunks.length; chunkIndex += 1) {
+        const chunk = chunks[chunkIndex];
+        const chunkHash = chunks.length === 1 ? fileHash : [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${fileHash}:${chunkIndex}`)))].map(value => value.toString(16).padStart(2, '0')).join('');
+        const chunkName = chunks.length === 1 ? fileName : `${fileName.slice(0, 210)}-part-${chunkIndex + 1}.json`;
+        const result = await api<{
+          proposals: QuestionProposal[];
+          successful: number;
+          flaggedDuplicates?: number;
+          skippedDuplicates?: number;
+          skipped: SkippedImportedQuestion[];
+          specialties: QBankSpecialty[];
+          topics: QBankTopic[];
+          classificationRevision?: number;
+        }>('/platform/import', {
+          method: 'POST',
+          body: JSON.stringify({
+            questions: chunk.questions,
+            skipped: chunk.skipped,
+            sourceFile: validated.sourceFile,
+            repaired: repaired || validated.repaired,
+            fileName: chunkName,
+            fileHash: chunkHash,
+            originalFileName: fileName,
+            originalFileHash: fileHash,
+            uploadSessionId,
+            chunkIndex,
+            chunkCount: chunks.length,
+            qbankId: bankId,
+            requestId: batchIds.current[chunkIndex],
+            rightsConfirmed,
+          }),
+        });
+        onImported({ proposals: result.proposals, specialties: result.specialties ?? [], topics: result.topics ?? [], classificationRevision: result.classificationRevision });
+        if (!unlimited) setSkipped(result.skipped);
+        importedCount.current += result.successful;
+        flaggedCount.current += result.flaggedDuplicates ?? 0;
+        skippedDuplicateCount.current += result.skippedDuplicates ?? 0;
+        uploadedChunks.current = chunkIndex + 1;
+        setUploadProgress(chunkIndex + 1);
+      }
+      setLastImportCount(importedCount.current);
       setMessage(
-        `Imported: ${result.successful} · Skipped duplicates: ${result.skippedDuplicates ?? 0} · Invalid: ${result.failed - (result.skippedDuplicates ?? 0)} · Pending review: ${result.pendingReview ?? result.successful}`,
+        `Imported: ${importedCount.current} · Exact duplicates skipped: ${skippedDuplicateCount.current} · Possible duplicates sent for reviewer confirmation: ${flaggedCount.current} · Invalid: ${validated.skipped.length} · Pending review: ${importedCount.current}`,
       );
       setOpen(false);
       setDrafts([]);
+      uploadChunks.current = null;
+      uploadedChunks.current = 0;
+      importedCount.current = 0;
+      flaggedCount.current = 0;
+      skippedDuplicateCount.current = 0;
+      batchIds.current = [];
+      setUploadProgress(0);
+      setUploadTotal(0);
     } catch (e) {
       setError(
-        `${e instanceof Error ? e.message : 'تعذر الرفع.'} بقيت الأسئلة متاحة للتعديل وإعادة المحاولة، ولم يُحفظ جزء غير مكتمل من الدفعة.`,
+        `${e instanceof Error ? e.message : 'تعذر الرفع.'} ${uploadedChunks.current ? `تم حفظ ${uploadedChunks.current} دفعة. اضغط إعادة المحاولة لإكمال البقية دون تكرارها.` : 'بقيت الأسئلة متاحة للتعديل وإعادة المحاولة.'}`,
       );
+      if (!uploadedChunks.current) {
+        uploadChunks.current = null;
+        batchIds.current = [];
+        setUploadTotal(0);
+      }
     } finally {
       operation.current = false;
       setBusy(false);
@@ -231,7 +320,8 @@ export function QuestionImportReview({
             className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
             onChange={e => { void read(e.target.files?.[0]); e.target.value = ''; }} />
         </label>
-        <p className="text-xs text-muted-foreground" dir="auto">JSON أو ملف نصي يحتوي على JSON · من 1 إلى 200 سؤال · حتى 1.5 MB. راجع الأسئلة قبل إرسالها.</p>
+        <p className="text-xs text-muted-foreground" dir="auto">{unlimited ? 'JSON أو ملف نصي يحتوي على JSON · عدد الأسئلة غير محدود. راجع الأسئلة قبل إرسالها.' : 'JSON أو ملف نصي يحتوي على JSON · من 1 إلى 200 سؤال · حتى 1.5 MB. راجع الأسئلة قبل إرسالها.'}</p>
+        {busy && uploadTotal > 0 && <output className="block text-sm">Uploading batch {uploadProgress + 1} of {uploadTotal}…</output>}
         {reading && <output className="block text-sm">Validating file… · جارٍ التحقق من الملف</output>}
         {drafts.length > 0 && <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg bg-muted p-3">
           <p className="min-w-0 flex-1 break-words text-sm">{fileName} · {drafts.length} questions ready for review{skipped.length ? ` · ${skipped.length} skipped` : ''}{repaired ? ' · JSON repaired' : ''}</p>
@@ -239,8 +329,10 @@ export function QuestionImportReview({
         </div>}
         {message && <output className="block space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm" dir="rtl">
           <strong className="block text-base text-emerald-700 dark:text-emerald-300">{message}</strong>
-          <span className="block">تم رفع الأسئلة وإرسالها إلى فريق المراجعة للتحقق منها قبل إضافتها إلى Q Bank.</span>
-          <span className="block">عدم ظهورها مباشرة في البنك أمر طبيعي. لا تحتاج إلى رفع الملف مرة أخرى؛ ستُضاف تلقائيًا بعد اعتماد المراجعين.</span>
+          {lastImportCount ? <>
+            <span className="block">تم رفع الأسئلة الجديدة وإرسالها إلى فريق المراجعة للتحقق منها قبل إضافتها إلى Q Bank.</span>
+            <span className="block">عدم ظهورها مباشرة في البنك أمر طبيعي؛ ستُضاف تلقائيًا بعد اعتماد المراجعين.</span>
+          </> : <span className="block">لم تُرسل أسئلة جديدة؛ الأسئلة المطابقة موجودة بالفعل أو قيد المراجعة.</span>}
         </output>}
         {skipped.length > 0 && <section className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4" dir="rtl">
           <h3 className="font-semibold">لم تتم إضافة {skipped.length} أسئلة بسبب مشاكل في المصدر:</h3>
@@ -291,7 +383,7 @@ export function QuestionImportReview({
             {(!lecture || settings.countMode === 'fixed') && <label className="block text-sm font-semibold">{lecture ? 'Questions to generate' : 'Questions to extract'} · عدد الأسئلة
               <input type="number" inputMode="numeric" min={1} max={200} step={1} value={countText} onChange={e => setCountText(e.target.value)} aria-invalid={!countValid} className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" />
             </label>}
-            <p className="text-xs text-muted-foreground">1–200 questions per JSON file.</p>
+            <p className="text-xs text-muted-foreground">{unlimited ? 'AI prompt: 1–200 questions at a time. Uploaded JSON files can contain any number of questions.' : '1–200 questions per JSON file.'}</p>
             {!countValid && <p role="alert" className="text-sm text-destructive">اختر عددًا صحيحًا من 1 إلى 200.</p>}
           </div>
           {lecture && <label className="min-w-0 text-sm font-semibold">Options per question · عدد الخيارات
@@ -331,7 +423,7 @@ export function QuestionImportReview({
           </p>
           <progress aria-label="Question review progress" max={drafts.length || 1} value={index + 1} className="h-2 w-full accent-primary" />
           {draft && (
-            <fieldset disabled={busy} className="min-w-0 space-y-3">
+            <fieldset disabled={busy || uploadProgress > 0} className="min-w-0 space-y-3">
               <legend className="sr-only">Review and edit question</legend>
               <label className="block text-sm font-semibold">
                 Question
@@ -442,7 +534,7 @@ export function QuestionImportReview({
               className="q-button col-span-2 min-h-11 whitespace-normal bg-primary text-primary-foreground"
               onClick={() => void submit()}
             >
-              {busy ? 'Uploading…' : index < drafts.length - 1 ? `Skip Review & submit all ${drafts.length} questions` : `Submit all ${drafts.length} questions for review`}
+              {busy ? 'Uploading…' : uploadProgress > 0 ? 'Retry remaining batches' : index < drafts.length - 1 ? `Skip Review & submit all ${drafts.length} questions` : `Submit all ${drafts.length} questions for review`}
             </button>
           </div>
         </DialogContent>

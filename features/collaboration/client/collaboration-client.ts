@@ -37,10 +37,10 @@ export async function loadCollaborationState(
   return (await collaborationRequest(user, force)).collaboration;
 }
 
-async function sendCollaborationState(
+export function collaborationChangeSet(
   next: CollaborationState,
   previous: CollaborationState,
-): Promise<void> {
+) {
   const writes: Array<{
     collection: string;
     id: string;
@@ -207,9 +207,16 @@ async function sendCollaborationState(
     (item) => item.id,
     true,
   );
-  collect('auditLog', next.auditLog, previous.auditLog, (item) => item.id);
+  // Audit entries are written by the server after a mutation is authorized.
+  // Client-authored audit entries would make the entire change set fail with 403.
+  return [...deletes, ...writes];
+}
 
-  const operations = [...deletes, ...writes];
+async function sendCollaborationState(
+  next: CollaborationState,
+  previous: CollaborationState,
+): Promise<void> {
+  const operations = collaborationChangeSet(next, previous);
   if (operations.length) {
     await api('/collaboration', {
       method: 'PUT',

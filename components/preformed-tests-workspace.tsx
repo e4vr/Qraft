@@ -4,6 +4,7 @@
 
 import { api } from '@/lib/api-client';
 import { WorkspaceHeader } from '@/components/workspace-header';
+import { QuestionNavigator } from '@/components/exams/question-navigator';
 import {
   deleteQBankImages,
   uploadQuestionImage,
@@ -14,7 +15,11 @@ import {
   savePreformedAttempt,
 } from '@/lib/local-db';
 import type { AppUser } from '@/lib/medguard-types';
-import { parseQuestionImportReport } from '@/lib/question-import';
+import {
+  buildQuestionPrompt,
+  parseQuestionImportReport,
+  type QuestionPromptSettings,
+} from '@/lib/question-import';
 import { subscribeLive } from '@/lib/realtime-client';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import type {
@@ -37,8 +42,11 @@ import {
   FileJson,
   Flag,
   Globe2,
+  GraduationCap,
   ImagePlus,
   LockKeyhole,
+  LogOut,
+  Menu,
   Pencil,
   Plus,
   RefreshCw,
@@ -48,6 +56,7 @@ import {
   ShieldAlert,
   Trash2,
   Trophy,
+  Upload,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -225,10 +234,63 @@ function TestEditor({
   const [messageKind, setMessageKind] = useState<'success' | 'error' | 'info'>(
     'info',
   );
+  const [importOpen, setImportOpen] = useState(false);
+  const [selectedImportSource, setSelectedImportSource] =
+    useState<QuestionPromptSettings['source'] | null>(null);
+  const [importDragging, setImportDragging] = useState(false);
+  const [importSource, setImportSource] =
+    useState<QuestionPromptSettings['source']>('qbank');
+  const [importKind, setImportKind] =
+    useState<QuestionPromptSettings['kind']>('clinical');
+  const [importLength, setImportLength] =
+    useState<QuestionPromptSettings['length']>('medium');
+  const [importCountMode, setImportCountMode] =
+    useState<QuestionPromptSettings['countMode']>('fixed');
+  const [importCount, setImportCount] = useState(10);
+  const [importOptionCount, setImportOptionCount] = useState(4);
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
+  const [copyError, setCopyError] = useState('');
   const [confirmEditorAction, editorConfirmationDialog] =
     useConfirmationDialog();
   const dirty = JSON.stringify(draft) !== baseline || passcode !== undefined;
   const question = draft.questions[selected];
+  const availableImportSlots = Math.max(0, 35 - draft.questions.length);
+  const safeImportCount = Math.max(
+    1,
+    Math.min(importCount, Math.max(1, availableImportSlots)),
+  );
+  const importPrompt = availableImportSlots
+    ? buildQuestionPrompt({
+        source: importSource,
+        kind: importKind,
+        length: importLength,
+        countMode: importCountMode,
+        count: safeImportCount,
+        optionCount: importOptionCount,
+      }, availableImportSlots)
+    : '';
+
+  const openImport = () => {
+    setSelectedImportSource(null);
+    setImportDragging(false);
+    setCopiedPrompt(false);
+    setCopyError('');
+    setImportCount((current) =>
+      Math.max(1, Math.min(current, Math.max(1, availableImportSlots))),
+    );
+    setImportOpen(true);
+  };
+
+  const copyImportPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(importPrompt);
+      setCopiedPrompt(true);
+      setCopyError('');
+    } catch {
+      setCopiedPrompt(false);
+      setCopyError('Could not copy automatically. Open the preview and copy it manually.');
+    }
+  };
 
   const close = async () => {
     if (
@@ -277,8 +339,13 @@ function TestEditor({
     if (!file) return;
     setMessage('');
     try {
+      if (file.size > 1_500_000)
+        throw new Error('JSON file must be smaller than 1.5 MB.');
+      if (!/\.(json|txt|text)$/i.test(file.name))
+        throw new Error('Choose a JSON or TXT file containing questions in JSON format.');
       const report = parseQuestionImportReport(await file.text(), file.name);
       const available = 35 - draft.questions.length;
+      const notAdded = Math.max(0, report.questions.length - available);
       const imported = report.questions.slice(0, available).map((item) => ({
         id: crypto.randomUUID(),
         stem: item.stem,
@@ -294,7 +361,7 @@ function TestEditor({
       }));
       setMessageKind('success');
       setMessage(
-        `${imported.length} question${imported.length === 1 ? '' : 's'} imported${report.skipped.length ? `; ${report.skipped.length} skipped` : ''}.`,
+        `${imported.length} question${imported.length === 1 ? '' : 's'} imported${notAdded ? `; ${notAdded} not added because this test is limited to 35 questions` : ''}${report.skipped.length ? `; ${report.skipped.length} skipped` : ''}.`,
       );
     } catch (error) {
       setMessageKind('error');
@@ -770,19 +837,15 @@ function TestEditor({
                 {draft.questions.length}/35
               </span>
             </strong>
-            <label className="q-button q-button-secondary cursor-pointer">
+            <button
+              type="button"
+              className="q-button q-button-secondary"
+              disabled={busy || availableImportSlots === 0}
+              onClick={openImport}
+            >
               <FileJson className="size-4" />
               Import JSON
-              <input
-                className="sr-only"
-                type="file"
-                accept="application/json,.json"
-                onChange={(e) => {
-                  void importJson(e.target.files?.[0]);
-                  e.target.value = '';
-                }}
-              />
-            </label>
+            </button>
             <button
               onClick={() => void addQuestion()}
               disabled={busy || draft.questions.length >= 35}
@@ -1011,6 +1074,134 @@ function TestEditor({
           )}
         </main>
       </div>
+      {importOpen && (
+        <dialog
+          open
+          aria-labelledby="preformed-import-title"
+          className="q-safe-overlay fixed inset-0 z-[80] m-0 grid h-full w-full max-w-none place-items-center overflow-y-auto border-0 bg-slate-950/55 p-4 backdrop-blur-sm"
+        >
+          <section className="my-4 max-h-[85dvh] w-full max-w-3xl overflow-y-auto rounded-3xl border bg-card p-4 text-card-foreground shadow-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-4">
+              <h2 id="preformed-import-title" className="text-lg font-bold">Import JSON / Use AI</h2>
+              <button
+                type="button"
+                aria-label="Close import options"
+                className="q-icon"
+                onClick={() => setImportOpen(false)}
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3 rounded-xl border bg-card p-3 sm:p-4">
+              <label className={`relative flex min-h-44 cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-5 text-center transition-colors ${importDragging ? 'border-primary bg-primary/10' : 'border-primary/30 bg-primary/5 hover:border-primary hover:bg-primary/10'}`}>
+                <span className="grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary"><Upload className="size-6" /></span>
+                <span className="text-base font-bold" dir="auto">ارفع الملف هنا <span dir="ltr">JSON / Text</span></span>
+                <span className="text-sm text-muted-foreground" dir="auto">اسحب الملف أو اضغط لاختياره</span>
+                <input
+                  aria-label="ارفع الملف هنا JSON / Text"
+                  type="file"
+                  accept="application/json,text/plain,.json,.txt,.text"
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  onDragOver={(event) => { event.preventDefault(); setImportDragging(true); }}
+                  onDragLeave={() => setImportDragging(false)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setImportDragging(false);
+                    if (event.dataTransfer.files.length !== 1) return;
+                    setImportOpen(false);
+                    void importJson(event.dataTransfer.files[0]);
+                  }}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      setImportOpen(false);
+                      void importJson(file);
+                    }
+                    event.target.value = '';
+                  }}
+                />
+              </label>
+              <p className="text-xs text-muted-foreground" dir="auto">
+                JSON أو ملف نصي يحتوي على JSON · من 1 إلى 200 سؤال · حتى 1.5 MB. يتبقى {availableImportSlots} موضعًا في هذا الاختبار (الحد الأقصى 35).
+              </p>
+            </div>
+            <div className="mt-4 space-y-3">
+              {(['lecture', 'qbank'] as const).map((source) => (
+                <div key={source} className={`min-w-0 overflow-hidden rounded-xl border ${selectedImportSource === source ? 'border-primary/50' : 'border-border'}`}>
+                  <button
+                    type="button"
+                    aria-expanded={selectedImportSource === source}
+                    onClick={() => {
+                      setSelectedImportSource(selectedImportSource === source ? null : source);
+                      setImportSource(source);
+                      setCopiedPrompt(false);
+                      setCopyError('');
+                    }}
+                    className={`flex min-h-16 w-full items-center gap-3 p-4 text-start transition-colors hover:bg-muted/60 ${selectedImportSource === source ? 'bg-primary/5' : 'bg-card'}`}
+                    dir="rtl"
+                  >
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">{source === 'lecture' ? <GraduationCap className="size-5" /> : <FileJson className="size-5" />}</span>
+                    <span className="min-w-0 flex-1 text-sm font-semibold leading-6">{source === 'lecture' ? 'ارفع أسئلة مولدة بالذكاء الاصطناعي من المحاضرة (المادة العلمية)' : 'استورد أسئلة بنك الأسئلة بالاستعانة بالذكاء الاصطناعي'}</span>
+                    <ChevronRight className={`size-5 shrink-0 transition-transform ${selectedImportSource === source ? '-rotate-90' : 'rotate-90'}`} />
+                  </button>
+                  {selectedImportSource === source && (
+                    <div className="min-w-0 space-y-4 rounded-xl border bg-card p-3 sm:p-4">
+                      <div>
+                        <h3 className="font-semibold">Use AI · إعداد المحتوى</h3>
+                        <p className="mt-1 text-sm text-muted-foreground" dir="auto">اختر الإعدادات، وانسخ Prompt إلى أداة الذكاء الاصطناعي مع ملفك، ثم ارفع ملف JSON الناتج لإضافة أسئلته إلى هذا الاختبار ومراجعتها. لا يتم إرسال ملفك إلى الذكاء الاصطناعي من داخل الموقع.</p>
+                        <p className="mt-2 text-sm text-muted-foreground" dir="auto">يتضمن Prompt تصنيف كل سؤال إلى تخصص (specialty) وموضوع (topic). راجع الناتج مقابل المصدر قبل الرفع.</p>
+                      </div>
+                      {source === 'qbank' && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">سيطلب Prompt نقل الأسئلة والخيارات بالترتيب الأصلي دون تخمين. أي سؤال ناقص أو غير مقروء سيُتجاوز وحده مع تسجيل السبب، بينما تستمر معالجة بقية الملف.</p>}
+                      {source === 'lecture' && (
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <label className="text-sm font-semibold">Question type · نوع السؤال
+                            <select className={`${inputClass} mt-2`} value={importKind} onChange={(event) => { setImportKind(event.target.value as QuestionPromptSettings['kind']); setCopiedPrompt(false); }}>
+                              <option value="clinical">Clinical</option><option value="direct">Direct</option>
+                            </select>
+                          </label>
+                          <label className="text-sm font-semibold">Question length · طول السؤال
+                            <select className={`${inputClass} mt-2`} value={importLength} onChange={(event) => { setImportLength(event.target.value as QuestionPromptSettings['length']); setCopiedPrompt(false); }}>
+                              <option value="short">قصير · Short</option><option value="medium">متوسط · Medium</option><option value="long">طويل · Long</option>
+                            </select>
+                          </label>
+                        </div>
+                      )}
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          {source === 'lecture' && <label className="block text-sm font-semibold">Question count mode
+                            <select className={`${inputClass} mt-2`} value={importCountMode} onChange={(event) => { setImportCountMode(event.target.value as QuestionPromptSettings['countMode']); setCopiedPrompt(false); }}>
+                              <option value="fixed">Specific number · عدد محدد</option><option value="per_slide">One question per slide</option>
+                            </select>
+                          </label>}
+                          {(source === 'qbank' || importCountMode === 'fixed') && <label className="block text-sm font-semibold">{source === 'lecture' ? 'Questions to generate' : 'Questions to extract'} · عدد الأسئلة
+                            <input type="number" inputMode="numeric" min={1} max={Math.max(1, availableImportSlots)} step={1} className={`${inputClass} mt-2`} value={safeImportCount} onChange={(event) => { setImportCount(Number(event.target.value) || 1); setCopiedPrompt(false); }} />
+                          </label>}
+                          <p className="text-xs text-muted-foreground">1–{availableImportSlots} questions for this test. A JSON file may contain up to 200 questions.</p>
+                        </div>
+                        {source === 'lecture' && <label className="text-sm font-semibold">Options per question · عدد الخيارات
+                          <input type="number" inputMode="numeric" min={2} max={10} className={`${inputClass} mt-2`} value={importOptionCount} onChange={(event) => { setImportOptionCount(Math.max(2, Math.min(10, Number(event.target.value) || 2))); setCopiedPrompt(false); }} />
+                        </label>}
+                      </div>
+                      <button type="button" className="q-button q-button-primary min-h-12" onClick={() => void copyImportPrompt()} disabled={!importPrompt}>
+                        {copiedPrompt ? <Check className="size-4" /> : <Copy className="size-4" />}
+                        {copiedPrompt ? 'تم نسخ Prompt' : 'نسخ تعليمات الذكاء الاصطناعي'}
+                      </button>
+                      {copiedPrompt && <output className="block text-sm text-emerald-600" dir="auto">تم النسخ. أرفق المصدر مع التعليمات في أداة AI، ثم ارفع الملف الناتج في المربع بالأعلى.</output>}
+                      {copyError && <p role="alert" className="text-sm text-destructive">{copyError}</p>}
+                      <details className="text-sm">
+                        <summary className="min-h-11 cursor-pointer py-3">Preview AI prompt</summary>
+                        <textarea aria-label="Preformed test AI prompt" readOnly dir="ltr" value={importPrompt} className="min-h-48 w-full rounded-xl border bg-muted p-3 text-xs" />
+                      </details>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p className="mt-4 text-xs text-muted-foreground" dir="auto">يمكنك أيضًا رفع JSON جاهز مباشرة. الإعدادات تخص Prompt ولا تعيد كتابة الملف المستورد أو تغيّر إجاباته. راجع الناتج مقابل المصدر قبل الرفع.</p>
+          </section>
+        </dialog>
+      )}
       {editorConfirmationDialog}
     </div>
   );
@@ -1033,6 +1224,7 @@ export function PreformedTestRunner({
   const [passcode, setPasscode] = useState('');
   const [needsPasscode, setNeedsPasscode] = useState(false);
   const [attempt, setAttempt] = useState<PreformedLocalAttempt>();
+  const [restoring, setRestoring] = useState(true);
   const [index, setIndex] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -1046,7 +1238,13 @@ export function PreformedTestRunner({
   }>();
   const [reviewing, setReviewing] = useState(false);
   const [leaderboard, setLeaderboard] = useState<PreformedLeaderboardEntry[]>();
+  const [navigatorOpen, setNavigatorOpen] = useState(false);
   const submitLock = useRef(false);
+  const questionBodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (questionBodyRef.current) questionBodyRef.current.scrollTop = 0;
+  }, [index, reviewing]);
 
   useEffect(() => {
     if (!attempt?.test.questions.length) return;
@@ -1061,9 +1259,15 @@ export function PreformedTestRunner({
           setAttempt(saved);
           setName(saved.participantName);
           setElapsed(saved.elapsedSeconds);
+          setIndex(Math.max(0, Math.min(saved.currentIndex ?? 0, saved.questionOrder.length - 1)));
         }
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (active) setError('Could not read a saved attempt on this device.');
+      })
+      .finally(() => {
+        if (active) setRestoring(false);
+      });
     return () => {
       active = false;
     };
@@ -1103,6 +1307,7 @@ export function PreformedTestRunner({
           test: { ...saved.test, attemptToken: payload.test.attemptToken },
         });
         setElapsed(saved.elapsedSeconds);
+        setIndex(Math.max(0, Math.min(saved.currentIndex ?? 0, saved.questionOrder.length - 1)));
       } else {
         const questionOrder = payload.test.settings.randomizeQuestions
           ? randomOrder(payload.test.questions.length).map(
@@ -1126,6 +1331,7 @@ export function PreformedTestRunner({
           test: payload.test,
           participantName: user?.displayName ?? name.trim(),
           answers: {},
+          currentIndex: 0,
           questionOrder,
           optionOrder,
           submissionId: crypto.randomUUID(),
@@ -1135,6 +1341,7 @@ export function PreformedTestRunner({
         };
         await savePreformedAttempt(next);
         setAttempt(next);
+        setIndex(0);
       }
     } catch (caught) {
       const message =
@@ -1230,7 +1437,9 @@ export function PreformedTestRunner({
   useEffect(() => {
     if (!attempt || result) return;
     if (elapsed % 5 !== 0) return;
-    void savePreformedAttempt({ ...attempt, elapsedSeconds: elapsed });
+    void savePreformedAttempt({ ...attempt, elapsedSeconds: elapsed }).catch(
+      () => setError('Could not save this attempt on your device. Please try again.'),
+    );
   }, [attempt, elapsed, result]);
   const limit = attempt?.test.settings.durationMinutes
     ? attempt.test.settings.durationMinutes * 60
@@ -1240,6 +1449,28 @@ export function PreformedTestRunner({
     const timer = window.setTimeout(() => void submit(), 0);
     return () => window.clearTimeout(timer);
   }, [attempt, elapsed, limit, result, submit]);
+
+  const continueLater = async () => {
+    if (!attempt) return onClose();
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await savePreformedAttempt({ ...attempt, elapsedSeconds: elapsed });
+      onClose();
+    } catch {
+      setError('Could not save this attempt on your device. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (restoring)
+    return (
+      <main className="q-test-screen grid h-full place-items-center bg-background p-5 text-sm font-semibold text-muted-foreground">
+        <output>Opening saved test…</output>
+      </main>
+    );
 
   if (!attempt)
     return (
@@ -1312,12 +1543,23 @@ export function PreformedTestRunner({
   const ordered = attempt.questionOrder
     .map((id) => attempt.test.questions.find((item) => item.id === id))
     .filter((item): item is PreformedQuestion => Boolean(item));
+  const goToQuestion = (target: number) => {
+    const nextIndex = Math.max(0, Math.min(target, Math.max(0, ordered.length - 1)));
+    const next = { ...attempt, currentIndex: nextIndex, elapsedSeconds: elapsed };
+    setIndex(nextIndex);
+    setAttempt(next);
+    void savePreformedAttempt(next).catch(() =>
+      setError('Could not save your place on this device. Please try again.'),
+    );
+  };
   const question = ordered[index];
   const selectedAnswer = question ? attempt.answers[question.id] : undefined;
   const reveal =
     reviewing ||
     (attempt.test.settings.mode === 'practice' &&
       Number.isInteger(selectedAnswer));
+  const clockSeconds = limit === null ? elapsed : Math.max(0, limit - elapsed);
+  const clockText = duration(clockSeconds);
   if (result && !reviewing)
     return (
       <main className="grid min-h-screen place-items-center bg-background p-5">
@@ -1389,142 +1631,30 @@ export function PreformedTestRunner({
     );
 
   return (
-    <main className="min-h-screen bg-muted/25">
-      <header className="sticky top-0 z-20 flex min-h-16 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur sm:px-7">
-        <button
-          onClick={onClose}
-          className="grid size-10 place-items-center rounded-xl hover:bg-muted"
-        >
-          <X className="size-5" />
-        </button>
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate font-bold">{attempt.test.title}</h1>
-          <p className="text-xs text-muted-foreground">
-            Question {index + 1} of {ordered.length}
-          </p>
-        </div>
-        <span
-          className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm font-bold ${limit !== null && limit - elapsed < 60 ? 'bg-red-100 text-red-700' : 'bg-muted'}`}
-        >
-          <Clock3 className="size-4" />
-          {duration(limit === null ? elapsed : Math.max(0, limit - elapsed))}
-        </span>
-      </header>
-      <div className="mx-auto max-w-4xl p-4 sm:p-8">
-        <div className="mb-5 flex gap-1">
-          {ordered.map((item, itemIndex) => (
-            <button
-              key={item.id}
-              disabled={
-                !attempt.test.settings.allowBackNavigation &&
-                itemIndex !== index
-              }
-              onClick={() => setIndex(itemIndex)}
-              aria-label={`Question ${itemIndex + 1}`}
-              className={`q-compact-touch h-2 min-w-0 flex-1 rounded-full ${itemIndex === index ? 'bg-primary' : Number.isInteger(attempt.answers[item.id]) ? 'bg-emerald-400' : 'bg-muted'}`}
-            />
-          ))}
-        </div>
-        {question && (
-          <section className={`${panelClass} p-5 sm:p-8`}>
-            <div className="flex items-start gap-3">
-              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 font-black text-primary">
-                {index + 1}
-              </span>
-              <div className="min-w-0">
-                <p className="whitespace-pre-wrap text-lg font-semibold leading-8">
-                  {question.stem}
-                </p>
-                {question.images.length > 0 && (
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    {question.images.map((image) => (
-                      <img
-                        key={image.id}
-                        src={image.url}
-                        alt={image.caption || image.name}
-                        className="max-h-72 rounded-2xl border object-contain"
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="mt-7 space-y-3">
-              {(
-                attempt.optionOrder[question.id] ??
-                question.options.map((_, itemIndex) => itemIndex)
-              ).map((optionIndex, displayIndex) => {
-                const selected = selectedAnswer === optionIndex;
-                const correct = question.answer === optionIndex;
-                return (
-                  <button
-                    key={optionIndex}
-                    disabled={reviewing}
-                    onClick={() => {
-                      const next = {
-                        ...attempt,
-                        answers: {
-                          ...attempt.answers,
-                          [question.id]: optionIndex,
-                        },
-                        elapsedSeconds: elapsed,
-                      };
-                      setAttempt(next);
-                      void savePreformedAttempt(next);
-                    }}
-                    className={`flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition ${reveal && correct ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10' : reveal && selected && !correct ? 'border-red-400 bg-red-50 dark:bg-red-500/10' : selected ? 'border-primary bg-primary/5' : 'hover:border-primary/50 hover:bg-muted/40'}`}
-                  >
-                    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-background font-bold">
-                      {String.fromCharCode(65 + displayIndex)}
-                    </span>
-                    <span className="pt-1 text-sm font-medium">
-                      {question.options[optionIndex]}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            {reveal && (question.explanation || question.sourceReference) && (
-              <div className="mt-6 rounded-2xl bg-muted p-5">
-                <p className="font-bold">Explanation</p>
-                {question.explanation && (
-                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6">
-                    {question.explanation}
-                  </p>
-                )}
-                {question.sourceReference && (
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    Source: {question.sourceReference}
-                  </p>
-                )}
-              </div>
-            )}
-          </section>
-        )}
-        <div className="mt-5 flex items-center justify-between">
+    <>
+      <main className="q-test-screen q-preformed-runner flex h-full min-h-0 flex-col bg-muted/25">
+        <nav className="q-test-bottom" aria-label="Test navigation">
           <button
             disabled={index === 0 || !attempt.test.settings.allowBackNavigation}
-            onClick={() => setIndex((current) => Math.max(0, current - 1))}
+            onClick={() => goToQuestion(index - 1)}
             className="q-button q-button-secondary"
           >
-            <ChevronLeft className="size-4" />
             Previous
           </button>
           {index < ordered.length - 1 ? (
             <button
               disabled={!Number.isInteger(selectedAnswer)}
-              onClick={() => setIndex((current) => current + 1)}
+              onClick={() => goToQuestion(index + 1)}
               className="q-button q-button-primary"
             >
               Next
-              <ChevronRight className="size-4" />
             </button>
           ) : reviewing ? (
             <button
               onClick={() => setReviewing(false)}
               className="q-button q-button-primary"
             >
-              Back to result
+              Results
             </button>
           ) : (
             <button
@@ -1532,37 +1662,232 @@ export function PreformedTestRunner({
               onClick={() => void submit()}
               className="q-button q-button-primary"
             >
-              <Send className="size-4" />
-              {busy ? 'Submitting…' : 'Submit test'}
+              Submit
             </button>
           )}
-        </div>
-        {error && (
-          <p
-            role="alert"
-            className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-200"
+        </nav>
+        <header className="q-exam-header sticky top-0 z-20 flex min-h-[68px] items-center gap-2 border-b bg-background/95 px-3 backdrop-blur sm:gap-4 sm:px-7">
+          <button
+            type="button"
+            aria-label="Open question list"
+            aria-expanded={navigatorOpen}
+            title="Open question list"
+            onClick={() => setNavigatorOpen(true)}
+            className="grid size-11 shrink-0 place-items-center rounded-xl border text-muted-foreground transition hover:border-primary/35 hover:bg-primary/5 hover:text-primary"
           >
+            <Menu className="size-5" />
+          </button>
+          <div className="q-exam-heading min-w-0 flex-1 text-center sm:text-left">
+            <strong className="block truncate text-sm font-bold tabular-nums sm:text-base">
+              Question {index + 1} of {ordered.length}
+            </strong>
+            <span className="block truncate text-[11px] text-muted-foreground sm:text-xs">
+              {attempt.test.title}
+            </span>
+          </div>
+          <span
+            aria-label={`${limit === null ? 'Elapsed time' : 'Time remaining'}: ${clockText}`}
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-2 text-xs font-bold tabular-nums sm:gap-2 sm:px-3 sm:text-sm ${limit !== null && limit - elapsed < 60 ? 'bg-red-100 text-red-700' : 'bg-muted'}`}
+          >
+            <Clock3 className="size-4" />
+            {clockText.startsWith('00:') ? clockText.slice(3) : clockText}
+          </span>
+        </header>
+        <progress
+          className="q-exam-progress h-1 w-full shrink-0"
+          aria-label="Question progress"
+          max={Math.max(1, ordered.length)}
+          value={index + 1}
+        />
+        {error && (
+          <p role="alert" className="mx-3 mt-2 shrink-0 rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-200">
             {error}
           </p>
         )}
-      </div>
-    </main>
+        <div ref={questionBodyRef} className="q-test-body w-full flex-1">
+          <div className="mx-auto max-w-4xl p-3 pb-8 sm:p-8">
+            {question && (
+              <section className={`${panelClass} p-5 sm:p-8`}>
+                <div className="min-w-0">
+                  <p className="whitespace-pre-wrap text-base font-medium leading-7 sm:text-lg sm:leading-8">
+                    {question.stem}
+                  </p>
+                  {question.images.length > 0 && (
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      {question.images.map((image) => (
+                        <img
+                          key={image.id}
+                          src={image.url}
+                          alt={image.caption || image.name}
+                          className="max-h-72 rounded-2xl border object-contain"
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="mt-7 space-y-3">
+                  {(
+                    attempt.optionOrder[question.id] ??
+                    question.options.map((_, itemIndex) => itemIndex)
+                  ).map((optionIndex, displayIndex) => {
+                    const selected = selectedAnswer === optionIndex;
+                    const correct = question.answer === optionIndex;
+                    return (
+                      <button
+                        key={optionIndex}
+                        disabled={reviewing}
+                        onClick={() => {
+                          const next = {
+                            ...attempt,
+                            answers: {
+                              ...attempt.answers,
+                              [question.id]: optionIndex,
+                            },
+                            elapsedSeconds: elapsed,
+                          };
+                          setAttempt(next);
+                          setError('');
+                          void savePreformedAttempt(next).catch(() =>
+                            setError('Could not save your answer on this device. Please try again.'),
+                          );
+                        }}
+                        className={`flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition ${reveal && correct ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10' : reveal && selected && !correct ? 'border-red-400 bg-red-50 dark:bg-red-500/10' : selected ? 'border-primary bg-primary/5' : 'hover:border-primary/50 hover:bg-muted/40'}`}
+                      >
+                        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-background font-bold">
+                          {String.fromCharCode(65 + displayIndex)}
+                        </span>
+                        <span className="pt-1 text-sm font-medium">
+                          {question.options[optionIndex]}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {reveal &&
+                  (question.explanation || question.sourceReference) && (
+                    <div className="mt-6 rounded-2xl bg-muted p-5">
+                      <p className="font-bold">Explanation</p>
+                      {question.explanation && (
+                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6">
+                          {question.explanation}
+                        </p>
+                      )}
+                      {question.sourceReference && (
+                        <p className="mt-3 text-xs text-muted-foreground">
+                          Source: {question.sourceReference}
+                        </p>
+                      )}
+                    </div>
+                  )}
+              </section>
+            )}
+            <div className="mt-5 hidden items-center justify-between gap-3 sm:flex">
+              <button
+                disabled={
+                  index === 0 || !attempt.test.settings.allowBackNavigation
+                }
+                onClick={() => goToQuestion(index - 1)}
+                className="q-button q-button-secondary"
+              >
+                <ChevronLeft className="size-4" />
+                Previous
+              </button>
+              {index < ordered.length - 1 ? (
+                <button
+                  disabled={!Number.isInteger(selectedAnswer)}
+                  onClick={() => goToQuestion(index + 1)}
+                  className="q-button q-button-primary"
+                >
+                  Next
+                  <ChevronRight className="size-4" />
+                </button>
+              ) : reviewing ? (
+                <button
+                  onClick={() => setReviewing(false)}
+                  className="q-button q-button-primary"
+                >
+                  Back to result
+                </button>
+              ) : (
+                <button
+                  disabled={busy}
+                  onClick={() => void submit()}
+                  className="q-button q-button-primary"
+                >
+                  <Send className="size-4" />
+                  {busy ? 'Submitting…' : 'Submit test'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
+      <QuestionNavigator
+        open={navigatorOpen}
+        title={attempt.test.title}
+        currentIndex={index}
+        items={ordered.map((item, itemIndex) => {
+          const answer = attempt.answers[item.id];
+          const canReveal =
+            reviewing ||
+            (attempt.test.settings.mode === 'practice' &&
+              Number.isInteger(answer));
+          return {
+            id: item.id,
+            preview: item.stem,
+            answered: Number.isInteger(answer),
+            revealed: canReveal,
+            result: canReveal
+              ? answer === item.answer
+                ? ('correct' as const)
+                : ('incorrect' as const)
+              : undefined,
+            disabled:
+              !attempt.test.settings.allowBackNavigation && itemIndex !== index,
+          };
+        })}
+        onSelect={goToQuestion}
+        onClose={() => setNavigatorOpen(false)}
+        secondaryAction={{
+          label: busy ? 'Saving…' : 'Save & exit',
+          icon: <LogOut className="size-4" />,
+          disabled: busy,
+          onClick: () => {
+            setNavigatorOpen(false);
+            void continueLater();
+          },
+        }}
+        primaryAction={{
+          label: reviewing ? 'Results' : busy ? 'Finishing…' : 'Finish',
+          icon: reviewing ? (
+            <Eye className="size-4" />
+          ) : (
+            <Send className="size-4" />
+          ),
+          disabled: busy,
+          onClick: () => {
+            setNavigatorOpen(false);
+            if (reviewing) setReviewing(false);
+            else void submit();
+          },
+        }}
+      />
+    </>
   );
 }
 
 export function PreformedTestsWorkspace({
   user,
   onUpgrade,
-  onTestEntered,
+  onRunTest,
 }: {
   user: AppUser;
   onUpgrade: () => void;
-  onTestEntered?: () => void;
+  onRunTest: (code: string) => void;
 }) {
   const [tests, setTests] = useState<PreformedTestSummary[]>([]);
   const [tab, setTab] = useState<'mine' | 'public'>('mine');
   const [joinCode, setJoinCode] = useState('');
-  const [runningCode, setRunningCode] = useState('');
   const [editing, setEditing] = useState<PreformedTestDocument>();
   const [stats, setStats] = useState<ManageResponse>();
   const [busy, setBusy] = useState(false);
@@ -1668,13 +1993,15 @@ export function PreformedTestsWorkspace({
     }
   };
   const rotate = async (id: string) => {
-    if (!(await confirmAction({
-      title: 'Create a new join code?',
-      description:
-        'The current code and its existing share link will stop working immediately.',
-      confirmLabel: 'Create new code',
-      tone: 'warning',
-    })))
+    if (
+      !(await confirmAction({
+        title: 'Create a new join code?',
+        description:
+          'The current code and its existing share link will stop working immediately.',
+        confirmLabel: 'Create new code',
+        tone: 'warning',
+      }))
+    )
       return;
     const value = await api<{ code: string }>('/preformed/rotate-code', {
       method: 'POST',
@@ -1687,13 +2014,15 @@ export function PreformedTestsWorkspace({
     );
   };
   const remove = async (test: PreformedTestSummary) => {
-    if (!(await confirmAction({
-      title: `Delete “${test.title}”?`,
-      description:
-        'The test and all of its participant results will be permanently deleted. This cannot be undone.',
-      confirmLabel: 'Delete permanently',
-      tone: 'destructive',
-    })))
+    if (
+      !(await confirmAction({
+        title: `Delete “${test.title}”?`,
+        description:
+          'The test and all of its participant results will be permanently deleted. This cannot be undone.',
+        confirmLabel: 'Delete permanently',
+        tone: 'destructive',
+      }))
+    )
       return;
     setBusy(true);
     try {
@@ -1721,13 +2050,15 @@ export function PreformedTestsWorkspace({
     setError('Report sent. Thank you.');
   };
   const moderate = async (id: string) => {
-    if (!(await confirmAction({
-      title: 'Hide this public test?',
-      description:
-        'Participants will no longer be able to find or open this test until it is restored.',
-      confirmLabel: 'Hide test',
-      tone: 'warning',
-    })))
+    if (
+      !(await confirmAction({
+        title: 'Hide this public test?',
+        description:
+          'Participants will no longer be able to find or open this test until it is restored.',
+        confirmLabel: 'Hide test',
+        tone: 'warning',
+      }))
+    )
       return;
     await api('/preformed/moderate', {
       method: 'PUT',
@@ -1741,16 +2072,6 @@ export function PreformedTestsWorkspace({
       : item.visibility === 'public' && item.status === 'published',
   );
 
-  if (runningCode)
-    return (
-      <PreformedTestRunner
-        user={user}
-        code={runningCode}
-        onClose={() => setRunningCode('')}
-        onJoinQraft={() => undefined}
-        onTestEntered={onTestEntered}
-      />
-    );
   return (
     <>
       <WorkspaceHeader
@@ -1758,345 +2079,350 @@ export function PreformedTestsWorkspace({
         subtitle="Join, create, and share independent tests"
       />
       <div className="mx-auto max-w-7xl p-4 sm:p-7">
-      <section className="overflow-hidden rounded-[30px] bg-gradient-to-br from-[#0b5fae] via-[#087cb9] to-[#13a69a] p-5 text-white shadow-xl shadow-primary/10 sm:p-8">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="max-w-2xl">
-            <p className="text-xs font-black tracking-[0.18em] text-cyan-100">
-              READY-MADE TESTS
-            </p>
-            <h1 className="mt-3 text-3xl font-black tracking-tight sm:text-4xl">
-              Share one code. Start learning.
-            </h1>
-            <p className="mt-3 max-w-xl text-sm leading-6 text-blue-50/80">
-              Independent tests for quick classes, study groups, and public
-              practice—without creating a QBank.
-            </p>
-          </div>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const normalized = joinCode
-                .trim()
-                .toUpperCase()
-                .replace(/\s+/g, '');
-              if (normalized)
-                setRunningCode(
-                  normalized.startsWith('QF-')
-                    ? normalized
-                    : `QF-${normalized}`,
-                );
-            }}
-            className="flex w-full max-w-md gap-2 rounded-2xl bg-white/12 p-2 ring-1 ring-white/20"
-          >
-            <input
-              value={joinCode}
-              onChange={(e) => setJoinCode(e.target.value)}
-              placeholder="Enter test code"
-              className="h-11 min-w-0 flex-1 rounded-xl bg-white px-4 font-mono font-bold uppercase text-slate-900 outline-none"
-            />
-            <button className="rounded-xl bg-white px-5 font-bold text-primary">
-              Join
-            </button>
-          </form>
-        </div>
-      </section>
-      <div className="mt-6 flex flex-wrap items-center gap-3">
-        <div className="inline-flex rounded-2xl bg-muted p-1">
-          <button
-            onClick={() => setTab('mine')}
-            className={`rounded-xl px-5 py-2.5 text-sm font-bold ${tab === 'mine' ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground'}`}
-          >
-            My Tests
-          </button>
-          <button
-            onClick={() => setTab('public')}
-            className={`rounded-xl px-5 py-2.5 text-sm font-bold ${tab === 'public' ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground'}`}
-          >
-            Public Tests
-          </button>
-        </div>
-        <button
-          onClick={() => void load(true)}
-          disabled={busy}
-          className="q-button q-button-secondary"
-        >
-          <RefreshCw className={`size-4 ${busy ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
-        {tab === 'mine' && (
-          <button
-            onClick={() => void create()}
-            className="q-button q-button-primary ml-auto"
-            aria-label={!canCreate ? 'New test — Pro plan required' : undefined}
-            title={!canCreate ? 'Upgrade to Pro to create a test' : undefined}
-          >
-            <span
-              aria-hidden="true"
-              className={`grid size-6 shrink-0 place-items-center rounded-lg transition-colors ${
-                canCreate
-                  ? 'bg-white/15 text-current'
-                  : 'bg-amber-50 text-amber-700 shadow-sm ring-1 ring-inset ring-amber-300/80'
-              }`}
-            >
-              {canCreate ? (
-                <Plus className="size-4" strokeWidth={2.4} />
-              ) : (
-                <LockKeyhole className="size-3.5" strokeWidth={2.4} />
-              )}
-            </span>
-            New test
-          </button>
-        )}
-      </div>
-      {error && (
-        <output className="mt-4 block rounded-xl bg-muted p-3 text-sm">
-          {error}
-        </output>
-      )}
-      {!visible.length && !busy ? (
-        <div className={`${panelClass} mt-5 p-12 text-center`}>
-          <div className="mx-auto grid size-16 place-items-center rounded-2xl bg-primary/10 text-primary">
-            <Globe2 className="size-7" />
-          </div>
-          <h2 className="mt-4 text-xl font-bold">
-            {tab === 'mine' ? 'No tests yet' : 'No public tests yet'}
-          </h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {tab === 'mine'
-              ? 'Create a focused test and share its link or short code.'
-              : 'Published community tests will appear here.'}
-          </p>
-        </div>
-      ) : (
-        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {visible.map((test) => (
-            <article
-              key={test.id}
-              className={`${panelClass} flex min-h-64 flex-col p-5`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <span
-                  className={`rounded-full px-2.5 py-1 text-[11px] font-black uppercase ${test.visibility === 'public' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-700'}`}
-                >
-                  {test.visibility}
-                </span>
-                <span className="font-mono text-xs font-bold text-muted-foreground">
-                  {test.code}
-                </span>
-              </div>
-              <h2 className="mt-4 line-clamp-2 text-xl font-bold">
-                {test.title}
-              </h2>
-              <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
-                {test.description || `Created by ${test.ownerName}`}
+        <section className="overflow-hidden rounded-[30px] bg-gradient-to-br from-[#0b5fae] via-[#087cb9] to-[#13a69a] p-5 text-white shadow-xl shadow-primary/10 sm:p-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div className="max-w-2xl">
+              <p className="text-xs font-black tracking-[0.18em] text-cyan-100">
+                READY-MADE TESTS
               </p>
-              <div className="mt-4 flex flex-wrap gap-3 text-xs font-semibold text-muted-foreground">
-                <span>{test.questionCount} questions</span>
-                <span>·</span>
-                <span>{test.participantCount} ranked</span>
-                <span>·</span>
-                <span>{test.settings.mode}</span>
-              </div>
-              <div className="mt-auto flex flex-wrap gap-2 pt-5">
-                <button
-                  disabled={test.status !== 'published'}
-                  title={
-                    test.status !== 'published'
-                      ? 'Publish this test before opening it.'
-                      : undefined
-                  }
-                  onClick={() => setRunningCode(test.code)}
-                  className="q-button q-button-primary"
-                >
-                  <Eye className="size-4" />
-                  {test.status === 'published' ? 'Open' : test.status}
-                </button>
-                <button
-                  disabled={test.status !== 'published'}
-                  title={
-                    test.status !== 'published'
-                      ? 'Publish this test before sharing it.'
-                      : 'Copy a direct link to this test'
-                  }
-                  onClick={() => void share(test.code)}
-                  className="q-button q-button-secondary"
-                >
-                  {copiedCode === test.code ? (
-                    <Check className="size-4 text-emerald-600" />
-                  ) : (
-                    <Copy className="size-4" />
-                  )}
-                  {copiedCode === test.code ? 'Link copied' : 'Copy link'}
-                </button>
-                {test.ownerId === user.uid ? (
-                  <>
-                    <button
-                      onClick={() => void edit(test.id)}
-                      className="q-button q-button-secondary"
-                    >
-                      <Pencil className="size-4" />
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => void edit(test.id, true)}
-                      className="q-button q-button-secondary"
-                    >
-                      <BarChart3 className="size-4" />
-                      Stats
-                    </button>
-                    <button
-                      title="Rotate code"
-                      onClick={() => void rotate(test.id)}
-                      className="q-button q-button-secondary px-3"
-                    >
-                      <RotateCcw className="size-4" />
-                    </button>
-                    <button
-                      title="Delete"
-                      onClick={() => void remove(test)}
-                      className="q-button q-button-secondary px-3 text-red-600"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
-                  </>
+              <h1 className="mt-3 text-3xl font-black tracking-tight sm:text-4xl">
+                Share one code. Start learning.
+              </h1>
+              <p className="mt-3 max-w-xl text-sm leading-6 text-blue-50/80">
+                Independent tests for quick classes, study groups, and public
+                practice—without creating a QBank.
+              </p>
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const normalized = joinCode
+                  .trim()
+                  .toUpperCase()
+                  .replace(/\s+/g, '');
+                if (normalized)
+                  onRunTest(
+                    normalized.startsWith('QF-')
+                      ? normalized
+                      : `QF-${normalized}`,
+                  );
+              }}
+              className="flex w-full max-w-md gap-2 rounded-2xl bg-white/12 p-2 ring-1 ring-white/20"
+            >
+              <input
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value)}
+                placeholder="Enter test code"
+                className="h-11 min-w-0 flex-1 rounded-xl bg-white px-4 font-mono font-bold uppercase text-slate-900 outline-none"
+              />
+              <button className="rounded-xl bg-white px-5 font-bold text-primary">
+                Join
+              </button>
+            </form>
+          </div>
+        </section>
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <div className="inline-flex rounded-2xl bg-muted p-1">
+            <button
+              onClick={() => setTab('mine')}
+              className={`rounded-xl px-5 py-2.5 text-sm font-bold ${tab === 'mine' ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground'}`}
+            >
+              My Tests
+            </button>
+            <button
+              onClick={() => setTab('public')}
+              className={`rounded-xl px-5 py-2.5 text-sm font-bold ${tab === 'public' ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground'}`}
+            >
+              Public Tests
+            </button>
+          </div>
+          <button
+            onClick={() => void load(true)}
+            disabled={busy}
+            className="q-button q-button-secondary"
+          >
+            <RefreshCw className={`size-4 ${busy ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+          {tab === 'mine' && (
+            <button
+              onClick={() => void create()}
+              className="q-button q-button-primary ml-auto"
+              aria-label={
+                !canCreate ? 'New test — Pro plan required' : undefined
+              }
+              title={!canCreate ? 'Upgrade to Pro to create a test' : undefined}
+            >
+              <span
+                aria-hidden="true"
+                className={`grid size-6 shrink-0 place-items-center rounded-lg transition-colors ${
+                  canCreate
+                    ? 'bg-white/15 text-current'
+                    : 'bg-amber-50 text-amber-700 shadow-sm ring-1 ring-inset ring-amber-300/80'
+                }`}
+              >
+                {canCreate ? (
+                  <Plus className="size-4" strokeWidth={2.4} />
                 ) : (
-                  <>
-                    <button
-                      onClick={() =>
-                        void api<{ leaderboard: PreformedLeaderboardEntry[] }>(
-                          `/preformed/leaderboard?id=${test.id}`,
-                        ).then((value) =>
-                          setStats({
-                            test: {
-                              ...test,
-                              questions: [],
-                              hasPasscode: false,
-                            },
-                            leaderboard: value.leaderboard,
-                            questionStats: [],
-                          }),
-                        )
-                      }
-                      className="q-button q-button-secondary"
-                    >
-                      <Trophy className="size-4" />
-                      Board
-                    </button>
-                    <button
-                      title="Report"
-                      onClick={() => void report(test.id)}
-                      className="q-button q-button-secondary px-3"
-                    >
-                      <Flag className="size-4" />
-                    </button>
-                    {user.role === 'super_admin' && user.mfaVerified && (
+                  <LockKeyhole className="size-3.5" strokeWidth={2.4} />
+                )}
+              </span>
+              New test
+            </button>
+          )}
+        </div>
+        {error && (
+          <output className="mt-4 block rounded-xl bg-muted p-3 text-sm">
+            {error}
+          </output>
+        )}
+        {!visible.length && !busy ? (
+          <div className={`${panelClass} mt-5 p-12 text-center`}>
+            <div className="mx-auto grid size-16 place-items-center rounded-2xl bg-primary/10 text-primary">
+              <Globe2 className="size-7" />
+            </div>
+            <h2 className="mt-4 text-xl font-bold">
+              {tab === 'mine' ? 'No tests yet' : 'No public tests yet'}
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {tab === 'mine'
+                ? 'Create a focused test and share its link or short code.'
+                : 'Published community tests will appear here.'}
+            </p>
+          </div>
+        ) : (
+          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {visible.map((test) => (
+              <article
+                key={test.id}
+                className={`${panelClass} flex min-h-64 flex-col p-5`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-black uppercase ${test.visibility === 'public' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-700'}`}
+                  >
+                    {test.visibility}
+                  </span>
+                  <span className="font-mono text-xs font-bold text-muted-foreground">
+                    {test.code}
+                  </span>
+                </div>
+                <h2 className="mt-4 line-clamp-2 text-xl font-bold">
+                  {test.title}
+                </h2>
+                <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+                  {test.description || `Created by ${test.ownerName}`}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-3 text-xs font-semibold text-muted-foreground">
+                  <span>{test.questionCount} questions</span>
+                  <span>·</span>
+                  <span>{test.participantCount} ranked</span>
+                  <span>·</span>
+                  <span>{test.settings.mode}</span>
+                </div>
+                <div className="mt-auto flex flex-wrap gap-2 pt-5">
+                  <button
+                    disabled={test.status !== 'published'}
+                    title={
+                      test.status !== 'published'
+                        ? 'Publish this test before opening it.'
+                        : undefined
+                    }
+                    onClick={() => onRunTest(test.code)}
+                    className="q-button q-button-primary"
+                  >
+                    <Eye className="size-4" />
+                    {test.status === 'published' ? 'Open' : test.status}
+                  </button>
+                  <button
+                    disabled={test.status !== 'published'}
+                    title={
+                      test.status !== 'published'
+                        ? 'Publish this test before sharing it.'
+                        : 'Copy a direct link to this test'
+                    }
+                    onClick={() => void share(test.code)}
+                    className="q-button q-button-secondary"
+                  >
+                    {copiedCode === test.code ? (
+                      <Check className="size-4 text-emerald-600" />
+                    ) : (
+                      <Copy className="size-4" />
+                    )}
+                    {copiedCode === test.code ? 'Link copied' : 'Copy link'}
+                  </button>
+                  {test.ownerId === user.uid ? (
+                    <>
                       <button
-                        onClick={() => void moderate(test.id)}
+                        onClick={() => void edit(test.id)}
+                        className="q-button q-button-secondary"
+                      >
+                        <Pencil className="size-4" />
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => void edit(test.id, true)}
+                        className="q-button q-button-secondary"
+                      >
+                        <BarChart3 className="size-4" />
+                        Stats
+                      </button>
+                      <button
+                        title="Rotate code"
+                        onClick={() => void rotate(test.id)}
+                        className="q-button q-button-secondary px-3"
+                      >
+                        <RotateCcw className="size-4" />
+                      </button>
+                      <button
+                        title="Delete"
+                        onClick={() => void remove(test)}
                         className="q-button q-button-secondary px-3 text-red-600"
                       >
-                        <ShieldAlert className="size-4" />
+                        <Trash2 className="size-4" />
                       </button>
-                    )}
-                  </>
-                )}
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
-      {editing && (
-        <TestEditor
-          user={user}
-          initial={editing}
-          onClose={() => {
-            setEditing(undefined);
-            void load(true);
-          }}
-          onSaved={(test) => {
-            setEditing(test);
-            if (test.visibility === 'public' && test.status === 'published')
-              setTab('public');
-            setTests((current) => {
-              const exists = current.some((item) => item.id === test.id);
-              return exists
-                ? current.map((item) => (item.id === test.id ? test : item))
-                : [test, ...current];
-            });
-          }}
-        />
-      )}
-      {stats && (
-        <div className="q-safe-overlay fixed inset-0 z-[80] overflow-y-auto bg-black/45 p-4 sm:p-8">
-          <section className="mx-auto max-w-4xl rounded-3xl bg-card p-5 shadow-2xl sm:p-7">
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold text-primary">RESULTS</p>
-                <h2 className="truncate text-2xl font-black">
-                  {stats.test.title}
-                </h2>
-              </div>
-              {stats.test.ownerId === user.uid && (
-                <button
-                  onClick={() => downloadResults(stats.test, stats.leaderboard)}
-                  className="q-button q-button-secondary"
-                >
-                  <Download className="size-4" />
-                  Export CSV
-                </button>
-              )}
-              <button
-                onClick={() => setStats(undefined)}
-                className="grid size-10 place-items-center rounded-xl hover:bg-muted"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-            <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_280px]">
-              <Leaderboard entries={stats.leaderboard} />
-              <div>
-                <h3 className="mb-3 font-bold">Question performance</h3>
-                {stats.questionStats.length ? (
-                  <div className="space-y-2">
-                    {stats.test.questions.map((question, index) => {
-                      const stat = stats.questionStats.find(
-                        (item) => item.questionId === question.id,
-                      );
-                      const rate = stat?.submissions
-                        ? Math.round((stat.correct / stat.submissions) * 100)
-                        : 0;
-                      return (
-                        <div
-                          key={question.id}
-                          className="rounded-xl border p-3"
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() =>
+                          void api<{
+                            leaderboard: PreformedLeaderboardEntry[];
+                          }>(`/preformed/leaderboard?id=${test.id}`).then(
+                            (value) =>
+                              setStats({
+                                test: {
+                                  ...test,
+                                  questions: [],
+                                  hasPasscode: false,
+                                },
+                                leaderboard: value.leaderboard,
+                                questionStats: [],
+                              }),
+                          )
+                        }
+                        className="q-button q-button-secondary"
+                      >
+                        <Trophy className="size-4" />
+                        Board
+                      </button>
+                      <button
+                        title="Report"
+                        onClick={() => void report(test.id)}
+                        className="q-button q-button-secondary px-3"
+                      >
+                        <Flag className="size-4" />
+                      </button>
+                      {user.role === 'super_admin' && user.mfaVerified && (
+                        <button
+                          onClick={() => void moderate(test.id)}
+                          className="q-button q-button-secondary px-3 text-red-600"
                         >
-                          <p className="line-clamp-2 text-xs font-semibold">
-                            {index + 1}. {question.stem}
-                          </p>
-                          <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
-                            <div
-                              className="h-full bg-emerald-500"
-                              style={{ width: `${rate}%` }}
-                            />
-                          </div>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {rate}% correct · {stat?.submissions ?? 0} signed-in
-                            submissions
-                          </p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Detailed analytics are available to the creator.
-                  </p>
+                          <ShieldAlert className="size-4" />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+        {editing && (
+          <TestEditor
+            user={user}
+            initial={editing}
+            onClose={() => {
+              setEditing(undefined);
+              void load(true);
+            }}
+            onSaved={(test) => {
+              setEditing(test);
+              if (test.visibility === 'public' && test.status === 'published')
+                setTab('public');
+              setTests((current) => {
+                const exists = current.some((item) => item.id === test.id);
+                return exists
+                  ? current.map((item) => (item.id === test.id ? test : item))
+                  : [test, ...current];
+              });
+            }}
+          />
+        )}
+        {stats && (
+          <div className="q-safe-overlay fixed inset-0 z-[80] overflow-y-auto bg-black/45 p-4 sm:p-8">
+            <section className="mx-auto max-w-4xl rounded-3xl bg-card p-5 shadow-2xl sm:p-7">
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold text-primary">RESULTS</p>
+                  <h2 className="truncate text-2xl font-black">
+                    {stats.test.title}
+                  </h2>
+                </div>
+                {stats.test.ownerId === user.uid && (
+                  <button
+                    onClick={() =>
+                      downloadResults(stats.test, stats.leaderboard)
+                    }
+                    className="q-button q-button-secondary"
+                  >
+                    <Download className="size-4" />
+                    Export CSV
+                  </button>
                 )}
+                <button
+                  onClick={() => setStats(undefined)}
+                  className="grid size-10 place-items-center rounded-xl hover:bg-muted"
+                >
+                  <X className="size-5" />
+                </button>
               </div>
-            </div>
-          </section>
-        </div>
-      )}
-      {confirmationDialog}
+              <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_280px]">
+                <Leaderboard entries={stats.leaderboard} />
+                <div>
+                  <h3 className="mb-3 font-bold">Question performance</h3>
+                  {stats.questionStats.length ? (
+                    <div className="space-y-2">
+                      {stats.test.questions.map((question, index) => {
+                        const stat = stats.questionStats.find(
+                          (item) => item.questionId === question.id,
+                        );
+                        const rate = stat?.submissions
+                          ? Math.round((stat.correct / stat.submissions) * 100)
+                          : 0;
+                        return (
+                          <div
+                            key={question.id}
+                            className="rounded-xl border p-3"
+                          >
+                            <p className="line-clamp-2 text-xs font-semibold">
+                              {index + 1}. {question.stem}
+                            </p>
+                            <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+                              <div
+                                className="h-full bg-emerald-500"
+                                style={{ width: `${rate}%` }}
+                              />
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {rate}% correct · {stat?.submissions ?? 0}{' '}
+                              signed-in submissions
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Detailed analytics are available to the creator.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
+        {confirmationDialog}
       </div>
     </>
   );

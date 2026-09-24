@@ -113,7 +113,7 @@ export function QBankManagement({
   );
   const plan = user.effectivePlan ?? user.tier;
   const canAddQuestions = hasFeature(plan, 'addQuestions');
-  const canImport = hasFeature(plan, 'jsonImport');
+  const canImport = user.role === 'super_admin' || hasFeature(plan, 'jsonImport');
   const canManageAccess = Boolean(bank && canManageBank(user, bank));
   const bankRole = bank
     ? bankRoleFor(user, bank, collaboration.memberships)
@@ -717,7 +717,7 @@ export function QBankManagement({
         {section === 'import' && (
           <section className="min-w-0 rounded-2xl bg-card p-3 ring-1 ring-border sm:p-6">
             <h2 className="mb-4 text-lg font-bold">Import JSON / Use AI</h2>
-            <QuestionImportReview bankId={bankId} onImported={result=>confirmUpdate(current=>({
+            <QuestionImportReview bankId={bankId} unlimited={user.role === 'super_admin'} onImported={result=>confirmUpdate(current=>({
               ...current,
               proposals:[...result.proposals,...current.proposals.filter(p=>!result.proposals.some(n=>n.id===p.id))],
               specialties:[...current.specialties,...result.specialties.filter(item=>!current.specialties.some(existing=>existing.id===item.id))],
