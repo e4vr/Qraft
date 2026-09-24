@@ -1,11 +1,19 @@
 import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
 
 export function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  let executable = command;
+  let executableArgs = args;
+  if (process.platform === 'win32' && (command === 'npm.cmd' || command === 'npx.cmd')) {
+    const cli = command === 'npm.cmd' ? 'npm-cli.js' : 'npx-cli.js';
+    executable = process.execPath;
+    executableArgs = [join(dirname(process.execPath), 'node_modules', 'npm', 'bin', cli), ...args];
+  }
+  const result = spawnSync(executable, executableArgs, {
     cwd: options.cwd,
     env: options.env ?? process.env,
     encoding: 'utf8',
-    shell: process.platform === 'win32',
+    shell: false,
     input: options.input,
     stdio: options.capture || options.input ? ['pipe', options.capture ? 'pipe' : 'inherit', options.capture ? 'pipe' : 'inherit'] : 'inherit',
   });
