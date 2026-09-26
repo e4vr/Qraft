@@ -1,4 +1,12 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+
+export function releaseMetadata() {
+  const serviceWorker = readFileSync('public/sw.js', 'utf8').match(/qraft-shell-(v[\d.]+)/)?.[1];
+  const schema = readdirSync('drizzle').filter(name => /^\d+.*\.sql$/.test(name)).sort().at(-1);
+  const packageVersion = readJson('package.json').version;
+  if (!serviceWorker || !schema || !packageVersion) throw new Error('Missing release metadata.');
+  return { serviceWorker, schema, packageVersion };
+}
 
 export const releaseResources = Object.freeze({
   production: Object.freeze({

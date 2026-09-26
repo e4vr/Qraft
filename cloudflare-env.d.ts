@@ -14,5 +14,8 @@ declare namespace Cloudflare {
     QUESTION_BACKUP_MAX_BYTES?: string;
     BUILD_VERSION?: string;
     BUILD_TIMESTAMP?: string;
+    BUILD_SERVICE_WORKER?: string;
+    BUILD_SCHEMA?: string;
+    BUILD_PACKAGE_VERSION?: string;
   }
 }

@@ -12,6 +12,9 @@ function withBuildIdentity(response: Response, env: Cloudflare.Env) {
   const headers = new Headers(response.headers);
   headers.set('x-qraft-build', env.BUILD_VERSION);
   if (env.BUILD_TIMESTAMP) headers.set('x-qraft-build-time', env.BUILD_TIMESTAMP);
+  if (env.BUILD_SERVICE_WORKER) headers.set('x-qraft-sw', env.BUILD_SERVICE_WORKER);
+  if (env.BUILD_SCHEMA) headers.set('x-qraft-schema', env.BUILD_SCHEMA);
+  if (env.BUILD_PACKAGE_VERSION) headers.set('x-qraft-app-version', env.BUILD_PACKAGE_VERSION);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
