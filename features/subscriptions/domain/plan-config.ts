@@ -200,7 +200,6 @@ export const ABUSE_LIMITS = {
   confirmedDuplicateAttempts: 10,
   rollingWindowDays: 30,
   jsonImportSuspensionDays: 7,
-  nearDuplicateSimilarity: 0.82,
 } as const;
 
 export function isPlanId(value: unknown): value is PlanId {

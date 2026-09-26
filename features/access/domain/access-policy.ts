@@ -102,7 +102,7 @@ export function canReviewBank(
   bank: QBank,
   memberships: QBankMembership[],
 ): boolean {
-  if (hasReviewerRole(user)) return true;
+  if (user.role === 'super_admin') return true;
   const bankRole = bankRoleFor(user, bank, memberships);
   if (
     bankRole === 'owner' ||
@@ -110,5 +110,5 @@ export function canReviewBank(
     bankRole === 'reviewer'
   )
     return true;
-  return false;
+  return bank.visibility === 'public' && hasReviewerRole(user);
 }

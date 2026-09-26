@@ -17,8 +17,15 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
   const bank = state.qbanks.find(item => item.id === qbankId);
   if (!bank || bank.archived || !canAccessBank(user, bank, state.memberships)) return json({ error: 'QBank access required.' }, 403);
   const config = input.config as TestBuilderConfig | undefined;
-  if (!config || typeof config.specialty !== 'string' || !Array.isArray(config.topics) || config.topics.some(topic => typeof topic !== 'string') || !Array.isArray(config.statuses) || config.statuses.some(status => !['new','previous','correct','incorrect','flagged'].includes(status)))
+  const included = config?.includedTopics;
+  const validIncluded = included === undefined || (
+    Array.isArray(included) && included.every(item =>
+      item && typeof item.specialty === 'string' && typeof item.topic === 'string',
+    )
+  );
+  if (!config || typeof config.specialty !== 'string' || !Array.isArray(config.topics) || config.topics.some(topic => typeof topic !== 'string') || !validIncluded || !Array.isArray(config.statuses) || config.statuses.some(status => !['new','previous','correct','incorrect','flagged'].includes(status)))
     return json({ error: 'Invalid test filters.' }, 400);
+  const includedTopics = JSON.stringify(included ?? []);
   const select = input.select === true;
   const limit = getPlanLimits(user.effectivePlan ?? user.tier).maxQuestionsPerExam;
   if (select && (!Number.isInteger(config.count) || config.count < 1 || config.count > limit)) return json({ error: `Your plan allows at most ${limit} questions per test.` }, 403);
@@ -46,8 +53,15 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
       SELECT q.id,q.payload FROM effective q CROSS JOIN app
       LEFT JOIN json_each(coalesce(?,json_extract(app.payload,'$.progress'),'{}')) p ON p.key=q.id
       WHERE ?=1 OR (
-        (?='' OR json_extract(q.payload,'$.specialty')=?)
-        AND (json_array_length(?)=0 OR json_extract(q.payload,'$.topic') IN (SELECT value FROM json_each(?)))
+        (
+          (json_array_length(?)=0 AND (?='' OR json_extract(q.payload,'$.specialty')=?)
+            AND (json_array_length(?)=0 OR json_extract(q.payload,'$.topic') IN (SELECT value FROM json_each(?))))
+          OR EXISTS (
+            SELECT 1 FROM json_each(?) selected
+            WHERE json_extract(selected.value,'$.specialty')=json_extract(q.payload,'$.specialty')
+              AND json_extract(selected.value,'$.topic')=json_extract(q.payload,'$.topic')
+          )
+        )
         AND (json_array_length(?)=0 OR EXISTS (
           SELECT 1 FROM json_each(?) s WHERE
             (s.value='new' AND coalesce(json_extract(p.value,'$.attempts'),0)=0) OR
@@ -58,7 +72,7 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
         ))
       )
     )`;
-  const bindings = [user.uid, qbankId, qbankId, progress, config.randomAll ? 1 : 0, config.specialty, config.specialty, JSON.stringify(config.topics), JSON.stringify(config.topics), JSON.stringify(config.statuses), JSON.stringify(config.statuses)];
+  const bindings = [user.uid, qbankId, qbankId, progress, config.randomAll ? 1 : 0, includedTopics, config.specialty, config.specialty, JSON.stringify(config.topics), JSON.stringify(config.topics), includedTopics, JSON.stringify(config.statuses), JSON.stringify(config.statuses)];
   if (!select) {
     const count = await env.DB.prepare(`${sql} SELECT count(*) AS eligible FROM eligible`).bind(...bindings).first<{ eligible: number }>();
     return json({ eligible: count?.eligible ?? 0 });
