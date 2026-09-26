@@ -52,6 +52,35 @@ void test('desktop and handheld dashboards share one domain model', async () => 
   assert.doesNotMatch(model, /window\.|document\.|@\/components\//);
 });
 
+void test('iPad rail exposes ten ordered destinations without changing phone navigation', async () => {
+  const navigation = await source('components/study-mobile-nav.tsx');
+  const app = await source('components/medguard-app.tsx');
+  const shell = await source('components/presentation/qraft-app-shell.tsx');
+  const styles = await source('app/globals.css');
+
+  const handheldBlock = navigation.match(/const primaryItems = \[([\s\S]*?)\] as const;/)?.[1] ?? '';
+  assert.deepEqual(
+    [...handheldBlock.matchAll(/id: '([^']+)'/g)].map((match) => match[1]),
+    ['dashboard', 'library', 'create', 'flashcards', 'progress'],
+  );
+  const tabletBlock = navigation.match(/const tabletCoreItems = \[([\s\S]*?)\] as const;/)?.[1] ?? '';
+  assert.deepEqual(
+    [...tabletBlock.matchAll(/id: '([^']+)'/g)].map((match) => match[1]),
+    ['dashboard', 'library', 'create', 'preformed', 'history', 'flashcards', 'progress', 'settings'],
+  );
+  assert.match(navigation, /const TABLET_RAIL_ITEM_LIMIT = 10/);
+  assert.match(navigation, /\.\.\.tabletCoreItems,[\s\S]*showReview[\s\S]*tabletContactItem[\s\S]*showSubscribe[\s\S]*\.\.\.tabletCommunityItems,[\s\S]*\.slice\(0, TABLET_RAIL_ITEM_LIMIT\)/);
+  assert.match(navigation, /\{primaryItems\.map\(\(item\) =>/);
+  assert.match(navigation, /\{tabletItems\.map\(\(item\) =>/);
+  assert.match(navigation, /aria-label="More"[\s\S]*onClick=\{onMore\}/);
+  assert.match(app, /showReview=\{showReview\}/);
+  assert.match(app, /showSubscribe=\{\(user\.effectivePlan \?\? user\.tier\) !== 'unlimited'\}/);
+  assert.match(shell, /mode === 'handheld' && handheldNavigation/);
+  assert.match(shell, /mode === 'tablet' && tabletNavigation/);
+  assert.match(styles, /\.q-tablet-rail \{[\s\S]*gap: clamp\(2px, \.55vh, var\(--q-space-2\)\)/);
+  assert.match(styles, /\.q-tablet-rail button \{[\s\S]*min-height: clamp\(48px, 6vh, 56px\)/);
+});
+
 void test('semantic study destinations are directly routable', async () => {
   const routes = [
     'study/page.tsx',
@@ -71,12 +100,18 @@ void test('semantic study destinations are directly routable', async () => {
   }
 });
 
-void test('PWA allows zoom and exposes controlled update behavior', async () => {
+void test('PWA locks installed-mode zoom and exposes controlled update behavior', async () => {
   const layout = await source('app/layout.tsx');
+  const presentation = await source('features/presentation/presentation-context.tsx');
   const manifest = JSON.parse(await source('public/manifest.webmanifest'));
   const worker = await source('public/sw.js');
 
-  assert.doesNotMatch(layout, /maximumScale|userScalable|gesturestart|touchmove/);
+  assert.doesNotMatch(layout, /maximumScale|userScalable/);
+  assert.doesNotMatch(layout, /user-scalable=no|maximum-scale=1|minimum-scale=1/);
+  assert.match(presentation, /if \(!environment\.standalone\) return/);
+  assert.match(presentation, /installStandaloneTouchGuards/);
+  assert.match(presentation, /event\.touches\.length > 1/);
+  assert.match(presentation, /document\.addEventListener\('gesturestart'/);
   assert.ok(manifest.display_override.includes('standalone'));
   assert.ok(manifest.shortcuts.some((item) => item.url === '/exams/new'));
   assert.match(worker, /QRAFT_SKIP_WAITING/);

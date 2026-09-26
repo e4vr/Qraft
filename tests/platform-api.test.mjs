@@ -161,18 +161,15 @@ print(json.dumps(out))`,
               ? 'unlimited'
               : 'lite',
       status: 'approved',
-      role:
-        uid === 'admin'
-          ? 'super_admin'
-          : 'student',
+      role: uid === 'admin' ? 'super_admin' : 'student',
       platformRoles:
         uid === 'moderator'
           ? ['moderator']
           : uid === 'reviewer' || uid === 'reviewer2'
-          ? ['reviewer']
-          : uid === 'access'
-            ? ['access_manager']
-            : [],
+            ? ['reviewer']
+            : uid === 'access'
+              ? ['access_manager']
+              : [],
       phone: `private-${uid}`,
       universityId: uid,
       createdAt: new Date().toISOString(),
@@ -272,97 +269,255 @@ print(json.dumps(out))`,
     });
   };
   let codeId;
-  await t.test('Superadmin plan assignments override every entitlement, including Free, and preserve billing and gifts', async () => {
-    const uid = 'override-member', now = new Date().toISOString(), future = new Date(Date.now()+86400000*365).toISOString();
-    await db.prepare("UPDATE profiles SET profile_json=json_set(profile_json,'$.tier','unlimited') WHERE uid=?").bind(uid).run();
-    await db.prepare("INSERT INTO subscriptions(user_id,status,method,paid,updated_at,plan,expires_at) VALUES(?,'active','manual',9900,?,'unlimited',?)").bind(uid,now,future).run();
-    await db.prepare("INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,expires_at,source) VALUES('override-gift',?,'unlimited',1,'year','active',?,?,'admin')").bind(uid,now,future).run();
-    await db.prepare("INSERT INTO admin_plan_entitlements(id,user_id,plan,reason,granted_by,created_at) VALUES('override-old-admin',?,'unlimited','test','admin',?)").bind(uid,now).run();
-    for (const role of ['free','moderator','access']) assert.equal((await call(role,'/platform/subscriptions',{operation:'override',userId:uid,plan:'free'})).status,403);
-    for (const plan of ['free','lite','pro','unlimited','free']) {
-      const changed = await call('admin','/platform/subscriptions',{operation:'override',userId:uid,plan,expires_at:null,reason:'Explicit admin assignment'});
-      assert.equal(changed.status,200,JSON.stringify(changed.data)); assert.equal(changed.data.effectivePlan,plan);
-      const session = await call(uid,'/auth/session'); assert.equal(session.data.user.tier,plan); assert.equal(session.data.user.adminOverridePlan,plan);
-      const listing = await call('admin',`/platform/subscriptions?search=${uid}&status=${plan}`);
-      assert.equal(listing.data.subscriptions[0].tier,plan); assert.equal(listing.data.summary.total,1);
-      assert.equal(listing.data.subscriptions[0].override_plan,plan);
-    }
-    assert.equal((await call('admin','/platform/subscriptions',{operation:'override',userId:uid,plan:'invalid'})).status,400);
-    assert.equal((await call('admin','/platform/subscriptions',{operation:'override',userId:uid,plan:'pro',expires_at:'2020-01-01'})).status,400);
-    assert.equal((await call(uid,'/auth/session')).data.user.tier,'free');
-    // A gift activated after assignment must not bypass the assignment either.
-    await db.prepare("INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,source) VALUES('override-new-gift',?,'unlimited',1,'year','available',?,'admin')").bind(uid,now).run();
-    const gift = await call(uid,'/platform/rewards',{operation:'activate',passId:'override-new-gift'});
-    assert.equal(gift.status,200,JSON.stringify(gift.data)); assert.equal((await call(uid,'/auth/session')).data.user.tier,'free');
-    const billing = await db.prepare('SELECT plan,paid FROM subscriptions WHERE user_id=?').bind(uid).first();
-    assert.equal(billing.plan,'unlimited'); assert.equal(billing.paid,9900);
-    assert.equal((await db.prepare("SELECT status FROM reward_passes WHERE id='override-gift'").first()).status,'active');
-    const logged = await db.prepare("SELECT count(*) AS n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='subscription_plan_overridden' AND json_extract(payload,'$.entityId')=?").bind(uid).first(); assert.equal(logged.n,5);
-    await db.prepare("UPDATE account_plan_overrides SET expires_at='2020-01-01' WHERE user_id=?").bind(uid).run();
-    assert.equal((await call(uid,'/auth/session')).data.user.tier,'unlimited');
-  });
+  await t.test(
+    'Superadmin plan assignments override every entitlement, including Free, and preserve billing and gifts',
+    async () => {
+      const uid = 'override-member',
+        now = new Date().toISOString(),
+        future = new Date(Date.now() + 86400000 * 365).toISOString();
+      await db
+        .prepare(
+          "UPDATE profiles SET profile_json=json_set(profile_json,'$.tier','unlimited') WHERE uid=?",
+        )
+        .bind(uid)
+        .run();
+      await db
+        .prepare(
+          "INSERT INTO subscriptions(user_id,status,method,paid,updated_at,plan,expires_at) VALUES(?,'active','manual',9900,?,'unlimited',?)",
+        )
+        .bind(uid, now, future)
+        .run();
+      await db
+        .prepare(
+          "INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,expires_at,source) VALUES('override-gift',?,'unlimited',1,'year','active',?,?,'admin')",
+        )
+        .bind(uid, now, future)
+        .run();
+      await db
+        .prepare(
+          "INSERT INTO admin_plan_entitlements(id,user_id,plan,reason,granted_by,created_at) VALUES('override-old-admin',?,'unlimited','test','admin',?)",
+        )
+        .bind(uid, now)
+        .run();
+      for (const role of ['free', 'moderator', 'access'])
+        assert.equal(
+          (
+            await call(role, '/platform/subscriptions', {
+              operation: 'override',
+              userId: uid,
+              plan: 'free',
+            })
+          ).status,
+          403,
+        );
+      for (const plan of ['free', 'lite', 'pro', 'unlimited', 'free']) {
+        const changed = await call('admin', '/platform/subscriptions', {
+          operation: 'override',
+          userId: uid,
+          plan,
+          expires_at: null,
+          reason: 'Explicit admin assignment',
+        });
+        assert.equal(changed.status, 200, JSON.stringify(changed.data));
+        assert.equal(changed.data.effectivePlan, plan);
+        const session = await call(uid, '/auth/session');
+        assert.equal(session.data.user.tier, plan);
+        assert.equal(session.data.user.adminOverridePlan, plan);
+        const listing = await call(
+          'admin',
+          `/platform/subscriptions?search=${uid}&status=${plan}`,
+        );
+        assert.equal(listing.data.subscriptions[0].tier, plan);
+        assert.equal(listing.data.summary.total, 1);
+        assert.equal(listing.data.subscriptions[0].override_plan, plan);
+      }
+      assert.equal(
+        (
+          await call('admin', '/platform/subscriptions', {
+            operation: 'override',
+            userId: uid,
+            plan: 'invalid',
+          })
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await call('admin', '/platform/subscriptions', {
+            operation: 'override',
+            userId: uid,
+            plan: 'pro',
+            expires_at: '2020-01-01',
+          })
+        ).status,
+        400,
+      );
+      assert.equal((await call(uid, '/auth/session')).data.user.tier, 'free');
+      // A gift activated after assignment must not bypass the assignment either.
+      await db
+        .prepare(
+          "INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,source) VALUES('override-new-gift',?,'unlimited',1,'year','available',?,'admin')",
+        )
+        .bind(uid, now)
+        .run();
+      const gift = await call(uid, '/platform/rewards', {
+        operation: 'activate',
+        passId: 'override-new-gift',
+      });
+      assert.equal(gift.status, 200, JSON.stringify(gift.data));
+      assert.equal((await call(uid, '/auth/session')).data.user.tier, 'free');
+      const billing = await db
+        .prepare('SELECT plan,paid FROM subscriptions WHERE user_id=?')
+        .bind(uid)
+        .first();
+      assert.equal(billing.plan, 'unlimited');
+      assert.equal(billing.paid, 9900);
+      assert.equal(
+        (
+          await db
+            .prepare(
+              "SELECT status FROM reward_passes WHERE id='override-gift'",
+            )
+            .first()
+        ).status,
+        'active',
+      );
+      const logged = await db
+        .prepare(
+          "SELECT count(*) AS n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='subscription_plan_overridden' AND json_extract(payload,'$.entityId')=?",
+        )
+        .bind(uid)
+        .first();
+      assert.equal(logged.n, 5);
+      await db
+        .prepare(
+          "UPDATE account_plan_overrides SET expires_at='2020-01-01' WHERE user_id=?",
+        )
+        .bind(uid)
+        .run();
+      assert.equal(
+        (await call(uid, '/auth/session')).data.user.tier,
+        'unlimited',
+      );
+    },
+  );
 
-  await t.test('Discount search and usage history use independent server pagination', async () => {
-    const now=new Date().toISOString();
-    await db.batch(Array.from({length:52},(_,i)=>db.prepare('INSERT INTO discount_codes(id,code,kind,amount,enabled,max_uses,per_user,updated_at) VALUES(?,?,?,10,0,NULL,1,?)').bind(`table-qa-${i}`,`TABLE_QA_${i}`,'percent',now)));
-    const first=await call('admin','/platform/discounts?search=TABLE_QA_&status=disabled');
-    assert.equal(first.status,200); assert.equal(first.data.summary.total,52); assert.equal(first.data.codes.length,51);
-    const next=await call('admin','/platform/discounts?search=TABLE_QA_&status=disabled&offset=50');
-    assert.equal(next.data.codes.length,2);
-    const active=await call('admin','/platform/discounts?search=TABLE_QA_&status=active'); assert.equal(active.data.summary.total,0);
-    await db.batch(Array.from({length:52},(_,i)=>db.prepare("INSERT INTO subscription_events(id,user_id,email,name,code_id,code,action,original,discount,final,status,created_at,detail) VALUES(?,?,?,?,?,?,'test',100,10,90,'success',?,'test')").bind(`table-event-${i}`,'override-member','test@example.test','Test member','table-qa-0','TABLE_QA_0',now)));
-    const history=await call('admin','/platform/discounts?search=TABLE_QA_&offset=50&id=table-qa-0&usageOffset=0');
-    assert.equal(history.data.codes.length,2); assert.equal(history.data.events.length,51);
-    const historyNext=await call('admin','/platform/discounts?search=TABLE_QA_&offset=0&id=table-qa-0&usageOffset=50');
-    assert.equal(historyNext.data.codes.length,51); assert.equal(historyNext.data.events.length,2);
-    await db.batch([db.prepare("DELETE FROM subscription_events WHERE id LIKE 'table-event-%'"),db.prepare("DELETE FROM discount_codes WHERE id LIKE 'table-qa-%'")]);
-  });
-  await t.test('Subscription and coupon timestamps are compared and stored canonically', async () => {
-    const couponId = randomUUID();
-    const coupon = await call('admin', '/platform/discounts', {
-      id: couponId,
-      code: 'DATE_BOUNDARY',
-      kind: 'percent',
-      amount: 10,
-      enabled: true,
-      max_uses: null,
-      per_user: null,
-      starts_at: '2030-01-01T00:00:00+14:00',
-      expires_at: '2029-12-31T12:00:00Z',
-      allowedPlans: ['pro'],
-    });
-    assert.equal(coupon.status, 200, JSON.stringify(coupon));
-    const storedCoupon = await db
-      .prepare('SELECT starts_at,expires_at FROM discount_codes WHERE id=?')
-      .bind(couponId)
-      .first();
-    assert.deepEqual(storedCoupon, {
-      starts_at: '2029-12-31T10:00:00.000Z',
-      expires_at: '2029-12-31T12:00:00.000Z',
-    });
+  await t.test(
+    'Discount search and usage history use independent server pagination',
+    async () => {
+      const now = new Date().toISOString();
+      await db.batch(
+        Array.from({ length: 52 }, (_, i) =>
+          db
+            .prepare(
+              'INSERT INTO discount_codes(id,code,kind,amount,enabled,max_uses,per_user,updated_at) VALUES(?,?,?,10,0,NULL,1,?)',
+            )
+            .bind(`table-qa-${i}`, `TABLE_QA_${i}`, 'percent', now),
+        ),
+      );
+      const first = await call(
+        'admin',
+        '/platform/discounts?search=TABLE_QA_&status=disabled',
+      );
+      assert.equal(first.status, 200);
+      assert.equal(first.data.summary.total, 52);
+      assert.equal(first.data.codes.length, 51);
+      const next = await call(
+        'admin',
+        '/platform/discounts?search=TABLE_QA_&status=disabled&offset=50',
+      );
+      assert.equal(next.data.codes.length, 2);
+      const active = await call(
+        'admin',
+        '/platform/discounts?search=TABLE_QA_&status=active',
+      );
+      assert.equal(active.data.summary.total, 0);
+      await db.batch(
+        Array.from({ length: 52 }, (_, i) =>
+          db
+            .prepare(
+              "INSERT INTO subscription_events(id,user_id,email,name,code_id,code,action,original,discount,final,status,created_at,detail) VALUES(?,?,?,?,?,?,'test',100,10,90,'success',?,'test')",
+            )
+            .bind(
+              `table-event-${i}`,
+              'override-member',
+              'test@example.test',
+              'Test member',
+              'table-qa-0',
+              'TABLE_QA_0',
+              now,
+            ),
+        ),
+      );
+      const history = await call(
+        'admin',
+        '/platform/discounts?search=TABLE_QA_&offset=50&id=table-qa-0&usageOffset=0',
+      );
+      assert.equal(history.data.codes.length, 2);
+      assert.equal(history.data.events.length, 51);
+      const historyNext = await call(
+        'admin',
+        '/platform/discounts?search=TABLE_QA_&offset=0&id=table-qa-0&usageOffset=50',
+      );
+      assert.equal(historyNext.data.codes.length, 51);
+      assert.equal(historyNext.data.events.length, 2);
+      await db.batch([
+        db.prepare(
+          "DELETE FROM subscription_events WHERE id LIKE 'table-event-%'",
+        ),
+        db.prepare("DELETE FROM discount_codes WHERE id LIKE 'table-qa-%'"),
+      ]);
+    },
+  );
+  await t.test(
+    'Subscription and coupon timestamps are compared and stored canonically',
+    async () => {
+      const couponId = randomUUID();
+      const coupon = await call('admin', '/platform/discounts', {
+        id: couponId,
+        code: 'DATE_BOUNDARY',
+        kind: 'percent',
+        amount: 10,
+        enabled: true,
+        max_uses: null,
+        per_user: null,
+        starts_at: '2030-01-01T00:00:00+14:00',
+        expires_at: '2029-12-31T12:00:00Z',
+        allowedPlans: ['pro'],
+      });
+      assert.equal(coupon.status, 200, JSON.stringify(coupon));
+      const storedCoupon = await db
+        .prepare('SELECT starts_at,expires_at FROM discount_codes WHERE id=?')
+        .bind(couponId)
+        .first();
+      assert.deepEqual(storedCoupon, {
+        starts_at: '2029-12-31T10:00:00.000Z',
+        expires_at: '2029-12-31T12:00:00.000Z',
+      });
 
-    const subscription = await call('admin', '/platform/subscriptions', {
-      operation: 'activate',
-      userId: 'manual-member',
-      plan: 'pro',
-      expires_at: 'Wed, 02 Jan 2030 00:00:00 GMT',
-      paid: 5000,
-    });
-    assert.equal(subscription.status, 200, JSON.stringify(subscription));
-    assert.equal(
-      (
-        await db
-          .prepare('SELECT expires_at FROM subscriptions WHERE user_id=?')
-          .bind('manual-member')
-          .first()
-      ).expires_at,
-      '2030-01-02T00:00:00.000Z',
-    );
-    await db.batch([
-      db.prepare('DELETE FROM discount_codes WHERE id=?').bind(couponId),
-      db.prepare("DELETE FROM subscriptions WHERE user_id='manual-member'"),
-    ]);
-  });
+      const subscription = await call('admin', '/platform/subscriptions', {
+        operation: 'activate',
+        userId: 'manual-member',
+        plan: 'pro',
+        expires_at: 'Wed, 02 Jan 2030 00:00:00 GMT',
+        paid: 5000,
+      });
+      assert.equal(subscription.status, 200, JSON.stringify(subscription));
+      assert.equal(
+        (
+          await db
+            .prepare('SELECT expires_at FROM subscriptions WHERE user_id=?')
+            .bind('manual-member')
+            .first()
+        ).expires_at,
+        '2030-01-02T00:00:00.000Z',
+      );
+      await db.batch([
+        db.prepare('DELETE FROM discount_codes WHERE id=?').bind(couponId),
+        db.prepare("DELETE FROM subscriptions WHERE user_id='manual-member'"),
+      ]);
+    },
+  );
 
   await t.test('R2 uploads are private, hashed, and deduplicated', async () => {
     const first = await uploadImage('pro');
@@ -393,7 +548,10 @@ print(json.dumps(out))`,
       .prepare("UPDATE counters SET value=? WHERE id='r2-storage-bytes'")
       .bind(storage.value)
       .run();
-    assert.equal((await uploadImage('pro', 'new.png', 'different')).status, 429);
+    assert.equal(
+      (await uploadImage('pro', 'new.png', 'different')).status,
+      429,
+    );
     assert.equal(
       (
         await mf.dispatchFetch(`https://qraft.test${uploaded.url}`, {
@@ -544,7 +702,11 @@ print(json.dumps(out))`,
       const suspendManual = await save([
         profileOp('manual-member', { suspended: true }),
       ]);
-      assert.equal(suspendManual.status, 200, JSON.stringify(suspendManual.data));
+      assert.equal(
+        suspendManual.status,
+        200,
+        JSON.stringify(suspendManual.data),
+      );
       const stored = JSON.parse(
         (
           await db
@@ -569,11 +731,7 @@ print(json.dumps(out))`,
           200,
         );
         assert.equal(
-          (
-            await save([
-              profileOp(uid, { tier: 'pro' }),
-            ])
-          ).status,
+          (await save([profileOp(uid, { tier: 'pro' })])).status,
           403,
         );
         for (const kind of ['emails', 'universityIds']) {
@@ -698,56 +856,65 @@ print(json.dumps(out))`,
       );
     },
   );
-  await t.test('Free exam allowance is lifetime-based and server enforced', async () => {
-    assert.equal(
-      (
-        await call('free', '/platform/exam-start', {
+  await t.test(
+    'Free exam allowance is lifetime-based and server enforced',
+    async () => {
+      assert.equal(
+        (
+          await call('free', '/platform/exam-start', {
+            testId: randomUUID(),
+            questionCount: 16,
+          })
+        ).status,
+        403,
+      );
+      for (let index = 0; index < 2; index += 1) {
+        const started = await call('free', '/platform/exam-start', {
           testId: randomUUID(),
-          questionCount: 16,
-        })
-      ).status,
-      403,
-    );
-    for (let index = 0; index < 2; index += 1) {
-      const started = await call('free', '/platform/exam-start', {
+          questionCount: 15,
+        });
+        assert.equal(started.status, 201, JSON.stringify(started));
+      }
+      const blocked = await call('free', '/platform/exam-start', {
         testId: randomUUID(),
-        questionCount: 15,
+        questionCount: 1,
       });
-      assert.equal(started.status, 201, JSON.stringify(started));
-    }
-    const blocked = await call('free', '/platform/exam-start', {
-      testId: randomUUID(),
-      questionCount: 1,
-    });
-    assert.equal(blocked.status, 403);
-    assert.match(blocked.data.error, /lifetime/i);
-    const status = await call('free', '/platform/plan-status');
-    assert.equal(status.data.plan, 'free');
-    assert.equal(status.data.usage.lifetimeStartedExams, 2);
-  });
-  await t.test('Pro monthly exam limit is enforced at exactly 250 starts', async () => {
-    const now = new Date().toISOString();
-    await db
-      .prepare(`INSERT INTO test_registry(user_id,test_id,question_count,started_at)
+      assert.equal(blocked.status, 403);
+      assert.match(blocked.data.error, /lifetime/i);
+      const status = await call('free', '/platform/plan-status');
+      assert.equal(status.data.plan, 'free');
+      assert.equal(status.data.usage.lifetimeStartedExams, 2);
+    },
+  );
+  await t.test(
+    'Pro monthly exam limit is enforced at exactly 250 starts',
+    async () => {
+      const now = new Date().toISOString();
+      await db
+        .prepare(`INSERT INTO test_registry(user_id,test_id,question_count,started_at)
         SELECT 'pro-limit','pro-limit-'||value,1,? FROM json_each(?)`)
-      .bind(now, JSON.stringify(Array.from({ length: 249 }, (_, index) => index)))
-      .run();
-    assert.equal(
-      (
-        await call('pro-limit', '/platform/exam-start', {
-          testId: randomUUID(),
-          questionCount: 200,
-        })
-      ).status,
-      201,
-    );
-    const blocked = await call('pro-limit', '/platform/exam-start', {
-      testId: randomUUID(),
-      questionCount: 1,
-    });
-    assert.equal(blocked.status, 403);
-    assert.match(blocked.data.error, /monthly/i);
-  });
+        .bind(
+          now,
+          JSON.stringify(Array.from({ length: 249 }, (_, index) => index)),
+        )
+        .run();
+      assert.equal(
+        (
+          await call('pro-limit', '/platform/exam-start', {
+            testId: randomUUID(),
+            questionCount: 200,
+          })
+        ).status,
+        201,
+      );
+      const blocked = await call('pro-limit', '/platform/exam-start', {
+        testId: randomUUID(),
+        questionCount: 1,
+      });
+      assert.equal(blocked.status, 403);
+      assert.match(blocked.data.error, /monthly/i);
+    },
+  );
   await t.test('Free redemption is atomic and idempotent', async () => {
     codeId = randomUUID();
     assert.equal(
@@ -828,7 +995,9 @@ print(json.dumps(out))`,
         .first();
       assert.deepEqual(paid, { plan: 'pro', status: 'active' });
       await db
-        .prepare("UPDATE reward_passes SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?")
+        .prepare(
+          "UPDATE reward_passes SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+        )
         .bind(redemption.data.pass.id)
         .run();
       assert.equal((await call('lite', '/auth/session')).data.user.tier, 'pro');
@@ -871,7 +1040,10 @@ print(json.dumps(out))`,
       };
       const make = (id, count) => ({
         id,
-        questionIds: Array.from({ length: count }, (_, index) => `${id}-q-${index}`),
+        questionIds: Array.from(
+          { length: count },
+          (_, index) => `${id}-q-${index}`,
+        ),
         currentIndex: 0,
         answers: {},
         revealed: [],
@@ -891,7 +1063,10 @@ print(json.dumps(out))`,
       for (let i = 0; i < 30; i++) {
         state.tests.push(make(`test-${i}`, 30));
       }
-      assert.equal((await call('other', '/state', { state }, 'PUT')).status, 200);
+      assert.equal(
+        (await call('other', '/state', { state }, 'PUT')).status,
+        200,
+      );
       const duplicateTitles = {
         ...state,
         tests: [
@@ -907,7 +1082,9 @@ print(json.dumps(out))`,
       const denied = await call(
         'other',
         '/state',
-        { state: { ...state, tests: [...state.tests, make('thirty-first', 1)] } },
+        {
+          state: { ...state, tests: [...state.tests, make('thirty-first', 1)] },
+        },
         'PUT',
       );
       assert.equal(denied.status, 403, JSON.stringify(denied));
@@ -925,7 +1102,9 @@ print(json.dumps(out))`,
         403,
       );
       await db
-        .prepare("UPDATE test_registry SET started_at='2000-01-01T00:00:00.000Z' WHERE user_id='other'")
+        .prepare(
+          "UPDATE test_registry SET started_at='2000-01-01T00:00:00.000Z' WHERE user_id='other'",
+        )
         .run();
       assert.equal(
         (
@@ -1056,6 +1235,47 @@ print(json.dumps(out))`,
           .run();
       }
 
+      const unrelatedReviewer = await call('reviewer', '/collaboration');
+      assert.equal(unrelatedReviewer.status, 200);
+      assert.equal(
+        unrelatedReviewer.data.collaboration.qbanks.some(
+          (item) => item.id === bank.id,
+        ),
+        false,
+      );
+
+      const reviewerMembership = {
+        id: 'editor-bank-reviewer2',
+        qbankId: bank.id,
+        userId: 'reviewer2',
+        userName: 'reviewer2',
+        role: 'reviewer',
+        grantedById: 'lite',
+        grantedByName: 'lite',
+        createdAt: now,
+      };
+      await db
+        .prepare(
+          'INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES(?,?,?,?,?,?)',
+        )
+        .bind(
+          'qbankMemberships',
+          reviewerMembership.id,
+          bank.id,
+          reviewerMembership.userId,
+          JSON.stringify(reviewerMembership),
+          now,
+        )
+        .run();
+      const assignedReviewer = await call('reviewer2', '/collaboration');
+      assert.equal(assignedReviewer.status, 200);
+      assert.equal(
+        assignedReviewer.data.collaboration.qbanks.some(
+          (item) => item.id === bank.id,
+        ),
+        true,
+      );
+
       const invitation = {
         id: 'editor-bank-invite',
         qbankId: bank.id,
@@ -1145,7 +1365,8 @@ print(json.dumps(out))`,
       const loaded = await call('editor', '/collaboration');
       assert.equal(loaded.status, 200);
       assert.equal(
-        loaded.data.collaboration.qbanks.find((item) => item.id === bank.id)?.name,
+        loaded.data.collaboration.qbanks.find((item) => item.id === bank.id)
+          ?.name,
         bank.name,
       );
       assert.ok(
@@ -1191,7 +1412,11 @@ print(json.dumps(out))`,
         },
         'PUT',
       );
-      assert.equal(classification.status, 200, JSON.stringify(classification.data));
+      assert.equal(
+        classification.status,
+        200,
+        JSON.stringify(classification.data),
+      );
 
       assert.equal(
         (
@@ -1238,7 +1463,11 @@ print(json.dumps(out))`,
                   collection: 'qbankMemberships',
                   id: 'invalid-owner-membership',
                   type: 'set',
-                  value: { ...viewerMembership, id: 'invalid-owner-membership', role: 'owner' },
+                  value: {
+                    ...viewerMembership,
+                    id: 'invalid-owner-membership',
+                    role: 'owner',
+                  },
                 },
               ],
             },
@@ -1266,6 +1495,229 @@ print(json.dumps(out))`,
         ).status,
         200,
       );
+    },
+  );
+  await t.test(
+    'a created QBank and later property changes remain in D1 after a fresh read',
+    async () => {
+      const now = new Date().toISOString();
+      const bank = {
+        id: `sync-bank-${randomUUID()}`,
+        name: 'Created bank',
+        shortName: 'CREATED',
+        description: 'Before update',
+        createdAt: now,
+        createdById: 'pro',
+        createdByName: 'pro',
+        ownerId: 'pro',
+        ownerName: 'pro',
+        visibility: 'private',
+        shareEnabled: false,
+        reviewerIds: [],
+        viewerIds: [],
+        archived: false,
+        essential: false,
+      };
+      const create = await call(
+        'pro',
+        '/collaboration',
+        {
+          operations: [
+            { collection: 'qbanks', id: bank.id, type: 'set', value: bank },
+          ],
+        },
+        'PUT',
+      );
+      assert.equal(create.status, 200, JSON.stringify(create.data));
+      assert.equal(
+        (await call('pro', '/collaboration')).data.collaboration.qbanks.find(
+          (item) => item.id === bank.id,
+        )?.name,
+        bank.name,
+      );
+
+      const updated = {
+        ...bank,
+        name: 'Renamed bank',
+        description: 'After update',
+      };
+      const edit = await call(
+        'pro',
+        '/collaboration',
+        {
+          operations: [
+            { collection: 'qbanks', id: bank.id, type: 'set', value: updated },
+          ],
+        },
+        'PUT',
+      );
+      assert.equal(edit.status, 200, JSON.stringify(edit.data));
+      const reloaded = (
+        await call('pro', '/collaboration')
+      ).data.collaboration.qbanks.find((item) => item.id === bank.id);
+      assert.equal(reloaded?.name, updated.name);
+      assert.equal(reloaded?.description, updated.description);
+    },
+  );
+  await t.test(
+    'Superadmin can hide, restore, and delete nonessential QBanks while essential QBanks stay protected',
+    async () => {
+      const now = new Date().toISOString();
+      const bank = {
+        id: `admin-bank-${randomUUID()}`,
+        name: 'Admin controlled bank',
+        shortName: 'ADMIN',
+        description: 'Managed from the Superadmin workspace',
+        createdAt: now,
+        createdById: 'pro',
+        createdByName: 'pro',
+        ownerId: 'pro',
+        ownerName: 'pro',
+        visibility: 'public',
+        shareEnabled: false,
+        reviewerIds: [],
+        viewerIds: [],
+        archived: false,
+        essential: false,
+      };
+      const create = await call(
+        'pro',
+        '/collaboration',
+        {
+          operations: [
+            {
+              collection: 'qbanks',
+              id: bank.id,
+              type: 'set',
+              value: bank,
+            },
+          ],
+        },
+        'PUT',
+      );
+      assert.equal(create.status, 200, JSON.stringify(create.data));
+
+      const hidden = { ...bank, archived: true };
+      const hide = await call(
+        'admin',
+        '/collaboration',
+        {
+          operations: [
+            {
+              collection: 'qbanks',
+              id: bank.id,
+              type: 'set',
+              value: hidden,
+            },
+          ],
+        },
+        'PUT',
+      );
+      assert.equal(hide.status, 200, JSON.stringify(hide.data));
+      assert.equal(
+        (await call('admin', '/collaboration')).data.collaboration.qbanks.find(
+          (item) => item.id === bank.id,
+        )?.archived,
+        true,
+      );
+
+      const unrelatedRestore = await call(
+        'other',
+        '/collaboration',
+        {
+          operations: [
+            {
+              collection: 'qbanks',
+              id: bank.id,
+              type: 'set',
+              value: bank,
+            },
+          ],
+        },
+        'PUT',
+      );
+      assert.equal(unrelatedRestore.status, 403);
+
+      const restore = await call(
+        'admin',
+        '/collaboration',
+        {
+          operations: [
+            {
+              collection: 'qbanks',
+              id: bank.id,
+              type: 'set',
+              value: bank,
+            },
+          ],
+        },
+        'PUT',
+      );
+      assert.equal(restore.status, 200, JSON.stringify(restore.data));
+      assert.equal(
+        (await call('admin', '/collaboration')).data.collaboration.qbanks.find(
+          (item) => item.id === bank.id,
+        )?.archived,
+        false,
+      );
+
+      const specialty = {
+        id: `${bank.id}-specialty`,
+        qbankId: bank.id,
+        name: 'Surgery',
+      };
+      await db
+        .prepare(
+          'INSERT INTO records(type,id,qbank_id,payload,updated_at) VALUES(?,?,?,?,?)',
+        )
+        .bind(
+          'qbankSpecialties',
+          specialty.id,
+          bank.id,
+          JSON.stringify(specialty),
+          now,
+        )
+        .run();
+
+      const remove = await call(
+        'admin',
+        '/collaboration',
+        {
+          operations: [{ collection: 'qbanks', id: bank.id, type: 'delete' }],
+        },
+        'PUT',
+      );
+      assert.equal(remove.status, 200, JSON.stringify(remove.data));
+      assert.equal(
+        (
+          await db
+            .prepare('SELECT count(*) AS count FROM records WHERE qbank_id=?')
+            .bind(bank.id)
+            .first()
+        ).count,
+        0,
+      );
+      assert.equal(
+        (
+          await db
+            .prepare(
+              "SELECT count(*) AS count FROM records WHERE type='qbanks' AND id=?",
+            )
+            .bind(bank.id)
+            .first()
+        ).count,
+        0,
+      );
+
+      const essentialDelete = await call(
+        'admin',
+        '/collaboration',
+        {
+          operations: [{ collection: 'qbanks', id: 'smle-gs', type: 'delete' }],
+        },
+        'PUT',
+      );
+      assert.equal(essentialDelete.status, 403);
     },
   );
   await t.test(
@@ -1361,7 +1813,9 @@ print(json.dumps(out))`,
         },
       );
       assert.equal(verified.status, 200, await verified.text());
-      const privilegedCookie = verified.headers.get('set-cookie')?.split(';')[0];
+      const privilegedCookie = verified.headers
+        .get('set-cookie')
+        ?.split(';')[0];
       assert.ok(privilegedCookie);
       assert.notEqual(privilegedCookie, temporaryCookie);
       const oldSession = await mf.dispatchFetch(
@@ -1408,7 +1862,9 @@ print(json.dumps(out))`,
       assert.equal(
         (
           await db
-            .prepare("SELECT count(*) AS n FROM records WHERE type='auditLog' AND id=?")
+            .prepare(
+              "SELECT count(*) AS n FROM records WHERE type='auditLog' AND id=?",
+            )
             .bind(id)
             .first()
         ).n,
@@ -1460,12 +1916,16 @@ print(json.dumps(out))`,
         'PUT',
       );
       const stored = await db
-        .prepare("SELECT owner_id,payload FROM records WHERE type='qbanks' AND id=?")
+        .prepare(
+          "SELECT owner_id,payload FROM records WHERE type='qbanks' AND id=?",
+        )
         .bind(id)
         .first();
       if (response.status === 200) {
         await db
-          .prepare("UPDATE records SET owner_id=?,payload=? WHERE type='qbanks' AND id=?")
+          .prepare(
+            "UPDATE records SET owner_id=?,payload=? WHERE type='qbanks' AND id=?",
+          )
           .bind('other', JSON.stringify(original), id)
           .run();
       }
@@ -1487,9 +1947,7 @@ print(json.dumps(out))`,
         'PUT',
       );
       assert.equal(restored.status, 200, JSON.stringify(restored));
-      await db
-        .prepare("DELETE FROM app_states WHERE user_id='pro'")
-        .run();
+      await db.prepare("DELETE FROM app_states WHERE user_id='pro'").run();
     },
   );
   await t.test(
@@ -1509,10 +1967,17 @@ print(json.dumps(out))`,
           },
         },
       });
-      const noteSave = await call('reviewer', '/state', { state: privateNote }, 'PUT');
+      const noteSave = await call(
+        'reviewer',
+        '/state',
+        { state: privateNote },
+        'PUT',
+      );
       assert.equal(noteSave.status, 403, JSON.stringify(noteSave));
       assert.equal(
-        await db.prepare("SELECT user_id FROM app_states WHERE user_id='reviewer'").first(),
+        await db
+          .prepare("SELECT user_id FROM app_states WHERE user_id='reviewer'")
+          .first(),
         null,
       );
 
@@ -1538,8 +2003,13 @@ print(json.dumps(out))`,
       assert.equal(duplicateTests.status, 400, JSON.stringify(duplicateTests));
 
       const deckA = {
-        id: 'cycle-a', name: 'A', qbankId: 'smle-gs', parentId: 'cycle-b',
-        color: '#000', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        id: 'cycle-a',
+        name: 'A',
+        qbankId: 'smle-gs',
+        parentId: 'cycle-b',
+        color: '#000',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
       const deckB = { ...deckA, id: 'cycle-b', name: 'B', parentId: 'cycle-a' };
       const cyclicDecks = await call(
@@ -1550,7 +2020,9 @@ print(json.dumps(out))`,
       );
       assert.equal(cyclicDecks.status, 400, JSON.stringify(cyclicDecks));
       assert.equal(
-        await db.prepare("SELECT user_id FROM app_states WHERE user_id='pro'").first(),
+        await db
+          .prepare("SELECT user_id FROM app_states WHERE user_id='pro'")
+          .first(),
         null,
       );
     },
@@ -1559,32 +2031,38 @@ print(json.dumps(out))`,
     'Invalid exam answer statistics cannot partially persist the checkpoint',
     async () => {
       const state = emptyState({
-        tests: [{
-          id: 'checkpoint-invalid-answer',
-          title: '',
-          mode: 'tutor',
-          questionIds: ['gs-001'],
-          currentIndex: 0,
-          answers: { 'gs-001': 0 },
-          revealed: ['gs-001'],
-          graded: ['gs-001'],
-          startedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          status: 'active',
-        }],
+        tests: [
+          {
+            id: 'checkpoint-invalid-answer',
+            title: '',
+            mode: 'tutor',
+            questionIds: ['gs-001'],
+            currentIndex: 0,
+            answers: { 'gs-001': 0 },
+            revealed: ['gs-001'],
+            graded: ['gs-001'],
+            startedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            status: 'active',
+          },
+        ],
       });
       const result = await call(
         'pro',
         '/state/exam',
         {
           ...state,
-          answerSelections: [{ qbankId: 'smle-gs', questionId: 'gs-001', answer: 99 }],
+          answerSelections: [
+            { qbankId: 'smle-gs', questionId: 'gs-001', answer: 99 },
+          ],
         },
         'PUT',
       );
       assert.equal(result.status, 400, JSON.stringify(result));
       assert.equal(
-        await db.prepare("SELECT user_id FROM app_states WHERE user_id='pro'").first(),
+        await db
+          .prepare("SELECT user_id FROM app_states WHERE user_id='pro'")
+          .first(),
         null,
       );
     },
@@ -1640,10 +2118,7 @@ print(json.dumps(out))`,
         (await call('reviewer', '/auth/session')).data.user.effectivePlan,
         'lite',
       );
-      assert.equal(
-        (await call('pro', '/state', { state }, 'PUT')).status,
-        200,
-      );
+      assert.equal((await call('pro', '/state', { state }, 'PUT')).status, 200);
       assert.equal(
         (await call('pro', '/state')).data.state.flashcards.length,
         1,
@@ -1843,13 +2318,27 @@ print(json.dumps(out))`,
         requestId: randomUUID(),
         fileHash: createHash('sha256').update('different').digest('hex'),
       });
-      assert.equal(duplicateName.status, 409);
+      assert.equal(duplicateName.status, 200, JSON.stringify(duplicateName));
+      assert.equal(duplicateName.data.successful, 0);
+      assert.equal(duplicateName.data.skippedDuplicates, 1);
       const duplicateHash = await call('pro', '/platform/import', {
         ...request,
         requestId: randomUUID(),
         fileName: 'renamed.json',
       });
-      assert.equal(duplicateHash.status, 409);
+      assert.equal(duplicateHash.status, 200, JSON.stringify(duplicateHash));
+      assert.equal(duplicateHash.data.successful, 0);
+      assert.equal(duplicateHash.data.skippedDuplicates, 1);
+      assert.equal(
+        (
+          await db
+            .prepare(
+              "SELECT count(*) AS value FROM duplicate_attempts WHERE user_id='pro' AND kind='file'",
+            )
+            .first()
+        ).value,
+        0,
+      );
       const dailyPayload = (index) => ({
         ...payload,
         stem: `Daily limit fixture ${index} with distinct clinical wording`,
@@ -1887,7 +2376,10 @@ print(json.dumps(out))`,
               'payload',json_object('stem','Existing pending '||value,'options',json_array('Yes','No'))
             ),?
           FROM json_each(?)`)
-        .bind(now, JSON.stringify(Array.from({ length: 300 }, (_, index) => index)))
+        .bind(
+          now,
+          JSON.stringify(Array.from({ length: 300 }, (_, index) => index)),
+        )
         .run();
       const request = (suffix) => ({
         qbankId: 'smle-gs',
@@ -1917,7 +2409,9 @@ print(json.dumps(out))`,
       assert.equal(queueBlocked.status, 403);
       assert.match(queueBlocked.data.error, /submission queue is full/i);
       await db
-        .prepare("DELETE FROM records WHERE type='questionProposals' AND owner_id='pro-pending'")
+        .prepare(
+          "DELETE FROM records WHERE type='questionProposals' AND owner_id='pro-pending'",
+        )
         .run();
       const suspended = await call('admin', '/platform/economy-admin', {
         operation: 'suspend-json',
@@ -1934,10 +2428,12 @@ print(json.dumps(out))`,
       assert.equal(suspensionBlocked.status, 403);
       assert.match(suspensionBlocked.data.error, /suspended until/i);
       assert.equal(
-        (await call('pro-pending', '/platform/exam-start', {
-          testId: randomUUID(),
-          questionCount: 10,
-        })).status,
+        (
+          await call('pro-pending', '/platform/exam-start', {
+            testId: randomUUID(),
+            questionCount: 10,
+          })
+        ).status,
         201,
       );
     },
@@ -1946,7 +2442,9 @@ print(json.dumps(out))`,
     'High-risk corrections require two independent reviewers before credits are awarded',
     async () => {
       const existingRow = await db
-        .prepare("SELECT id,payload FROM records WHERE type='sharedQuestions' AND qbank_id='smle-gs' LIMIT 1")
+        .prepare(
+          "SELECT id,payload FROM records WHERE type='sharedQuestions' AND qbank_id='smle-gs' LIMIT 1",
+        )
         .first();
       const existing = JSON.parse(existingRow.payload);
       const proposalId = `high-risk-${randomUUID()}`;
@@ -1978,8 +2476,16 @@ print(json.dumps(out))`,
         proposedAt,
       };
       await db
-        .prepare("INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES('questionProposals',?,?,?,?,?)")
-        .bind(proposalId, 'smle-gs', 'other', JSON.stringify(proposal), proposedAt)
+        .prepare(
+          "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES('questionProposals',?,?,?,?,?)",
+        )
+        .bind(
+          proposalId,
+          'smle-gs',
+          'other',
+          JSON.stringify(proposal),
+          proposedAt,
+        )
         .run();
 
       const first = await call('reviewer', '/platform/bulk-review', {
@@ -2009,7 +2515,9 @@ print(json.dumps(out))`,
         JSON.parse(
           (
             await db
-              .prepare("SELECT payload FROM records WHERE type='questionProposals' AND id=?")
+              .prepare(
+                "SELECT payload FROM records WHERE type='questionProposals' AND id=?",
+              )
               .bind(proposalId)
               .first()
           ).payload,
@@ -2019,7 +2527,9 @@ print(json.dumps(out))`,
       assert.equal(
         (
           await db
-            .prepare("SELECT count(*) AS value FROM credit_transactions WHERE reference_id=?")
+            .prepare(
+              'SELECT count(*) AS value FROM credit_transactions WHERE reference_id=?',
+            )
             .bind(proposalId)
             .first()
         ).value,
@@ -2038,7 +2548,9 @@ print(json.dumps(out))`,
       assert.equal(second.data.updatedProposals.length, 1);
       assert.equal(second.data.updatedQuestions.length, 1);
       const reviews = await db
-        .prepare('SELECT reviewer_id FROM contribution_reviews WHERE proposal_id=? ORDER BY reviewer_id')
+        .prepare(
+          'SELECT reviewer_id FROM contribution_reviews WHERE proposal_id=? ORDER BY reviewer_id',
+        )
         .bind(proposalId)
         .all();
       assert.deepEqual(
@@ -2046,7 +2558,9 @@ print(json.dumps(out))`,
         ['reviewer', 'reviewer2'],
       );
       const reward = await db
-        .prepare('SELECT amount,lifetime_delta FROM credit_transactions WHERE reference_id=?')
+        .prepare(
+          'SELECT amount,lifetime_delta FROM credit_transactions WHERE reference_id=?',
+        )
         .bind(proposalId)
         .first();
       assert.deepEqual(reward, { amount: 15, lifetime_delta: 15 });
@@ -2056,8 +2570,11 @@ print(json.dumps(out))`,
     'Bulk review approves or rejects up to 200 selected proposals atomically',
     async () => {
       const payload = (index) => ({
-        stem: `Bulk fixture ${index}`,
-        options: ['Correct', 'Incorrect'],
+        stem: `Bulk workflow fixture ${createHash('sha256').update(`stem-${index}`).digest('hex')}`,
+        options: [
+          `Correct ${createHash('sha256').update(`correct-${index}`).digest('hex')}`,
+          `Incorrect ${createHash('sha256').update(`incorrect-${index}`).digest('hex')}`,
+        ],
         answer: 0,
         specialty: 'General',
         topic: 'Bulk review',
@@ -2166,6 +2683,419 @@ print(json.dumps(out))`,
         ).status,
         400,
       );
+    },
+  );
+  await t.test(
+    'Duplicate candidates require reviewer resolution, preserve canonical content, and suppress unchanged pairs',
+    async () => {
+      const marker = randomUUID();
+      const question = {
+        stem: `A unique duplicate workflow case ${marker} asks for the NEXT management step.`,
+        options: [`CT ${marker}`, `MRI ${marker}`, `Observe ${marker}`],
+        answer: 0,
+        specialty: 'Duplicate QA',
+        topic: marker,
+        explanation: 'Purpose-built duplicate workflow fixture.',
+        sourceFile: 'duplicate-qa.pdf',
+        sourcePage: 1,
+        sourceReference: 'Duplicate QA source',
+        images: [],
+      };
+      const nearDuplicate = {
+        ...question,
+        sourcePage: 2,
+        options: [
+          question.options[0],
+          question.options[1],
+          `${question.options[2]} now`,
+        ],
+      };
+      const imported = await call('unlimited', '/platform/import', {
+        qbankId: 'smle-gs',
+        requestId: randomUUID(),
+        fileName: `duplicate-${marker}.json`,
+        fileHash: createHash('sha256')
+          .update(`duplicate-${marker}`)
+          .digest('hex'),
+        questions: [question, nearDuplicate],
+      });
+      assert.equal(imported.status, 200, JSON.stringify(imported));
+      assert.equal(imported.data.proposals.length, 2);
+      assert.equal(imported.data.skippedDuplicates, 0);
+      assert.equal(imported.data.flaggedDuplicates, 1);
+      const [first, duplicate] = imported.data.proposals;
+      assert.equal(duplicate.duplicateReview.status, 'flagged');
+      assert.equal(duplicate.duplicateReview.candidates[0].entityId, first.id);
+      assert.equal(
+        duplicate.duplicateReview.candidates[0].entityType,
+        'pending_proposal',
+      );
+      assert.notEqual(
+        duplicate.duplicateReview.candidates[0].classification,
+        'exact',
+      );
+
+      const blockedBulk = await call('reviewer', '/platform/bulk-review', {
+        proposalIds: [duplicate.id],
+        status: 'approved',
+      });
+      assert.equal(blockedBulk.status, 409);
+      const selfReview = await call(
+        'unlimited',
+        '/platform/duplicate-resolve',
+        {
+          proposalId: duplicate.id,
+          candidateEntityId: first.id,
+          decision: 'kept_both',
+        },
+      );
+      assert.equal(selfReview.status, 403);
+      const keep = await call('reviewer', '/platform/duplicate-resolve', {
+        proposalId: duplicate.id,
+        candidateEntityId: first.id,
+        decision: 'kept_both',
+        note: 'Intentional variants for this fixture.',
+      });
+      assert.equal(keep.status, 200, JSON.stringify(keep));
+      assert.equal(keep.data.updatedProposals[0].status, 'pending');
+      assert.equal(
+        keep.data.updatedProposals[0].duplicateReview.status,
+        'resolved',
+      );
+      assert.equal(
+        (
+          await db
+            .prepare(
+              "SELECT count(*) AS value FROM duplicate_pair_decisions WHERE proposal_id=? AND decision='kept_both'",
+            )
+            .bind(duplicate.id)
+            .first()
+        ).value,
+        1,
+      );
+      assert.equal(
+        (
+          await db
+            .prepare(
+              "SELECT count(*) AS value FROM duplicate_attempts WHERE kind='question' AND reference_id=?",
+            )
+            .bind(first.id)
+            .first()
+        ).value,
+        0,
+      );
+      const medicalReview = await call('reviewer', '/platform/bulk-review', {
+        proposalIds: [first.id, duplicate.id],
+        status: 'approved',
+      });
+      assert.equal(medicalReview.status, 200, JSON.stringify(medicalReview));
+      assert.equal(medicalReview.data.reviewed, 2);
+
+      const canonicalId = medicalReview.data.updatedQuestions[0].id;
+      const rejectedImport = await call('unlimited', '/platform/import', {
+        qbankId: 'smle-gs',
+        requestId: randomUUID(),
+        fileName: `duplicate-reject-${marker}.json`,
+        fileHash: createHash('sha256')
+          .update(`duplicate-reject-${marker}`)
+          .digest('hex'),
+        questions: [
+          {
+            ...question,
+            sourcePage: 3,
+            options: [
+              question.options[0],
+              `${question.options[1]} urgently`,
+              question.options[2],
+            ],
+          },
+        ],
+      });
+      assert.equal(rejectedImport.status, 200);
+      const rejected = rejectedImport.data.proposals[0];
+      const approvedCandidate = rejected.duplicateReview.candidates.find(
+        (item) => item.entityType === 'approved_question',
+      );
+      assert.ok(approvedCandidate);
+      const [reviewerOne, reviewerTwo] = await Promise.all([
+        call('reviewer', '/platform/duplicate-resolve', {
+          proposalId: rejected.id,
+          candidateEntityId: approvedCandidate.entityId,
+          decision: 'rejected_as_duplicate',
+        }),
+        call('reviewer2', '/platform/duplicate-resolve', {
+          proposalId: rejected.id,
+          candidateEntityId: approvedCandidate.entityId,
+          decision: 'rejected_as_duplicate',
+        }),
+      ]);
+      assert.deepEqual(
+        [reviewerOne.status, reviewerTwo.status].sort(
+          (left, right) => left - right,
+        ),
+        [200, 409],
+        JSON.stringify({ reviewerOne, reviewerTwo }),
+      );
+      assert.ok(
+        await db
+          .prepare(
+            "SELECT id FROM records WHERE type='sharedQuestions' AND id=?",
+          )
+          .bind(canonicalId)
+          .first(),
+      );
+      assert.equal(
+        (
+          await db
+            .prepare(
+              "SELECT count(*) AS value FROM duplicate_attempts WHERE user_id='unlimited' AND kind='question' AND confirmed=1",
+            )
+            .first()
+        ).value,
+        1,
+      );
+      assert.equal(
+        (
+          await db
+            .prepare(
+              "SELECT count(*) AS value FROM contribution_reviews WHERE proposal_id=? AND decision='rejected' AND json_extract(metadata,'$.duplicateDecision')='rejected_as_duplicate'",
+            )
+            .bind(rejected.id)
+            .first()
+        ).value,
+        1,
+      );
+
+      const staleMarker = randomUUID();
+      const staleQuestion = {
+        ...question,
+        stem: `Stale duplicate case ${staleMarker}`,
+        topic: staleMarker,
+      };
+      const staleImport = await call('unlimited', '/platform/import', {
+        qbankId: 'smle-gs',
+        requestId: randomUUID(),
+        fileName: `duplicate-stale-${staleMarker}.json`,
+        fileHash: createHash('sha256')
+          .update(`duplicate-stale-${staleMarker}`)
+          .digest('hex'),
+        questions: [
+          staleQuestion,
+          {
+            ...staleQuestion,
+            sourcePage: 4,
+            options: [
+              staleQuestion.options[0],
+              staleQuestion.options[1],
+              `${staleQuestion.options[2]} now`,
+            ],
+          },
+        ],
+      });
+      const [staleCandidate, staleIncoming] = staleImport.data.proposals;
+      const staleCandidateRow = await db
+        .prepare(
+          "SELECT payload FROM records WHERE type='questionProposals' AND id=?",
+        )
+        .bind(staleCandidate.id)
+        .first();
+      const changedCandidate = JSON.parse(staleCandidateRow.payload);
+      changedCandidate.payload.stem += ' materially changed';
+      await db
+        .prepare(
+          "UPDATE records SET payload=?,updated_at=? WHERE type='questionProposals' AND id=?",
+        )
+        .bind(
+          JSON.stringify(changedCandidate),
+          new Date().toISOString(),
+          staleCandidate.id,
+        )
+        .run();
+      const staleDecision = await call(
+        'reviewer',
+        '/platform/duplicate-resolve',
+        {
+          proposalId: staleIncoming.id,
+          candidateEntityId: staleCandidate.id,
+          decision: 'rejected_as_duplicate',
+        },
+      );
+      assert.equal(staleDecision.status, 409);
+      assert.equal(
+        JSON.parse(
+          (
+            await db
+              .prepare(
+                "SELECT payload FROM records WHERE type='questionProposals' AND id=?",
+              )
+              .bind(staleIncoming.id)
+              .first()
+          ).payload,
+        ).status,
+        'pending',
+      );
+
+      const scan = await call('reviewer', '/platform/duplicate-scan', {
+        qbankId: 'smle-gs',
+        cursor: 0,
+        batchSize: 2,
+      });
+      assert.equal(scan.status, 200, JSON.stringify(scan));
+      assert.equal(scan.data.scanned, 2);
+      const resumable = await call(
+        'reviewer',
+        '/platform/duplicate-scan?qbankId=smle-gs',
+      );
+      assert.equal(resumable.status, 200);
+      assert.equal(resumable.data.run.runId, scan.data.runId);
+      assert.equal(resumable.data.run.cursor, scan.data.cursor);
+    },
+  );
+  await t.test(
+    'reviewing a matched proposal rebases dependent duplicate cases without deciding them',
+    async () => {
+      // Earlier import tests already consumed this fixture account's daily quota.
+      await db
+        .prepare('UPDATE imported_files SET uploaded_at=? WHERE user_id=?')
+        .bind(new Date(Date.now() - 86_400_000).toISOString(), 'unlimited')
+        .run();
+      const makePair = async (marker) => {
+        const question = {
+          stem: `A linked duplicate case ${marker} asks for the best management step.`,
+          options: [`CT ${marker}`, `MRI ${marker}`, `Observe ${marker}`],
+          answer: 0,
+          specialty: 'Duplicate QA',
+          topic: marker,
+          explanation: 'Independent linked-review fixture.',
+          sourceFile: 'linked-review.pdf',
+          sourcePage: 1,
+          sourceReference: 'Linked review source',
+          images: [],
+        };
+        const imported = await call('unlimited', '/platform/import', {
+          qbankId: 'smle-gs',
+          requestId: randomUUID(),
+          fileName: `linked-${marker}.json`,
+          fileHash: createHash('sha256')
+            .update(`linked-${marker}`)
+            .digest('hex'),
+          questions: [
+            question,
+            {
+              ...question,
+              sourcePage: 2,
+              options: [
+                question.options[0],
+                question.options[1],
+                `${question.options[2]} now`,
+              ],
+            },
+          ],
+        });
+        assert.equal(imported.status, 200, JSON.stringify(imported));
+        const [first, dependent] = imported.data.proposals;
+        assert.equal(
+          dependent.duplicateReview.candidates[0].entityId,
+          first.id,
+        );
+        return { first, dependent };
+      };
+
+      const approvedPair = await makePair(randomUUID());
+      const approval = await call('reviewer', '/platform/bulk-review', {
+        proposalIds: [approvedPair.first.id],
+        status: 'approved',
+      });
+      assert.equal(approval.status, 200, JSON.stringify(approval));
+      const published = approval.data.updatedQuestions[0];
+      const rebased = approval.data.updatedProposals.find(
+        (item) => item.id === approvedPair.dependent.id,
+      );
+      assert.equal(rebased.status, 'pending');
+      assert.equal(
+        rebased.duplicateReview.candidates[0].entityType,
+        'approved_question',
+      );
+      assert.equal(
+        rebased.duplicateReview.candidates[0].entityId,
+        published.id,
+      );
+
+      // An older imported case can still point at the approved proposal. It must
+      // resolve against the canonical question without requiring a re-upload.
+      const stored = await db
+        .prepare(
+          "SELECT payload FROM records WHERE type='questionProposals' AND id=?",
+        )
+        .bind(approvedPair.dependent.id)
+        .first();
+      const oldCase = JSON.parse(stored.payload);
+      oldCase.duplicateReview.candidates =
+        approvedPair.dependent.duplicateReview.candidates;
+      await db
+        .prepare(
+          "UPDATE records SET payload=? WHERE type='questionProposals' AND id=?",
+        )
+        .bind(JSON.stringify(oldCase), approvedPair.dependent.id)
+        .run();
+      const oldCaseDecision = await call(
+        'reviewer',
+        '/platform/duplicate-resolve',
+        {
+          proposalId: approvedPair.dependent.id,
+          candidateEntityId: approvedPair.first.id,
+          decision: 'rejected_as_duplicate',
+        },
+      );
+      assert.equal(
+        oldCaseDecision.status,
+        200,
+        JSON.stringify(oldCaseDecision),
+      );
+      assert.equal(oldCaseDecision.data.updatedProposals[0].status, 'rejected');
+      assert.equal(
+        oldCaseDecision.data.updatedProposals[0].duplicateReview.candidates[0]
+          .entityId,
+        published.id,
+      );
+
+      const rejectedPair = await makePair(randomUUID());
+      const rejection = await call('reviewer', '/platform/bulk-review', {
+        proposalIds: [rejectedPair.first.id],
+        status: 'rejected',
+      });
+      assert.equal(rejection.status, 200, JSON.stringify(rejection));
+      const remaining = rejection.data.updatedProposals.find(
+        (item) => item.id === rejectedPair.dependent.id,
+      );
+      assert.equal(remaining.status, 'pending');
+      assert.equal(remaining.duplicateReview, undefined);
+      const staleRejectedCase = {
+        ...remaining,
+        duplicateReview: rejectedPair.dependent.duplicateReview,
+      };
+      await db
+        .prepare(
+          "UPDATE records SET payload=? WHERE type='questionProposals' AND id=?",
+        )
+        .bind(JSON.stringify(staleRejectedCase), rejectedPair.dependent.id)
+        .run();
+      const reconciled = await call('reviewer', '/platform/duplicate-resolve', {
+        proposalId: rejectedPair.dependent.id,
+        candidateEntityId: rejectedPair.first.id,
+        decision: 'kept_both',
+      });
+      assert.equal(reconciled.status, 200, JSON.stringify(reconciled));
+      assert.equal(reconciled.data.reconciled, true);
+      assert.equal(
+        reconciled.data.updatedProposals[0].duplicateReview,
+        undefined,
+      );
+      const normalReview = await call('reviewer', '/platform/bulk-review', {
+        proposalIds: [rejectedPair.dependent.id],
+        status: 'approved',
+      });
+      assert.equal(normalReview.status, 200, JSON.stringify(normalReview));
     },
   );
   await t.test(
@@ -2288,7 +3218,9 @@ print(json.dumps(out))`,
         200,
       );
       const reportReward = await db
-        .prepare("SELECT amount,lifetime_delta FROM credit_transactions WHERE reference_type='ticket' AND reference_id=?")
+        .prepare(
+          "SELECT amount,lifetime_delta FROM credit_transactions WHERE reference_type='ticket' AND reference_id=?",
+        )
         .bind(id)
         .first();
       assert.deepEqual(reportReward, { amount: 3, lifetime_delta: 3 });
@@ -2432,22 +3364,28 @@ print(json.dumps(out))`,
     assets,
     fetch: (url, init) => mf.dispatchFetch(url, init),
   });
-  await t.test('Read-only integrity checks find no contradictions in the local fixture', async () => {
-    const source = await readFile('scripts/data-integrity-checks.sql', 'utf8');
-    const statements = source
-      .split('\n')
-      .filter((line) => !line.trim().startsWith('--'))
-      .join('\n')
-      .split(';')
-      .map((statement) => statement.trim())
-      .filter(Boolean);
-    for (const statement of statements) {
-      const result = await db.prepare(statement).all();
-      assert.equal(
-        result.results.length,
-        0,
-        `Integrity check returned rows: ${statement.slice(0, 100)}`,
+  await t.test(
+    'Read-only integrity checks find no contradictions in the local fixture',
+    async () => {
+      const source = await readFile(
+        'scripts/data-integrity-checks.sql',
+        'utf8',
       );
-    }
-  });
+      const statements = source
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('--'))
+        .join('\n')
+        .split(';')
+        .map((statement) => statement.trim())
+        .filter(Boolean);
+      for (const statement of statements) {
+        const result = await db.prepare(statement).all();
+        assert.equal(
+          result.results.length,
+          0,
+          `Integrity check returned rows: ${statement.slice(0, 100)}`,
+        );
+      }
+    },
+  );
 });
