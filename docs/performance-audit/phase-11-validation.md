@@ -89,3 +89,7 @@ At this cardinality the optimized pair read **55 more rows (+11.4%)** than the f
 No staging rollback was triggered: this run made no staging change and found no unsafe data or answer state. The identity mismatch requires a new release candidate, not rollback of an unchanged test environment.
 
 Reconcile the intended final website into a reviewed, clean commit; repeat the Phase 11A build, tests, isolation and deployment proof; record new version IDs and rollback point; then restart the full Phase 11 matrix. Do not deploy this pinned staging candidate to production as the final website.
+
+## Phase 11B reconciliation (2026-09-27)
+
+RC1 evidence above is historical. The intended website is now reconciled on `audit/rc2-final-website`, with PWA v4.4.1, current branding/product flows, Phase 10 safeguards and required migrations 0021–0023. The new detached proof, deployed identity and smoke results will be appended after verification. Do not reuse RC1 measurements as RC2 evidence or automatically run the full Phase 11 matrix.

@@ -32,3 +32,7 @@ The original dirty working-tree report of 129 tests included future feature work
 ## Non-blocking observations
 
 `npm ci` reported four moderate dependency audit findings. Vinext reported a chunk-size warning. Wrangler enabled preview URLs by default for the workers.dev deployment. None caused a gate or smoke failure; Phase 11A made no performance changes in response.
+
+## Phase 11B reconciliation (2026-09-27)
+
+RC1 evidence above is historical. The intended website is now reconciled on `audit/rc2-final-website`, with PWA v4.4.1, current branding/product flows, Phase 10 safeguards and required migrations 0021–0023. The new detached proof, deployed identity and smoke results will be appended after verification. Do not reuse RC1 measurements as RC2 evidence or automatically run the full Phase 11 matrix.

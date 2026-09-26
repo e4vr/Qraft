@@ -24,3 +24,7 @@ The release candidate is the commit immediately before the post-deployment evide
 | Previous realtime version | `1910720b-b0b4-45d6-ba77-4bba51cbd197` |
 
 The initial inventory contained no staging Workers. After the first deployment exposed a seed-fixture defect, the corrected candidate was rebuilt, retested and redeployed. The immediately previous Worker versions shown above are the precise rollback point. Deleting both staging Workers remains the full-disable path. Production Workers and storage are outside both procedures.
+
+## Phase 11B reconciliation (2026-09-27)
+
+RC1 evidence above is historical. The intended website is now reconciled on `audit/rc2-final-website`, with PWA v4.4.1, current branding/product flows, Phase 10 safeguards and required migrations 0021–0023. The new detached proof, deployed identity and smoke results will be appended after verification. Do not reuse RC1 measurements as RC2 evidence or automatically run the full Phase 11 matrix.
