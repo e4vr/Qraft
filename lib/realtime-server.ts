@@ -105,7 +105,7 @@ export async function notifyMutation(request: Request) {
     topics.add('question-catalog');
   } else if (path[0] === 'platform' && path[1] === 'review-history') {
     topics.add('review-history');
-  } else if (path[0] === 'platform' && path[1] === 'discounts') {
+  } else if (path[0] === 'platform' && ['discounts','plan-pricing'].includes(path[1])) {
     topics.add('pricing'); topics.add('discounts'); channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'subscriptions') {
     topics.add('account'); topics.add('subscriptions'); channels.add('access');
@@ -113,6 +113,8 @@ export async function notifyMutation(request: Request) {
     topics.add('announcement'); channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'legal-links') {
     topics.add('legal-links'); channels.add('catalog');
+  } else if (path[0] === 'platform' && path[1] === 'monitoring') {
+    topics.add('monitoring');
   } else if (path[0] === 'platform' && path[1] === 'economy-admin') {
     topics.add('economy');
     topics.add(input.operation === 'grant-reward' ? 'reward-gift' : 'reward');

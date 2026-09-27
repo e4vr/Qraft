@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { shareCurrentUserRequest } from '@/features/auth/server/auth-service';
 import { notifyMutation } from '@/lib/realtime-server';
+import { maintenanceGate } from '@/features/administration/server/operations-service';
 
 export function cloudflarePathParts(request: Request): string[] {
   return new URL(request.url).pathname.split('/').slice(3).map(decodeURIComponent);
@@ -65,6 +66,8 @@ export async function withApiLifecycle(
 ): Promise<Response> {
   try {
     await enforceRateLimits(request);
+    const maintenance = await maintenanceGate(request, true);
+    if (maintenance) return maintenance;
     const notification = request.method === 'GET' ? undefined : request.clone();
     const response = await run();
 

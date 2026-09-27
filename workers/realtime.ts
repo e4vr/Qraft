@@ -24,6 +24,25 @@ export class RealtimeChannel extends DurableObject<Cloudflare.Env> {
       } catch { /* A disconnected client will refresh after reconnecting. */ }
     }
   }
+  async reserveUsageBudget(count: number) {
+    if (!Number.isInteger(count) || count < 1 || count > 256) return false;
+    // Binding-only RPC: no public HTTP route can allocate or spend this budget.
+    return this.ctx.storage.transaction(async storage => {
+      const now = new Date().toISOString();
+      const day = now.slice(0,10), month = now.slice(0,7);
+      const budget = await storage.get<{ day:string; month:string; daily:number; monthly:number }>('usage-budget');
+      const daily = budget?.day === day ? budget.daily : 0;
+      const monthly = budget?.month === month ? budget.monthly : 0;
+      if (daily + count > 20_000 || monthly + count > 500_000) return false;
+      await storage.put('usage-budget', { day, month, daily:daily+count, monthly:monthly+count });
+      return true;
+    });
+  }
+  async usageBudget() {
+    const now=new Date().toISOString();
+    const budget=await this.ctx.storage.get<{day:string;month:string;daily:number;monthly:number}>('usage-budget');
+    return {daily:budget?.day===now.slice(0,10)?budget.daily:0,monthly:budget?.month===now.slice(0,7)?budget.monthly:0};
+  }
   webSocketMessage(socket: WebSocket) { socket.close(1008, 'Read-only connection'); }
   webSocketClose(socket: WebSocket, code: number, reason: string) { socket.close(code, reason); }
   webSocketError(socket: WebSocket) { socket.close(1011, 'Connection error'); }

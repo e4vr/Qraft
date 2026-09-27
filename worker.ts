@@ -6,6 +6,7 @@ import { expireSubscriptions } from './lib/platform-server';
 import { cleanStateSyncOperations } from './features/state/server/state-service';
 import { cleanPreformedTestOperations } from './lib/preformed-test-server';
 import { withSecurityHeaders } from './server/http/security-headers';
+import { maintenanceGate } from './features/administration/server/operations-service';
 
 function withBuildIdentity(response: Response, env: Cloudflare.Env) {
   if (!env.BUILD_VERSION || response.status === 101) return response;
@@ -20,6 +21,11 @@ function withBuildIdentity(response: Response, env: Cloudflare.Env) {
 
 const worker: ExportedHandler<Cloudflare.Env> = {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext) {
+    // API enforcement lives in the lifecycle too, so route-level tests exercise it.
+    if (!new URL(request.url).pathname.startsWith('/api/cloudflare/') || new URL(request.url).pathname === '/api/cloudflare/realtime') {
+      const maintenance = await maintenanceGate(request);
+      if (maintenance) return withBuildIdentity(withSecurityHeaders(request, maintenance), env);
+    }
     // WebSocket upgrades must reach Cloudflare unchanged (HTTP 101).
     if (new URL(request.url).pathname === '/api/cloudflare/realtime') {
       try {

@@ -62,6 +62,7 @@ import { cn as cx, nowIso } from '@/lib/utils';
 import { SubscriptionAdmin } from '@/components/subscription-workspace';
 import { ReviewerPerformance } from '@/components/reviewer-performance';
 import { EconomyAdmin } from '@/components/economy-admin';
+import { MonitoringUsage, SiteOperationsAdmin, PricingAdmin, AccountBlockAdmin } from '@/components/superadmin-operations';
 import { ContactWorkspace } from '@/components/contact-workspace';
 import { QuestionPreview } from '@/components/question-tools';
 import { ReviewWorkspace } from '@/components/review-workspace';
@@ -74,6 +75,9 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 
 type Tab =
+  | 'monitoring'
+  | 'site-operations'
+  | 'pricing'
   | 'reviewer-performance'
   | 'discounts'
   | 'subscriptions'
@@ -94,7 +98,7 @@ type Tab =
   | 'legal'
   | 'audit';
 const adminGroups: Array<{ label: string; ids: Tab[] }> = [
-  { label: 'OVERVIEW', ids: ['overview', 'reviewer-performance'] },
+  { label: 'OVERVIEW', ids: ['overview', 'monitoring', 'reviewer-performance'] },
   {
     label: 'OPERATIONS',
     ids: [
@@ -106,14 +110,17 @@ const adminGroups: Array<{ label: string; ids: Tab[] }> = [
     ],
   },
   { label: 'USERS & ACCESS', ids: ['student-ids', 'roles', 'blocked'] },
-  { label: 'BILLING', ids: ['subscriptions', 'discounts', 'economy'] },
+  { label: 'BILLING', ids: ['subscriptions', 'pricing', 'discounts', 'economy'] },
   { label: 'QBANK', ids: ['qbanks', 'question-preview'] },
-  { label: 'SYSTEM', ids: ['announcement', 'backups', 'legal', 'audit'] },
+  { label: 'SYSTEM', ids: ['site-operations', 'announcement', 'backups', 'legal', 'audit'] },
 ];
 const adminSections: Record<
   Tab,
   { icon: typeof ShieldCheck; description: string }
 > = {
+  monitoring: { icon: Activity, description: 'User usage, backend health and cost visibility from one dashboard.' },
+  'site-operations': { icon: ShieldCheck, description: 'Manage availability, visitor messages and scheduled maintenance.' },
+  pricing: { icon: CreditCard, description: 'Publish annual plan prices and inspect subscription details.' },
   overview: {
     icon: LayoutDashboard,
     description:
@@ -672,6 +679,9 @@ export function AdminDashboard({
       isSuperadminWorkspace
         ? ([
             ['overview', 'Overview'],
+            ['monitoring', 'Monitoring & Usage'],
+            ['site-operations', 'Site operations'],
+            ['pricing', 'Pricing & plans'],
             ['reviewer-performance', 'Reviewer Performance'],
             ['registrations', 'Registrations'],
             ['blocked', 'Blocked users'],
@@ -1226,7 +1236,7 @@ export function AdminDashboard({
       ...current,
       members: current.members.map((item) =>
         item.uid === member.uid
-          ? { ...item, suspended: !item.suspended }
+          ? { ...item, suspended: !item.suspended, suspendedUntil: undefined }
           : item,
       ),
       auditLog: [
@@ -1319,7 +1329,7 @@ export function AdminDashboard({
           member.role === 'super_admin' ||
           !memberMatchesBlocklist(member, blockedAccess)
             ? member
-            : { ...member, suspended: true },
+            : { ...member, suspended: true, suspendedUntil: undefined },
         ),
         auditLog: [
           audit(
@@ -1781,6 +1791,10 @@ export function AdminDashboard({
               )}
           </div>
           <div className="q-admin-panels">
+            {isRoot && tab === 'monitoring' && <MonitoringUsage />}
+            {isRoot && tab === 'site-operations' && <SiteOperationsAdmin />}
+            {isRoot && tab === 'pricing' && <PricingAdmin />}
+            {isRoot && tab === 'blocked' && <AccountBlockAdmin members={collaboration.members} onUpdated={profile => replaceFromServer({ ...collaboration, members:collaboration.members.map(member => member.uid === profile.uid ? profile : member) })} />}
             {isRoot && (tab === 'discounts' || tab === 'subscriptions') && (
               <SubscriptionAdmin
                 key={`${tab}:${refreshRevision}`}

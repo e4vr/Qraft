@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { currentUser } from '@/features/auth/server/auth-service';
 import { assertSameOrigin, readJson } from '@/server/http/request';
 import { json } from '@/server/http/response';
@@ -476,6 +477,7 @@ export async function preformedTestApi(request: Request, action: string) {
           now,
         )
         .run();
+      await emitUsage(user.uid, {testsCreated:1});
       return json({ test: document((await rowById(id))!) }, 201);
     }
 
@@ -896,6 +898,7 @@ export async function preformedTestApi(request: Request, action: string) {
       )
         .bind(rank !== null ? 1 : 0, JSON.stringify(result), submissionId)
         .run();
+      if (user) await emitUsage(user.uid, { testsCompleted:1, questionsAnswered: Object.keys(input.answers ?? {}).length });
       return json({ ...result, questions });
     }
 

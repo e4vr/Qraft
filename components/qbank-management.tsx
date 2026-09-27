@@ -112,8 +112,8 @@ export function QBankManagement({
     [bankId, collaboration.memberships],
   );
   const plan = user.effectivePlan ?? user.tier;
-  const canAddQuestions = hasFeature(plan, 'addQuestions');
-  const canImport = user.role === 'super_admin' || hasFeature(plan, 'jsonImport');
+  const canAddQuestions = hasFeature(plan, 'addQuestions', user.planLimits);
+  const canImport = user.role === 'super_admin' || hasFeature(plan, 'jsonImport', user.planLimits);
   const canManageAccess = Boolean(bank && canManageBank(user, bank));
   const bankRole = bank
     ? bankRoleFor(user, bank, collaboration.memberships)

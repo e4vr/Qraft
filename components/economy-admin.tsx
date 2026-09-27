@@ -21,6 +21,8 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
   const [plan, setPlan] = useState<Exclude<PlanId, 'free'>>('pro');
+  const [giftDays, setGiftDays] = useState('30');
+  const [blockDays, setBlockDays] = useState('7');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -120,11 +122,13 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
         <article className="rounded-2xl border bg-card p-4">
           <h3 className="font-bold">Grant stored reward</h3>
           <select value={plan} onChange={(event) => setPlan(event.target.value as typeof plan)} className="mt-3 h-11 w-full rounded-xl border bg-background px-3"><option value="lite">Lite</option><option value="pro">Pro</option><option value="unlimited">Unlimited</option></select>
-          <button disabled={busy} onClick={() => void mutate('grant-reward', { plan, duration: 1, durationUnit: 'month' })} className="q-button mt-3 w-full border">Grant one month</button>
+          <label className="q-ops-field">Gift days<input type="number" min="1" max="730" value={giftDays} onChange={event => setGiftDays(event.target.value)} /></label>
+          <button disabled={busy || !Number.isInteger(Number(giftDays)) || Number(giftDays)<1 || Number(giftDays)>730} onClick={() => void mutate('grant-reward', { plan, days:Number(giftDays) })} className="q-button mt-3 w-full border">Grant {giftDays || '…'} days</button>
         </article>
         <article className="rounded-2xl border bg-card p-4">
           <h3 className="font-bold">JSON Import access</h3>
-          <button disabled={busy} onClick={() => void mutate('suspend-json', { days: 7 })} className="q-button mt-3 w-full border text-destructive">Suspend for 7 days</button>
+          <label className="q-ops-field">Suspension days<input type="number" min="1" max="365" value={blockDays} onChange={event => setBlockDays(event.target.value)} /></label>
+          <button disabled={busy || !Number.isInteger(Number(blockDays)) || Number(blockDays)<1 || Number(blockDays)>365} onClick={() => void mutate('suspend-json', { days:Number(blockDays) })} className="q-button mt-3 w-full border text-destructive">Suspend for {blockDays || '…'} days</button>
           <button disabled={busy} onClick={() => void mutate('remove-json-suspension')} className="q-button mt-2 w-full border">Remove suspension</button>
         </article>
       </div>

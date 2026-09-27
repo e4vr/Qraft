@@ -23,6 +23,7 @@ type RewardPass = {
   plan: Exclude<PlanId, 'free'>;
   duration: number;
   duration_unit: 'month' | 'year';
+  duration_days?: number | null;
   status: 'available' | 'active' | 'used' | 'expired' | 'cancelled';
   created_at: string;
   activated_at: string | null;
@@ -67,8 +68,8 @@ type CelebrationMemory = {
   seenAdminGiftIds: string[];
 };
 
-function rewardLabel(reward: Pick<RewardPass, 'plan' | 'duration' | 'duration_unit'>) {
-  return `${PLAN_LIMITS[reward.plan].name} · ${reward.duration} ${reward.duration_unit}`;
+function rewardLabel(reward: Pick<RewardPass, 'plan' | 'duration' | 'duration_unit' | 'duration_days'>) {
+  return `${PLAN_LIMITS[reward.plan].name} · ${reward.duration_days ? `${reward.duration_days} days` : `${reward.duration} ${reward.duration_unit}`}`;
 }
 
 function findNewCelebrations(data: CenterData, userId: string): Celebration[] {
@@ -361,7 +362,7 @@ export function ContributionCenter({
                   <div key={pass.id} className="rounded-xl border p-3">
                     <div className="flex items-center gap-3">
                       <div className="min-w-0 flex-1">
-                        <strong>{PLAN_LIMITS[pass.plan].name} · {pass.duration} {pass.duration_unit}</strong>
+                        <strong>{rewardLabel(pass)}</strong>
                         <p className="mt-1 text-xs uppercase text-muted-foreground">{pass.status}{pass.expires_at ? ` · until ${new Date(pass.expires_at).toLocaleDateString()}` : ''}</p>
                       </div>
                       {pass.status === 'available' && (

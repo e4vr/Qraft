@@ -163,7 +163,7 @@ export function QBankWorkspace({
       ),
     [collaboration.invitations, user.email],
   );
-  const canCreate = hasFeature(user.effectivePlan ?? user.tier, 'createQBank');
+  const canCreate = hasFeature(user.effectivePlan ?? user.tier, 'createQBank', user.planLimits);
   const sectionBanks = useMemo(() => {
     if (activeSection === 'mine')
       return accessible.filter(

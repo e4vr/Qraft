@@ -2,6 +2,8 @@ import { auditStatement } from './platform-server';
 import { bankAccessState, bankAccessStates } from './qbank-access-repository';
 import { allocateQuestionIds } from './question-id-repository';
 import { env } from 'cloudflare:workers';
+import { accountBlocked } from '@/features/administration/domain/account-block';
+import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { appStateFreshness } from './merge-app-state';
 import { stateBudgetError, stateBytes, STATE_BUDGET_BYTES } from '@/features/state/domain/state-budget';
 import {
@@ -301,7 +303,8 @@ async function resolveCurrentUser(
       }>();
   if (!row || (requireVerified && row.verified !== 1)) return undefined;
   const profile = JSON.parse(row.profile_json) as MemberProfile;
-  if (profile.suspended) return undefined;
+  if (accountBlocked(profile)) return undefined;
+  profile.suspended = false;
   return await safeProfile(
     profile,
     Boolean(enrolledTotpSecret(row.totp_secret)),
@@ -603,8 +606,9 @@ export async function login(request: Request) {
   if (!secureEqual(calculated.hash, row.password_hash))
     return json({ error: 'Incorrect email or password.' }, 401);
   const profile = JSON.parse(row.profile_json) as MemberProfile;
-  if (profile.suspended)
+  if (accountBlocked(profile))
     return json({ error: 'This account has been suspended.' }, 403);
+  profile.suspended = false;
   const mfaSecret = enrolledTotpSecret(row.totp_secret);
   const isRoot = profile.role === 'super_admin';
   const needsMfa = isRoot && Boolean(mfaSecret);
@@ -783,6 +787,7 @@ export async function loadState(request: Request) {
   )
     .bind(user.uid)
     .first<{ payload: string; revision: number; updated_at: string }>();
+  await emitUsage(user.uid);
   return json({
     state: row
       ? await cleanDeletedState(JSON.parse(row.payload) as AppState)
@@ -810,7 +815,7 @@ export async function saveState(request: Request) {
       ? input.operationId
       : crypto.randomUUID();
   const effectivePlan = user.effectivePlan ?? user.tier;
-  const planLimits = getPlanLimits(effectivePlan);
+  const planLimits = user.planLimits ?? getPlanLimits(effectivePlan);
   const storedStateRow = await env.DB.prepare(
     'SELECT payload,revision,last_operation_id,updated_at FROM app_states WHERE user_id=?',
   )
@@ -1135,12 +1140,13 @@ export async function saveState(request: Request) {
       );
     throw error;
   }
-  return json({
-    ok: true,
-    state: input.state,
-    revision: nextRevision,
-    updatedAt: now,
+  await emitUsage(user.uid, {
+    testsCreated: newTests.length,
+    testsCompleted: input.state.tests.filter(test => test.status === 'completed' && storedState?.tests.find(previous => previous.id === test.id)?.status !== 'completed').length,
+    questionsAnswered: Object.entries(input.state.progress).reduce((count,[id,progress]) => count + Math.max(0, progress.attempts - (storedState?.progress[id]?.attempts ?? 0)),0),
+    flashcardsCreated: flashcards.filter(card => !storedState?.flashcards?.some(previous => previous.id === card.id)).length,
   });
+  return json({ ok: true, state: input.state, revision: nextRevision, updatedAt: now });
 }
 
 export async function saveStatePatch(
@@ -1402,7 +1408,7 @@ function recordsToState(
     values<CollaborationState['memberships'][number]>('qbankMemberships');
   state.invitations =
     values<CollaborationState['invitations'][number]>('qbankInvitations');
-  state.members = profilesRows;
+  state.members = profilesRows.map(member => ({...member,suspended:accountBlocked(member)}));
   state.allowedUniversityIds =
     values<CollaborationState['allowedUniversityIds'][number]>('universityIds');
   const registeredUniversityIds = new Set(
@@ -1712,6 +1718,7 @@ function accessManagerProfile(member: MemberProfile): MemberProfile {
     platformRoles: member.platformRoles,
     status: member.status,
     suspended: member.suspended,
+    suspendedUntil: member.suspendedUntil,
     universityIdRegistered: member.universityIdRegistered,
     universityIdVerifiedManually: member.universityIdVerifiedManually,
   } as MemberProfile;
@@ -2225,7 +2232,7 @@ function recordAllowed(
   const isRoot = user.role === 'super_admin';
   const accessManager = hasAccessManagerRole(user);
   const canManageRoles = hasModeratorRole(user);
-  const limits = getPlanLimits(user.effectivePlan ?? user.tier);
+  const limits = user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier);
   const canManage = existing ? isRoot || canManageBank(user, existing) : false;
   const canEdit = existing
     ? isRoot || canEditBank(user, existing, state.memberships)
@@ -2856,6 +2863,7 @@ export async function saveCollaboration(request: Request) {
       ),
     );
   if (statements.length) await env.DB.batch(statements);
+  await emitUsage(user.uid, { privateBanksCreated: input.operations.filter(operation => operation.collection === 'qbanks' && operation.type === 'set' && (operation.value as QBank)?.visibility === 'private' && !state.qbanks.some(bank => bank.id === operation.id)).length });
   return json({ ok: true, operations: input.operations });
 }
 
@@ -3010,7 +3018,7 @@ export async function uploadMedia(
   const user = await currentUser(request);
   if (!user || user.status !== 'approved')
     return json({ error: 'Approved account required.' }, 403);
-  const limits = getPlanLimits(user.effectivePlan ?? user.tier);
+  const limits = user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier);
   if (
     !limits.canUploadImages ||
     (kind === 'notes' && !limits.canUsePrivateNotes)

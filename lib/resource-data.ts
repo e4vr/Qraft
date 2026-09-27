@@ -24,6 +24,9 @@ export type ResourcePolicy = {
 // Freshness belongs to resources. There are deliberately no time-based TTLs:
 // cached data becomes stale after a mutation/realtime signal, not after a page mount.
 export const resourcePolicies: ResourcePolicy[] = [
+  { name:'monitoring', class:'parameter-driven', tags:['monitoring'], persistence:'memory', match:path => path.startsWith('/platform/monitoring') },
+  { name:'site-operations', class:'event-driven', tags:['site-operations'], persistence:'memory', match:path => path.startsWith('/platform/site-operations') },
+  { name:'plan-pricing', class:'event-driven', tags:['pricing'], persistence:'memory', match:path => path.startsWith('/platform/plan-pricing') || path.startsWith('/platform/plan-catalog') },
   { name: 'session', class: 'session', tags: ['account'], persistence: 'memory', match: path => path === '/auth/session' },
   { name: 'personal-state', class: 'session', tags: ['personal-state'], persistence: 'indexed-db', match: path => path === '/state' || path.startsWith('/state/') },
   { name: 'collaboration', class: 'event-driven', tags: ['collaboration', 'question-catalog', 'review-queue'], persistence: 'indexed-db', match: path => path.startsWith('/collaboration') },

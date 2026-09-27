@@ -1282,7 +1282,7 @@ function AppSidebar({
           {NAV_ITEMS.map((item) => {
             const locked =
               item.id === 'flashcards' &&
-              !hasFeature(user.effectivePlan ?? user.tier, 'flashcards');
+              !hasFeature(user.effectivePlan ?? user.tier, 'flashcards', user.planLimits);
             return (
               <button
                 key={item.id}
@@ -4726,8 +4726,8 @@ function SettingsView({
     };
   }, []);
   const backupAvailable =
-    hasFeature(user.effectivePlan ?? user.tier, 'flashcards') ||
-    hasFeature(user.effectivePlan ?? user.tier, 'createPrivateQBank');
+    hasFeature(user.effectivePlan ?? user.tier, 'flashcards', user.planLimits) ||
+    hasFeature(user.effectivePlan ?? user.tier, 'createPrivateQBank', user.planLimits);
   const downloadPersonalBackup = async () => {
     setPersonalBackupBusy(true);
     setPersonalBackupMessage('');
@@ -5469,34 +5469,34 @@ function QuestionManager({
             )}
             <SecondaryButton
               onClick={() =>
-                user.role === 'super_admin' || hasFeature(user.effectivePlan ?? user.tier, 'jsonImport')
+                user.role === 'super_admin' || hasFeature(user.effectivePlan ?? user.tier, 'jsonImport', user.planLimits)
                   ? setImportOpen(true)
                   : openUpgrade()
               }
             >
-              {user.role !== 'super_admin' && !hasFeature(user.effectivePlan ?? user.tier, 'jsonImport') && (
+              {user.role !== 'super_admin' && !hasFeature(user.effectivePlan ?? user.tier, 'jsonImport', user.planLimits) && (
                 <LockKeyhole className="size-4" />
               )}
               Import JSON{' '}
-              {user.role === 'super_admin' || hasFeature(user.effectivePlan ?? user.tier, 'jsonImport')
+              {user.role === 'super_admin' || hasFeature(user.effectivePlan ?? user.tier, 'jsonImport', user.planLimits)
                 ? '/ Use AI'
                 : '· Pro'}
             </SecondaryButton>
             <PrimaryButton
               tone="contribute"
               onClick={() =>
-                hasFeature(user.effectivePlan ?? user.tier, 'addQuestions')
+                hasFeature(user.effectivePlan ?? user.tier, 'addQuestions', user.planLimits)
                   ? startNewContribution()
                   : openUpgrade()
               }
             >
-              {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions') ? (
+              {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions', user.planLimits) ? (
                 <Plus className="size-4" />
               ) : (
                 <LockKeyhole className="size-4" />
               )}
               Add Manually{' '}
-              {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions')
+              {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions', user.planLimits)
                 ? ''
                 : '· Pro'}
             </PrimaryButton>
@@ -6981,7 +6981,7 @@ export default function MedGuardApp({
     async (config: TestBuilderConfig) => {
       if (!user || creatingTest.current) return;
       setTestError('');
-      const limits = getPlanLimits(user.effectivePlan ?? user.tier);
+      const limits = (user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier));
       if (config.count > limits.maxQuestionsPerExam) {
         setTestError(
           `${limits.name} allows a maximum of ${limits.maxQuestionsPerExam} questions per exam. Your selections are preserved.`,
@@ -7603,7 +7603,7 @@ export default function MedGuardApp({
             state={state}
             bankName={activeQBank?.name ?? 'QBank'}
             maxQuestionsPerExam={
-              getPlanLimits(user.effectivePlan ?? user.tier).maxQuestionsPerExam
+              (user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier)).maxQuestionsPerExam
             }
             onStart={createTest}
           />

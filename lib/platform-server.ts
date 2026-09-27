@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { listAdminSubscribers } from './admin-subscribers';
 import { reviewerPerformance } from './reviewer-performance-server';
 import { testPool } from './test-pool-server';
@@ -208,11 +209,16 @@ type Discount = {
 async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'pro') {
   if (requestedPlan === 'free') throw new Error('Choose a paid plan.');
   const configured = await env.DB.prepare(
-    'SELECT price_sar_year FROM plan_prices WHERE plan=?',
+    'SELECT coalesce(price_halalas,price_sar_year*100) AS price,policy_json FROM plan_prices WHERE plan=?',
   )
     .bind(requestedPlan)
-    .first<{ price_sar_year: number }>();
-  const original = (configured?.price_sar_year ?? getPlanLimits(requestedPlan).priceSarYear) * 100;
+    .first<{ price: number; policy_json: string | null }>();
+  let planName = getPlanLimits(requestedPlan).name;
+  try {
+    const policy = JSON.parse(configured?.policy_json || '{}') as { name?: unknown };
+    if (typeof policy.name === 'string' && policy.name.trim()) planName = policy.name;
+  } catch { /* Legacy catalog rows use the default plan name. */ }
+  const original = configured?.price ?? getPlanLimits(requestedPlan).priceSarYear * 100;
   const discount = code
     ? await env.DB.prepare(
         'SELECT * FROM discount_codes WHERE code=? COLLATE NOCASE',
@@ -261,6 +267,7 @@ async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'pro')
     codeId: discount?.id ?? null,
     percent: discount?.kind === 'percent' ? discount.amount : null,
     plan: requestedPlan,
+    planName,
   };
 }
 
@@ -1033,7 +1040,7 @@ export async function platformApi(request: Request, action: string) {
     }
     if (action === 'personal-backup') {
       const plan = user.effectivePlan ?? user.tier;
-      const limits = getPlanLimits(plan);
+      const limits = user.planLimits ?? getPlanLimits(plan);
       if (!limits.canUseFlashcards && !limits.canCreatePrivateQBank)
         return json({ error: 'Backup is available with Flashcards or Private QBanks access.' }, 403);
       const signingKey = backupSigningKey();
@@ -1225,7 +1232,7 @@ export async function platformApi(request: Request, action: string) {
     }
     if (action === 'plan-status' && request.method === 'GET') {
       const plan = user.effectivePlan ?? user.tier;
-      const limits = getPlanLimits(plan);
+      const limits = user.planLimits ?? getPlanLimits(plan);
       const monthStart = utcMonthStart();
       const dayStart = utcDayStart();
       const [lifetime, monthly, imports, pending, media] = await env.DB.batch([
@@ -1263,7 +1270,7 @@ export async function platformApi(request: Request, action: string) {
           ? json({ started: true, startedAt: existing.started_at, duplicate: true })
           : json({ error: 'This exam ID was already used.' }, 409);
       const plan = user.effectivePlan ?? user.tier;
-      const limits = getPlanLimits(plan);
+      const limits = user.planLimits ?? getPlanLimits(plan);
       if (questionCount > limits.maxQuestionsPerExam)
         return json({ error: `${limits.name} allows ${limits.maxQuestionsPerExam} questions per exam.` }, 403);
       const now = new Date().toISOString();
@@ -1305,13 +1312,14 @@ export async function platformApi(request: Request, action: string) {
           403,
         );
       }
+      await emitUsage(user.uid,{testsCreated:1});
       return json({ started: true, startedAt: now }, 201);
     }
     if (action === 'contributions' && request.method === 'GET') {
       const [account, transactions, passes, pending, submissions] = await env.DB.batch([
         env.DB.prepare('SELECT credits_balance,lifetime_score FROM contribution_accounts WHERE user_id=?').bind(user.uid),
         env.DB.prepare('SELECT id,amount,type,reason,reference_type,reference_id,created_at FROM credit_transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 30').bind(user.uid),
-        env.DB.prepare('SELECT id,plan,duration,duration_unit,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE user_id=? ORDER BY created_at DESC LIMIT 50').bind(user.uid),
+        env.DB.prepare('SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE user_id=? ORDER BY created_at DESC LIMIT 50').bind(user.uid),
         env.DB.prepare("SELECT count(*) AS value FROM records WHERE type='questionProposals' AND owner_id=? AND json_extract(payload,'$.status')='pending'").bind(user.uid),
         env.DB.prepare("SELECT id,json_extract(payload,'$.status') AS status,json_extract(payload,'$.type') AS type,updated_at FROM records WHERE type='questionProposals' AND owner_id=? AND json_extract(payload,'$.status')<>'approved' ORDER BY updated_at DESC LIMIT 20").bind(user.uid),
       ]);
@@ -1331,7 +1339,7 @@ export async function platformApi(request: Request, action: string) {
     if (action === 'rewards') {
       if (request.method === 'GET') {
         const rows = await env.DB.prepare(
-          'SELECT id,plan,duration,duration_unit,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE user_id=? ORDER BY created_at DESC LIMIT 100',
+          'SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE user_id=? ORDER BY created_at DESC LIMIT 100',
         ).bind(user.uid).all();
         return json({ rewards: REWARD_CATALOG, passes: rows.results });
       }
@@ -1343,7 +1351,7 @@ export async function platformApi(request: Request, action: string) {
         if (!reward || !/^[a-zA-Z0-9-]{20,80}$/.test(requestId))
           return json({ error: 'Invalid reward request.' }, 400);
         const passId = `reward-${requestId}`;
-        const prior = await env.DB.prepare('SELECT id,plan,duration,duration_unit,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE id=? AND user_id=?')
+        const prior = await env.DB.prepare('SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE id=? AND user_id=?')
           .bind(passId, user.uid).first();
         if (prior) {
           const account = await env.DB.prepare('SELECT credits_balance FROM contribution_accounts WHERE user_id=?').bind(user.uid).first<{ credits_balance: number }>();
@@ -1367,7 +1375,7 @@ export async function platformApi(request: Request, action: string) {
           throw error;
         }
         const [passResult, accountResult] = await env.DB.batch([
-          env.DB.prepare('SELECT id,plan,duration,duration_unit,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE id=?').bind(passId),
+          env.DB.prepare('SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE id=?').bind(passId),
           env.DB.prepare('SELECT credits_balance FROM contribution_accounts WHERE user_id=?').bind(user.uid),
         ]);
         return json({ pass: passResult.results[0], creditsBalance: Number((accountResult.results[0] as { credits_balance?: number } | undefined)?.credits_balance ?? 0) }, 201);
@@ -1375,13 +1383,13 @@ export async function platformApi(request: Request, action: string) {
       if (operation === 'activate') {
         const passId = text('passId');
         const pass = await env.DB.prepare(
-          "SELECT id,plan,duration,duration_unit,status FROM reward_passes WHERE id=? AND user_id=?",
-        ).bind(passId, user.uid).first<{ id: string; plan: PlanId; duration: number; duration_unit: 'month' | 'year'; status: string }>();
+          "SELECT id,plan,duration,duration_unit,duration_days,status FROM reward_passes WHERE id=? AND user_id=?",
+        ).bind(passId, user.uid).first<{ id: string; plan: PlanId; duration: number; duration_unit: 'month' | 'year'; duration_days: number | null; status: string }>();
         if (!pass) return json({ error: 'Reward pass not found.' }, 404);
         if (pass.status !== 'available')
           return json({ error: 'This reward pass is no longer available.' }, 409);
         const now = new Date().toISOString();
-        const expiresAt = addCalendarDuration(now, pass.duration, pass.duration_unit);
+        const expiresAt = pass.duration_days ? new Date(Date.parse(now) + pass.duration_days*86_400_000).toISOString() : addCalendarDuration(now, pass.duration, pass.duration_unit);
         const activated = await env.DB.prepare(
           "UPDATE reward_passes SET status='active',activated_at=?,expires_at=? WHERE id=? AND user_id=? AND status='available'",
         ).bind(now, expiresAt, passId, user.uid).run();
@@ -1450,15 +1458,17 @@ export async function platformApi(request: Request, action: string) {
         const plan = text('plan');
         const duration = Number(input.duration ?? 1);
         const durationUnit = text('durationUnit') || 'month';
+        const days = input.days === undefined ? null : Number(input.days);
+        if (days !== null && (!Number.isInteger(days) || days < 1 || days > 730)) return json({error:'Gift duration must be 1–730 days.'},400);
         if (!isPlanId(plan) || plan === 'free' || !Number.isInteger(duration) || duration < 1 || duration > 24 || !['month', 'year'].includes(durationUnit))
           return json({ error: 'Invalid reward pass.' }, 400);
         const id = crypto.randomUUID();
         await env.DB.batch([
-          env.DB.prepare("INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,source,metadata) VALUES(?,?,?,?,?,'available',?,'admin',?)")
-            .bind(id, targetUserId, plan, duration, durationUnit, now, JSON.stringify({ reason, grantedBy: user.uid })),
-          auditStatement(user, 'reward_granted', targetUserId, null, { passId: id, plan, duration, durationUnit, reason }),
+          env.DB.prepare("INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,duration_days,status,created_at,source,metadata) VALUES(?,?,?,?,?,?,'available',?,'admin',?)")
+            .bind(id, targetUserId, plan, duration, durationUnit, days, now, JSON.stringify({ reason, grantedBy: user.uid })),
+          auditStatement(user, 'reward_granted', targetUserId, null, { passId: id, plan, duration, durationUnit, days, reason }),
         ]);
-        return json({ ok: true, pass: { id, plan, duration, duration_unit: durationUnit, status: 'available', created_at: now, expires_at: null } });
+        return json({ ok: true, pass: { id, plan, duration, duration_unit: durationUnit, duration_days:days, status: 'available', created_at: now, expires_at: null } });
       }
       if (operation === 'suspend-json') {
         const days = Number(input.days ?? ABUSE_LIMITS.jsonImportSuspensionDays);
@@ -2057,6 +2067,7 @@ export async function platformApi(request: Request, action: string) {
         rebasedDuplicateCases: dependentUpdates.length,
       }));
       const batchResults = await env.DB.batch(statements);
+      await emitUsage(user.uid, { reviewContributions: proposalsToFinalize.length + awaitingSecond.size });
       return json({
         ok: true,
         reviewed: proposalsToFinalize.length,
@@ -2138,7 +2149,7 @@ export async function platformApi(request: Request, action: string) {
               now,
               end,
               now,
-              `One year ${getPlanLimits(plan).name}`,
+              `One year ${price.planName}`,
               plan,
             ),
             auditStatement(
@@ -2190,7 +2201,7 @@ export async function platformApi(request: Request, action: string) {
           { error: 'A valid discount code is required for a free activation.' },
           400,
         );
-      const message = `أرغب بالاشتراك في Qraft ${getPlanLimits(plan).name} لمدة سنة.\nName: ${user.displayName}\nEmail: ${user.email}\nUser ID: ${user.uid}\nOriginal: ${price.original / 100} SAR\nCode: ${price.code || 'None'}\nDiscount: ${price.discount / 100} SAR\nFinal: ${price.final / 100} SAR`;
+      const message = `أرغب بالاشتراك في Qraft ${price.planName} لمدة سنة.\nName: ${user.displayName}\nEmail: ${user.email}\nUser ID: ${user.uid}\nOriginal: ${price.original / 100} SAR\nCode: ${price.code || 'None'}\nDiscount: ${price.discount / 100} SAR\nFinal: ${price.final / 100} SAR`;
       return json({
         url: `https://wa.me/966537043984?text=${encodeURIComponent(message)}`,
       });
@@ -2215,23 +2226,7 @@ export async function platformApi(request: Request, action: string) {
         return json({ codes: rows.results, events: events.results, summary: totals.results[0], price: (await env.DB.prepare('SELECT price FROM subscription_settings WHERE id=1').first<{ price: number }>())!.price });
       }
       if (text('operation') === 'price') {
-        const price = Number(input.price);
-        if (!Number.isInteger(price) || price < 1 || price > 10000000)
-          throw new Error('Price must be between 0.01 and 100000 SAR.');
-        const old = await env.DB.prepare(
-          'SELECT price FROM subscription_settings WHERE id=1',
-        ).first();
-        if (Number((old as { price?: number } | null)?.price) === price)
-          return json({ ok: true, unchanged: true, price }, 200, { 'x-qraft-unchanged': '1' });
-        await env.DB.batch([
-          env.DB.prepare(
-            'UPDATE subscription_settings SET price=? WHERE id=1',
-          ).bind(price),
-          auditStatement(user, 'subscription_price_changed', 'price', old, {
-            price,
-          }),
-        ]);
-        return json({ ok: true, price });
+        return json({error:'Manage each plan price from Pricing & plans.'},409);
       }
       const id = text('id') || crypto.randomUUID();
       const old = await env.DB.prepare(
@@ -2556,7 +2551,7 @@ export async function platformApi(request: Request, action: string) {
           ? json(JSON.parse(previous.result))
           : json({ error: 'Invalid import ID.' }, 409);
       const plan = user.effectivePlan ?? user.tier;
-      const limits = getPlanLimits(plan);
+      const limits = user.planLimits ?? getPlanLimits(plan);
       const now = new Date().toISOString();
       const uploadedFileName = text('fileName')
         .split(/[\\/]/)
@@ -2861,6 +2856,7 @@ export async function platformApi(request: Request, action: string) {
           ...monitoringStatements,
         ]);
         activeImportContext = undefined;
+      await emitUsage(user.uid, { questionsImported:proposals.length });
         return json(result);
       }
       try {
@@ -2936,6 +2932,7 @@ export async function platformApi(request: Request, action: string) {
         throw error;
       }
       activeImportContext = undefined;
+      await emitUsage(user.uid, { questionsImported:proposals.length });
       if (createdSpecialties.length || createdTopics.length) {
         const classificationRevision = await env.DB.prepare(
           'SELECT revision FROM qbank_classification_revisions WHERE qbank_id=?',

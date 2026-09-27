@@ -38,6 +38,7 @@ export function validateSourceConfigs(appPath = 'wrangler.jsonc', realtimePath =
   equal(app.d1_databases?.[0]?.database_id, releaseResources.production.databaseId, 'production D1 id');
   equal(app.r2_buckets?.[0]?.bucket_name, releaseResources.production.bucket, 'production R2 bucket');
   equal(realtime.name, releaseResources.production.realtime, 'production realtime Worker');
+  equal(app.analytics_engine_datasets?.[0]?.dataset, 'qraft_usage', 'production analytics dataset');
 
   equal(staging.name, releaseResources.staging.app, 'staging app Worker');
   equal(staging.d1_databases?.[0]?.database_name, releaseResources.staging.database, 'staging D1 name');
@@ -45,6 +46,10 @@ export function validateSourceConfigs(appPath = 'wrangler.jsonc', realtimePath =
   equal(staging.r2_buckets?.[0]?.bucket_name, releaseResources.staging.bucket, 'staging R2 bucket');
   equal(staging.durable_objects?.bindings?.[0]?.script_name, releaseResources.staging.realtime, 'staging realtime service');
   equal(stagingRealtime.name, releaseResources.staging.realtime, 'staging realtime Worker');
+  equal(staging.analytics_engine_datasets?.[0]?.dataset, 'qraft_usage_staging', 'staging analytics dataset');
+  equal(staging.vars?.MONITORING_WORKER_NAME, releaseResources.staging.app, 'staging metrics Worker');
+  equal(staging.vars?.MONITORING_D1_ID, releaseResources.staging.databaseId, 'staging metrics D1');
+  equal(staging.vars?.MONITORING_R2_BUCKET, releaseResources.staging.bucket, 'staging metrics R2');
   if (staging.workers_dev !== true || stagingRealtime.workers_dev !== true)
     throw new Error('Staging Workers must use workers.dev hostnames.');
   if ((staging.triggers?.crons ?? []).length) throw new Error('Staging must not schedule cron triggers.');
@@ -63,6 +68,10 @@ export function validateBuiltConfigs(appPath = 'dist/server/wrangler.json', real
   equal(app.r2_buckets?.[0]?.bucket_name, releaseResources.staging.bucket, 'built R2 bucket');
   equal(app.services?.[0]?.service ?? app.durable_objects?.bindings?.[0]?.script_name, releaseResources.staging.realtime, 'built realtime service');
   equal(realtime.name, releaseResources.staging.realtime, 'built realtime Worker');
+  equal(app.analytics_engine_datasets?.[0]?.dataset, 'qraft_usage_staging', 'built analytics dataset');
+  equal(app.vars?.MONITORING_WORKER_NAME, releaseResources.staging.app, 'built metrics Worker');
+  equal(app.vars?.MONITORING_D1_ID, releaseResources.staging.databaseId, 'built metrics D1');
+  equal(app.vars?.MONITORING_R2_BUCKET, releaseResources.staging.bucket, 'built metrics R2');
   return { app, realtime };
 }
 
@@ -73,5 +82,6 @@ export function validateProductionBuiltConfigs(appPath = 'dist/server/wrangler.j
   equal(app.d1_databases?.[0]?.database_id, releaseResources.production.databaseId, 'built production D1 id');
   equal(app.r2_buckets?.[0]?.bucket_name, releaseResources.production.bucket, 'built production R2 bucket');
   equal(realtime.name, releaseResources.production.realtime, 'built production realtime Worker');
+  equal(app.analytics_engine_datasets?.[0]?.dataset, 'qraft_usage', 'built production analytics dataset');
   return { app, realtime };
 }

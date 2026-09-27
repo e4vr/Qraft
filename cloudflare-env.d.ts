@@ -1,5 +1,14 @@
 declare namespace Cloudflare {
   interface Env {
+    QRAFT_USAGE?: AnalyticsEngineDataset;
+    QRAFT_TELEMETRY_ENABLED?: string;
+    TELEMETRY_SALT?: string;
+    CLOUDFLARE_ANALYTICS_TOKEN?: string;
+    CLOUDFLARE_ACCOUNT_ID?: string;
+    MONITORING_WORKER_NAME?: string;
+    MONITORING_D1_ID?: string;
+    MONITORING_R2_BUCKET?: string;
+    MONITORING_DATASET?: string;
     BACKUP_SIGNING_KEY?: string;
     IMAGEKIT_PRIVATE_KEY?: string;
     R2_PUBLIC_URL?: string;

@@ -220,8 +220,8 @@ export function highestPlan(
   );
 }
 
-export function hasFeature(plan: PlanId, feature: PlanFeature): boolean {
-  const limits = getPlanLimits(plan);
+export function hasFeature(plan: PlanId, feature: PlanFeature, override?: PlanLimits): boolean {
+  const limits = override ?? getPlanLimits(plan);
   return {
     createQBank: limits.canCreateQBank,
     createPrivateQBank: limits.canCreatePrivateQBank,

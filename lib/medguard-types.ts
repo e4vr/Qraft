@@ -1,4 +1,5 @@
 import { isBankMembershipRole } from '@/features/access/domain/access-policy';
+import type { PlanLimits } from '@/features/subscriptions/domain/plan-config';
 
 export type TestMode = 'tutor' | 'timed';
 export type QuestionStatus =
@@ -257,6 +258,7 @@ export interface AppState {
 }
 
 export interface AppUser {
+  planLimits?: PlanLimits;
   uid: string;
   email: string;
   displayName: string;
@@ -276,6 +278,7 @@ export interface AppUser {
   adminPlan?: AccountTier | null;
   platformRoles: PlatformRole[];
   suspended?: boolean;
+  suspendedUntil?: string;
   mfaEnrolled?: boolean;
   mfaVerified?: boolean;
 }
@@ -348,6 +351,7 @@ export interface MemberProfile {
   tier: AccountTier;
   platformRoles: PlatformRole[];
   suspended?: boolean;
+  suspendedUntil?: string;
   mfaEnrolled?: boolean;
   approvedAt?: string;
   approvedById?: string;

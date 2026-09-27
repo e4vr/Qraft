@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { serverPlanLimits } from '@/features/subscriptions/server/plan-policy';
 import type { AppUser, MemberProfile } from './medguard-types';
 import {
   highestPlan,
@@ -72,6 +73,7 @@ export async function applyEffectiveEntitlement(user: AppUser): Promise<AppUser>
   return {
     ...user,
     tier: entitlement.effectivePlan,
+    planLimits:await serverPlanLimits(entitlement.effectivePlan),
     ...entitlement,
   };
 }

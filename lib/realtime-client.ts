@@ -5,7 +5,7 @@ import { clientInstanceId, invalidateApiResources } from './api-client';
 export const LIVE_CHANGE = 'qraft-live-change';
 
 const topicTags: Record<string, string[]> = {
-  connected: ['account', 'collaboration', 'review-queue', 'question-catalog', 'subscriptions', 'discounts', 'contributions', 'economy', 'contact'],
+  connected: ['account', 'collaboration', 'review-queue', 'question-catalog', 'subscriptions', 'discounts', 'contributions', 'economy', 'contact', 'monitoring', 'site-operations', 'pricing'],
   collaboration: ['collaboration'],
   catalog: ['collaboration', 'question-catalog', 'test-pool'],
   'question-catalog': ['question-catalog', 'test-pool', 'collaboration'],
@@ -22,6 +22,8 @@ const topicTags: Record<string, string[]> = {
   contributions: ['contributions', 'economy'],
   economy: ['economy', 'contributions'],
   announcement: ['announcement'],
+  'site-operations':['site-operations'],
+  monitoring:['monitoring'],
   'legal-links': ['legal-links'],
   contact: ['contact'],
   audit: ['audit'],

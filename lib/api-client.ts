@@ -62,7 +62,10 @@ function mutationTags(path: string, body: BodyInit | null | undefined) {
   }
   if (path.startsWith('/platform/classification')) { tags.add('collaboration'); tags.add('question-catalog'); tags.add('test-pool'); }
   if (path.startsWith('/qbank-folders/')) { tags.add('collaboration'); tags.add('question-catalog'); tags.add('test-pool'); }
-  if (path.startsWith('/platform/discounts')) { tags.add('discounts'); tags.add('pricing'); }
+  if (path.startsWith('/platform/discounts') || path.startsWith('/platform/plan-pricing')) { tags.add('discounts'); tags.add('pricing'); }
+  if (path.startsWith('/platform/monitoring')) tags.add('monitoring');
+  if (path.startsWith('/platform/site-operations')) tags.add('site-operations');
+  if (path.startsWith('/platform/account-block')) { tags.add('account'); tags.add('collaboration'); }
   if (path.startsWith('/platform/subscriptions') || path.startsWith('/platform/checkout')) { tags.add('subscriptions'); tags.add('account'); }
   if (path.startsWith('/platform/rewards')) {
     tags.add('contributions');

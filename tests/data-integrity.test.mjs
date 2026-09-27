@@ -110,7 +110,7 @@ void test('PWA shell and Cloudflare persistence configuration are present', asyn
     ),
   );
   assert.match(serviceWorker, /CACHE_NAME/);
-  assert.match(serviceWorker, /qraft-shell-v4\.5\.0/);
+  assert.match(serviceWorker, /qraft-shell-v4\.6\.0/);
   assert.match(serviceWorker, /'\/offline'/);
   assert.match(layout, /display-mode:standalone/);
   assert.doesNotMatch(layout, /user-scalable=no|maximum-scale=1|minimum-scale=1/);
