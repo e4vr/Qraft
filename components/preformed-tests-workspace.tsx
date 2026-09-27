@@ -1945,8 +1945,18 @@ export function PreformedTestsWorkspace({
     return () => window.clearTimeout(timer);
   }, [load]);
   useEffect(
-    () => subscribeLive(() => void load(true, true), ['preformed-tests']),
-    [load],
+    () => subscribeLive(() => {
+      void load(true, true);
+      if (!stats) return;
+      const id = stats.test.id;
+      const owner = stats.test.ownerId === user.uid;
+      void api<ManageResponse>(`/preformed/${owner ? 'manage' : 'leaderboard'}?id=${id}`, {
+        forceRefresh: true, cacheScope: user.uid, requestReason: 'server-invalidation',
+      }).then(value => setStats(current => current?.test.id === id
+        ? (owner ? value : { ...current, leaderboard: value.leaderboard }) : current))
+        .catch(() => setStats(current => current?.test.id === id ? undefined : current));
+    }, ['preformed-tests']),
+    [load, stats, user.uid],
   );
   useEffect(
     () => () => {
