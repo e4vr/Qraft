@@ -32,5 +32,45 @@
       "database_id": "7f288176-8ed7-490c-bd44-d6e78577413d",
       "migrations_dir": "./drizzle"
     }
-  ]
+  ],
+  "env": {
+    "staging": {
+      "name": "qraft-staging",
+      "workers_dev": true,
+      "compatibility_date": "2026-09-09",
+      "compatibility_flags": ["nodejs_compat"],
+      "routes": [],
+      "triggers": { "crons": [] },
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "redact_query_string": true
+      },
+      "ratelimits": [
+        { "name": "API_RATE_LIMITER", "namespace_id": "1101", "simple": { "limit": 300, "period": 60 } },
+        { "name": "MUTATION_RATE_LIMITER", "namespace_id": "1102", "simple": { "limit": 120, "period": 60 } },
+        { "name": "AUTH_RATE_LIMITER", "namespace_id": "1103", "simple": { "limit": 20, "period": 60 } }
+      ],
+      "vars": {
+        "R2_BILLING_CYCLE_DAY": "7",
+        "R2_STORAGE_CAP_BYTES": "3221225472",
+        "R2_CLASS_A_MONTHLY_CAP": "800000",
+        "R2_CLASS_B_MONTHLY_CAP": "8000000",
+        "QUESTION_BACKUP_RETENTION_DAYS": "14",
+        "QUESTION_BACKUP_MAX_BYTES": "26214400",
+        "BUILD_VERSION": "unset",
+        "BUILD_TIMESTAMP": "unset"
+      },
+      "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "qraft-assets-staging" }],
+      "durable_objects": { "bindings": [{ "name": "REALTIME", "class_name": "RealtimeChannel", "script_name": "qraft-realtime-staging" }] },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "qraft-qbank-staging",
+          "database_id": "f788be6b-f763-49e8-840b-4c107c7e5874",
+          "migrations_dir": "./drizzle"
+        }
+      ]
+    }
+  }
 }

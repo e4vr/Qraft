@@ -10,13 +10,17 @@
     "build": "vinext build",
     "test": "node --test tests/*.test.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json --config dist/qraft_realtime/wrangler.json",
-    "deploy:realtime": "wrangler deploy --config dist/qraft_realtime/wrangler.json",
-    "deploy:app": "wrangler deploy --config dist/server/wrangler.json --keep-vars",
+    "build:staging": "node scripts/build-staging.mjs",
+    "deploy:staging": "node scripts/deploy-staging.mjs",
+    "deploy:production:realtime": "wrangler deploy --config dist/qraft_realtime/wrangler.json",
+    "deploy:production:app": "wrangler deploy --config dist/server/wrangler.json --keep-vars",
     "lint": "oxlint",
     "format": "oxfmt",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply qraft-qbank --local",
-    "cloudflare:check": "wrangler deploy --dry-run"
+    "cloudflare:check": "node scripts/cloudflare-check.mjs",
+    "db:migrate:staging": "node scripts/staging-database.mjs migrate",
+    "db:seed:staging": "node scripts/seed-staging.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
@@ -49,6 +53,7 @@
     "oxfmt": "0.61.0",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",
+    "sharp": "0.35.4",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vite": "^8.2.2",

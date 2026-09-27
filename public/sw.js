@@ -26,7 +26,7 @@ self.addEventListener('activate', (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key !== CACHE_NAME)
+            .filter((key) => key.startsWith('qraft-shell-') && key !== CACHE_NAME)
             .map((key) => caches.delete(key)),
         ),
       )
@@ -54,15 +54,12 @@ self.addEventListener('fetch', (event) => {
   );
   if (staticAsset) {
     event.respondWith(
-      caches.match(event.request).then((cached) => {
-        const refresh = fetch(event.request).then((response) => {
-          if (response.ok)
-            void caches
-              .open(CACHE_NAME)
-              .then((cache) => cache.put(event.request, response.clone()));
-          return response;
-        });
-        return cached ?? refresh;
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match(event.request);
+        if (cached) return cached;
+        const response = await fetch(event.request);
+        if (response.ok) await cache.put(event.request, response.clone());
+        return response;
       }),
     );
     return;

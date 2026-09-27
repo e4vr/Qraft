@@ -1,5 +1,7 @@
 # Qraft Phase 10 performance results
 
+> **Phase 11 staging update, 2026-09-24 — NO-GO for the intended final website.** The pinned staging build `68a97cc` passed version/schema checks and 15 collaboration API samples, but the user identified its UI as an older version. The current website's brand, service worker, and substantial UI changes remain outside that candidate. Browser validation stopped. On the staging database's 242 records, a read-only SQL probe found the indexed collaboration query pair read 539 rows versus 484 for forced full scans while returning identical ordered rows. The Phase 10 11,326 → 1,142 result applies to its production-sized sample and is not a universal per-size reduction. The optimized duplicate detector is referenced only by its domain module and tests in the pinned source, so its local CPU benchmark is not Worker CPU evidence. [Full stopped-run record](phase-11-validation.md) and [rollout decision](phase-11-rollout-readiness.md).
+
 ## Scope and outcome
 
 Phase 10 implemented five approved, reversible waves on branch `audit/performance-first-pass`. No schema migration, production write, deployment, audit-policy change, API-contract change, or platform migration was performed.
