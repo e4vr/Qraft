@@ -107,3 +107,7 @@ RC1 rollback IDs remain `fa427ae6-7c7e-4274-98dd-1935c20e5ad0` / `c44eac2b-aaf5-
 ## Final constitutional gate — stopped (2026-09-27)
 
 The supplied constitution was read in full. Fresh staging headers still identify pinned RC2. An isolated local endpoint reproduction accepts/persists 151 Superadmin import questions despite section 20's technical maximum of 150. Section 51 also conflicts with the currently enforced paid-plan quotas and commercial periods. Sections 79/87 require stopping for explicit reconciliation; no implementation or staging/production change was made. Final technical decision and all evidence boundaries are in [Phase 11 final constitutional validation](phase-11-final-constitutional-validation.md). Prior RC1 history and RC2 staging readiness remain intact; staging readiness is not final rollout approval.
+
+## Amended constitution and clarified backend target
+
+See [amended-policy review](phase-11-amended-policy-review.md). The count-only Superadmin objection is withdrawn. A new isolated 151-question serial-chunk/retry/history test passes. The constitution is the newly approved backend target, with frontend alignment later; pinned RC2 still enforces the previous subscription model. No implementation or deployment change occurred. Historical findings above remain preserved.

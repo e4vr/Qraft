@@ -1,4 +1,6 @@
-# Phase 11 final constitutional validation
+# Phase 11 initial constitutional validation — historical
+
+**Superseded in part by [amended-policy review](phase-11-amended-policy-review.md).** Superadmin >150 is now explicitly allowed with controlled batching; the old count-only objection is withdrawn. The user confirmed the constitution as the new backend target. Preserve the following original findings as dated evidence, not current import acceptance rules.
 
 **PHASE 11 NO-GO**
 
