@@ -175,15 +175,88 @@ void test('study experience includes persistent marker, answer statistics, dark 
     new URL('components/medguard-app.tsx', root),
     'utf8',
   );
+  const navigator = await readFile(
+    new URL('components/exams/question-navigator.tsx', root),
+    'utf8',
+  );
   assert.match(app, /MARKER ON/);
   assert.match(app, /copySelectionAndMark/);
   assert.match(app, /answerStats/);
   assert.match(app, /prefers-color-scheme:\s*dark/);
-  assert.match(app, /<details\s+key=\{topic\.topic\}/);
-  assert.match(app, /className="q-question-drawer/);
-  assert.match(app, /aria-labelledby="question-navigator-title"/);
-  assert.match(app, /\{item\.stem\}/);
-  assert.match(app, /q-question-drawer-list/);
+  assert.match(app, /<details\s+key=\{topic\.id\}/);
+  assert.match(app, /<QuestionNavigator/);
+  assert.match(navigator, /className="q-question-drawer/);
+  assert.match(navigator, /aria-labelledby="question-navigator-title"/);
+  assert.match(navigator, /\{item\.preview\}/);
+  assert.match(navigator, /q-question-drawer-list/);
+});
+
+void test('QBank and Preformed exams share the virtualized question navigator', async () => {
+  const app = await readFile(
+    new URL('components/medguard-app.tsx', root),
+    'utf8',
+  );
+  const preformed = await readFile(
+    new URL('components/preformed-tests-workspace.tsx', root),
+    'utf8',
+  );
+  const navigator = await readFile(
+    new URL('components/exams/question-navigator.tsx', root),
+    'utf8',
+  );
+  assert.match(app, /<QuestionNavigator/);
+  assert.match(preformed, /<QuestionNavigator/);
+  assert.match(app, /aria-label="Open question list"/);
+  assert.match(preformed, /aria-label="Open question list"/);
+  assert.match(navigator, /const ROW_HEIGHT = 64/);
+  assert.match(navigator, /const visibleItems = items\.slice/);
+  assert.match(navigator, /currentIndex \* ROW_HEIGHT/);
+  assert.match(navigator, /secondaryAction/);
+  assert.match(navigator, /primaryAction/);
+  assert.match(navigator, /className="block min-w-0 truncate/);
+  assert.match(navigator, /style=\{\{[\s\S]*height: `\$\{ROW_HEIGHT\}px`/);
+  assert.match(navigator, /top: `\$\{index \* ROW_HEIGHT\}px`/);
+  assert.doesNotMatch(navigator, /transform: `translateY\(/);
+  assert.match(navigator, /tabIndex=\{-1\}/);
+  assert.match(
+    navigator,
+    /const scrollTop = event\.currentTarget\.scrollTop;[\s\S]*setViewport\(\(current\) => \(\{[\s\S]*scrollTop,/,
+  );
+  assert.doesNotMatch(
+    navigator,
+    /setViewport\(\(current\) => \(\{[\s\S]*scrollTop: event\.currentTarget\.scrollTop/,
+  );
+  assert.doesNotMatch(navigator, /Close question navigator/);
+  assert.match(app, /label: 'Close',[\s\S]*label: allQuestionsAnswered \? 'Finish' : 'Continue later'/);
+  assert.match(preformed, /label: busy \? 'Saving…' : 'Save & exit',[\s\S]*'Finishing…' : 'Finish'/);
+  assert.doesNotMatch(app, /q-test-save-actions/);
+  assert.doesNotMatch(app, /aria-label="Exit test"/);
+});
+
+void test('QBank test question count follows the filtered pool and plan limit', async () => {
+  const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
+  assert.match(app, /count: availableExamQuestionLimit\(questions\.length, maxQuestionsPerExam\)/);
+  assert.match(app, /const questionLimit = availableExamQuestionLimit\([\s\S]*?eligibleCount,[\s\S]*?maxQuestionsPerExam/);
+  assert.match(app, /const selectedCount = countWasEdited\s*\? clampExamQuestionCount\(config\.count, questionLimit\)\s*: questionLimit/);
+  assert.match(app, /const count = selectedCount;[\s\S]*onStart\(\{\s*\.\.\.config,\s*count,/);
+  assert.match(app, /max=\{questionLimit\}/);
+  assert.match(app, /const count = clampExamQuestionCount\(requested, questionLimit\)/);
+});
+
+void test('Preformed tests open outside the app shell and resume at the saved question', async () => {
+  const app = await readFile(new URL('components/medguard-app.tsx', root), 'utf8');
+  const preformed = await readFile(new URL('components/preformed-tests-workspace.tsx', root), 'utf8');
+  const attempt = await readFile(new URL('lib/preformed-test-types.ts', root), 'utf8');
+  assert.ok(app.indexOf('if (directTestCode) {') < app.indexOf('<QraftAppShell'));
+  assert.match(app, /<PreformedTestRunner\s+key=\{directTestCode\}/);
+  assert.match(app, /onRunTest=\{\(code\) => \{[\s\S]*setDirectTestCode\(code\)/);
+  assert.match(app, /const onPopState = \(\) => \{[\s\S]*setDirectTestCode\(/);
+  assert.doesNotMatch(preformed, /runningCode|setRunningCode/);
+  assert.match(preformed, /q-test-screen q-preformed-runner/);
+  assert.match(preformed, /if \(restoring\)[\s\S]*Opening saved test/);
+  assert.match(preformed, /saved\.currentIndex \?\? 0/);
+  assert.match(preformed, /const goToQuestion = \(target: number\) => \{[\s\S]*currentIndex: nextIndex/);
+  assert.match(attempt, /currentIndex\?: number/);
 });
 
 void test('shared notes open automatically after grading on desktop only', async () => {
@@ -215,7 +288,7 @@ void test('QBank switching, review counters, random tests, private notes, labs, 
   assert.match(app, /nextTestTitle/);
   assert.match(app, /Private note/);
   assert.match(app, /Laboratory reference values/);
-  assert.match(app, /mainProgressCategory/);
+  assert.match(app, /groupQuestionsByQBankClassification/);
   assert.match(types, /highlightSections/);
 });
 
@@ -263,7 +336,7 @@ void test("collaboration reads are scoped to the user's accessible QBanks", asyn
   assert.match(migration, /json_extract\(payload, '\$\.qbankId'\)/);
 });
 
-void test('ending a test uses the branded save confirmation instead of a browser alert', async () => {
+void test('the test action finishes answered exams and saves incomplete exams for History', async () => {
   const app = await readFile(
     new URL('components/medguard-app.tsx', root),
     'utf8',
@@ -271,9 +344,12 @@ void test('ending a test uses the branded save confirmation instead of a browser
   assert.doesNotMatch(app, /window\.confirm\(/);
   assert.match(app, /role="alertdialog"/);
   assert.match(app, /allQuestionsAnswered/);
-  assert.match(app, /Continue Later and Save/);
-  assert.match(app, /End and Save/);
+  assert.match(app, /Finish this test\?/);
+  assert.match(app, /if \(allQuestionsAnswered\) setFinishConfirmOpen\(true\);[\s\S]*else completeLater\(\);/);
+  assert.match(app, /allQuestionsAnswered \? 'Finish' : 'Continue later'/);
   assert.match(app, /status: 'active',[\s\S]*completedAt: undefined/);
+  assert.match(app, /onExit\('history'\)/);
+  assert.match(app, /test\.origin !== 'bookmarks' \|\| test\.status === 'active'/);
   assert.match(app, /Keep studying/);
 });
 
@@ -318,7 +394,10 @@ void test('the sidebar keeps navigation scrollable and the account footer visibl
   );
   assert.match(app, /h-dvh/);
   assert.match(app, /min-h-0 flex-1 space-y-1 overflow-y-auto/);
-  assert.match(app, /<footer className="[^"]*q-sidebar-footer[^"]*shrink-0 border-t/);
+  assert.match(
+    app,
+    /<footer className="[^"]*q-sidebar-footer[^"]*shrink-0 border-t/,
+  );
   assert.match(app, /aria-current=\{view === item\.id \? 'page'/);
 });
 
@@ -464,6 +543,10 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
     new URL('components/question-import-review.tsx', root),
     'utf8',
   );
+  const preformed = await readFile(
+    new URL('components/preformed-tests-workspace.tsx', root),
+    'utf8',
+  );
   const platform = await readFile(
     new URL('lib/platform-server.ts', root),
     'utf8',
@@ -485,6 +568,13 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
   assert.match(importReview, /QuestionImportReview/);
   assert.match(importReview, /One question per slide/);
   assert.match(manager, /QuestionImportReview/);
+  assert.match(preformed, /onClick=\{openImport\}/);
+  assert.match(preformed, /Import JSON \/ Use AI/);
+  assert.match(preformed, /ارفع الملف هنا/);
+  assert.match(preformed, /Questions to generate/);
+  assert.match(preformed, /Questions to extract/);
+  assert.match(preformed, /نسخ تعليمات الذكاء الاصطناعي/);
+  assert.match(preformed, /buildQuestionPrompt/);
   assert.match(platform, /questionId:\s*status === 'approved'/);
   assert.match(review, /Bulk review/);
   assert.match(review, /Select latest/);
@@ -529,7 +619,8 @@ void test('test sessions can restart, pause, resume, and be completed later', as
   assert.match(app, /Restart this question/);
   assert.match(app, /revealed: current\.revealed\.filter/);
   assert.match(app, /graded: current\.graded\.filter/);
-  assert.match(app, /Continue Later and Save/);
+  assert.match(app, /function completeLater\(\)/);
+  assert.match(app, /label: 'Close'/);
   assert.match(app, /Pause timer/);
   assert.match(app, /Continue test and resume timer/);
   assert.match(app, /backdrop-blur-xl/);
@@ -664,7 +755,10 @@ void test('QBank library uses Superadmin folders, personal shortcuts, and bookma
   assert.match(workspace, /toggleList\('favoriteIds'/);
   assert.match(workspace, /toggleList\('pinnedIds'/);
   assert.match(workspace, /draggable=\{sortable && !coarsePointer\}/);
-  assert.match(workspace, /function moveBank\(bankId: string, direction: -1 \| 1\)/);
+  assert.match(
+    workspace,
+    /function moveBank\(bankId: string, direction: -1 \| 1\)/,
+  );
   assert.match(workspace, /q-coarse-pointer-only/);
   assert.match(workspace, /by \{bank\.ownerName\}/);
   assert.match(folderManager, /One global structure, up to two levels/);
@@ -683,41 +777,94 @@ void test('touch input uses one event path, forgiving targets, and touch-safe sc
     'utf8',
   );
   const styles = await readFile(new URL('app/globals.css', root), 'utf8');
+  const presentation = await readFile(
+    new URL('features/presentation/presentation-context.tsx', root),
+    'utf8',
+  );
   assert.doesNotMatch(app, /onTouchEnd=/);
   assert.doesNotMatch(app, /user-scalable=no/);
   assert.doesNotMatch(app, /gesturestart/);
   assert.match(app, /onPointerDown=\{\(event\) => \{/);
   assert.match(styles, /\(hover: none\) and \(pointer: coarse\)/);
-  assert.match(styles, /:not\(\.q-compact-touch\)[^{]*\{[\s\S]*?min-width: 44px;/);
+  assert.match(
+    styles,
+    /:not\(\.q-compact-touch\)[^{]*\{[\s\S]*?min-width: 44px;/,
+  );
   assert.match(styles, /min-height: 44px;/);
   assert.match(styles, /touch-action: pan-y pinch-zoom;/);
-  assert.match(styles, /\.q-ios-pwa, \.q-ios-pwa body, \.q-ios-pwa \.q-viewport \{ touch-action: pan-x pan-y !important; \}/);
+  assert.match(
+    styles,
+    /html\[data-standalone='true'\][\s\S]*touch-action: pan-x pan-y !important;/,
+  );
+  assert.match(styles, /data-standalone='true'[\s\S]*scrollbar-width: none !important/);
+  assert.match(styles, /\*::-webkit-scrollbar \{ display: none !important/);
+  assert.match(presentation, /event\.touches\.length > 1/);
+  assert.match(presentation, /element\.scrollTop > 0/);
+  assert.match(presentation, /document\.addEventListener\('gesturestart'/);
   assert.match(styles, /q-viewport:has\(> \.q-shell\).*overflow-y: hidden/);
   assert.match(styles, /--q-safe-top: env\(safe-area-inset-top, 0px\)/);
+  assert.match(styles, /--q-safe-bottom-raw: env\(safe-area-inset-bottom, 0px\)/);
+  assert.match(
+    styles,
+    /--q-safe-bottom: max\(0px, calc\(var\(--q-safe-bottom-raw\) - var\(--q-safe-bottom-offset\)\)\)/,
+  );
   assert.match(styles, /html, body \{ background: var\(--card\); \}/);
   assert.match(styles, /body \{[^}]*position: fixed;[^}]*inset: 0;/);
-  assert.match(styles, /\.q-viewport \{[^}]*position: fixed;[^}]*inset: 0;[^}]*background: var\(--background\);/);
-  assert.doesNotMatch(styles, /\.q-viewport \{[^}]*padding-bottom: var\(--q-safe-bottom\)/);
-  assert.match(styles, /\.q-shell \{[^}]*padding-top: var\(--q-safe-top\);[^}]*background: var\(--card\);/);
-  assert.match(styles, /main:not\(\.q-shell\):not\(\.q-test-screen\):not\(\.q-admin-dashboard\)[^{]*\{[^}]*padding-bottom: var\(--q-safe-bottom\)/);
-  assert.match(styles, /--q-control-safe-bottom: max\(8px, var\(--q-safe-bottom\)\)/);
   assert.match(
     styles,
-    /display-mode: standalone[\s\S]*--q-control-safe-bottom: max\(8px, calc\(var\(--q-safe-bottom\) - 10px\)\)/,
+    /\.q-viewport \{[^}]*position: fixed;[^}]*inset: 0;[^}]*background: var\(--background\);/,
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.q-viewport \{[^}]*(?:height: 100dvh|max-height: var\(--q-visual-height\)|top: var\(--q-visual-offset-top\))/,
+  );
+  assert.doesNotMatch(presentation, /--q-visual-offset-top/);
+  assert.doesNotMatch(presentation, /lockViewportZoom|meta\[name=["']viewport/);
+  assert.match(
+    styles,
+    /html\[data-standalone='true'\] body \{[^}]*position: relative;[^}]*height: 100vh;[^}]*max-height: 100vh;/,
   );
   assert.match(
     styles,
-    /display-mode: standalone[\s\S]*--q-navigation-safe-bottom: max\(0px, calc\(var\(--q-safe-bottom\) - 45px\)\)/,
-  );
-  assert.match(styles, /\.q-mobile-nav \{[^}]*var\(--q-navigation-safe-bottom\)/);
-  assert.match(
-    styles,
-    /display-mode: standalone\) and \(max-width: 767px\) and \(pointer: coarse\)[\s\S]*--q-navigation-safe-bottom: max\(0px, calc\(var\(--q-safe-bottom\) - 65px\)\)/,
+    /html\[data-standalone='true'\] \.q-viewport \{[^}]*position: absolute;[^}]*bottom: auto;[^}]*height: 100vh;[^}]*max-height: 100vh;/,
   );
   assert.match(
     styles,
-    /display-mode: standalone\) and \(min-width: 768px\) and \(pointer: coarse\)[\s\S]*--q-workspace-safe-bottom: max\(0px, calc\(var\(--q-safe-bottom\) - 70px\)\)/,
+    /html\[data-standalone='true'\] \.q-sidebar \{[^}]*position: absolute;[^}]*height: 100%;/,
   );
+  assert.doesNotMatch(
+    styles,
+    /\.q-viewport \{[^}]*padding-bottom: var\(--q-safe-bottom\)/,
+  );
+  assert.match(
+    styles,
+    /\.q-shell \{[^}]*padding-top: var\(--q-safe-top\);[^}]*background: var\(--card\);/,
+  );
+  assert.match(
+    styles,
+    /main:not\(\.q-shell\):not\(\.q-test-screen\):not\(\.q-admin-dashboard\)[^{]*\{[^}]*padding-bottom: var\(--q-safe-bottom\)/,
+  );
+  assert.match(
+    styles,
+    /--q-control-safe-bottom: max\(8px, var\(--q-safe-bottom\)\)/,
+  );
+  assert.match(
+    styles,
+    /data-standalone='true'[\s\S]*--q-control-safe-bottom: max\(8px, var\(--q-safe-bottom\)\)/,
+  );
+  assert.match(
+    styles,
+    /data-standalone='true'[\s\S]*--q-safe-bottom-offset: 30px;[\s\S]*--q-navigation-safe-bottom: var\(--q-safe-bottom\)/,
+  );
+  assert.match(
+    styles,
+    /\.q-mobile-nav \{[^}]*var\(--q-navigation-safe-bottom\)/,
+  );
+  assert.match(
+    styles,
+    /data-standalone='true'\]\[data-ipad='true'\][\s\S]*--q-safe-bottom-offset: 20px/,
+  );
+  assert.doesNotMatch(styles, /@media \(min-width: 768px\) and \(max-width: 1023px\) \{ \.q-frame > \.q-stage \{ padding-bottom: 0;/);
   assert.doesNotMatch(app, /env\(safe-area-inset-/);
   assert.match(styles, /\.q-safe-fullscreen/);
   assert.match(styles, /\.q-flashcard-review-card/);
@@ -725,7 +872,10 @@ void test('touch input uses one event path, forgiving targets, and touch-safe sc
   assert.match(app, /<AppLoadingScreen status="Starting Qraft…"/);
   assert.match(app, /<AppLoadingScreen status="Syncing your workspace…"/);
   assert.doesNotMatch(app, /q-loading-panel/);
-  assert.match(styles, /\.dark \.q-loading-wordmark \{ filter: brightness\(0\) invert\(1\); \}/);
+  assert.match(
+    app,
+    /<QraftBrand tone="adaptive" className="q-loading-wordmark/,
+  );
 });
 
 void test('shared QBank links require an explicit accept or decline decision', async () => {

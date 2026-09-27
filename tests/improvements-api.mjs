@@ -331,6 +331,13 @@ export async function improvementsApiTests(t, db, call, runtime) {
       assert.deepEqual((await pool()).data, { eligible: 500 });
       assert.equal((await pool({ specialty: 'Surgery' })).data.eligible, 250);
       assert.equal((await pool({ topics: ['missing'] })).data.eligible, 0);
+      const surgeryTopic = { specialty: 'Surgery', topic: 'Topic A' };
+      const medicineTopic = { specialty: 'Medicine', topic: 'Topic A' };
+      assert.equal((await pool({ includedTopics: [surgeryTopic] })).data.eligible, 250);
+      assert.equal((await pool({ includedTopics: [medicineTopic] })).data.eligible, 250);
+      assert.equal((await pool({ includedTopics: [surgeryTopic, medicineTopic] })).data.eligible, 500);
+      assert.equal((await pool({ includedTopics: [{ specialty: 'Surgery', topic: 'missing' }] })).data.eligible, 0);
+      assert.equal((await pool({ includedTopics: [{ specialty: 1, topic: 'Topic A' }] })).status, 400);
       assert.equal(
         (
           await pool({
@@ -366,6 +373,23 @@ export async function improvementsApiTests(t, db, call, runtime) {
       assert.equal(selected.status, 200, JSON.stringify(selected));
       assert.equal(selected.data.questions.length, 10);
       assert.equal(new Set(selected.data.questions.map((q) => q.id)).size, 10);
+      const selectedSurgery = await pool(
+        { includedTopics: [surgeryTopic], count: 10 },
+        { select: true },
+      );
+      assert.equal(selectedSurgery.status, 200, JSON.stringify(selectedSurgery));
+      assert.ok(selectedSurgery.data.questions.every((q) =>
+        q.specialty === 'Surgery' && q.topic === 'Topic A',
+      ));
+      const selectedAcrossSpecialties = await pool(
+        { includedTopics: [surgeryTopic, medicineTopic], count: 10 },
+        { select: true },
+      );
+      assert.equal(selectedAcrossSpecialties.status, 200, JSON.stringify(selectedAcrossSpecialties));
+      assert.equal(selectedAcrossSpecialties.data.questions.length, 10);
+      assert.ok(selectedAcrossSpecialties.data.questions.every((q) =>
+        (q.specialty === 'Surgery' || q.specialty === 'Medicine') && q.topic === 'Topic A',
+      ));
       await record('qbanks', makeBank('inaccessible-bank', 'admin', 'private'));
       assert.equal(
         (

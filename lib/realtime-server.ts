@@ -119,6 +119,13 @@ export async function notifyMutation(request: Request) {
   } else if (path[0] === 'platform' && path[1] === 'classification') {
     addBank(input.qbankId);
     topics.add('question-catalog'); topics.add('collaboration');
+  } else if (path[0] === 'platform' && (path[1] === 'import' || path[1] === 'json-imports')) {
+    topics.add('json-import-monitor');
+    if (path[1] === 'import') {
+      topics.add('review-queue');
+      topics.add('contributions');
+      topics.add('question-catalog');
+    }
   } else if (path[0] === 'platform' && path[1] === 'bulk-review' && Array.isArray(input.proposalIds)) {
     const rows = await env.DB.prepare("SELECT qbank_id,owner_id FROM records WHERE type='questionProposals' AND id IN (SELECT value FROM json_each(?))")
       .bind(JSON.stringify(input.proposalIds)).all<{ qbank_id: string; owner_id: string }>();

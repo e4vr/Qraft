@@ -39,6 +39,55 @@ import {
   type PlanId,
 } from '@/features/subscriptions/domain/plan-config';
 import { addCalendarDuration } from '@/features/subscriptions/domain/calendar-duration';
+import {
+  compareDuplicateContent,
+  detectDuplicateReview,
+  DUPLICATE_DETECTION_CONFIG,
+  duplicateFingerprint,
+  prepareDuplicateCandidate,
+} from '@/features/duplicates/domain/duplicate-detection';
+
+type FinalizedDuplicateCandidate = {
+  status: 'approved' | 'rejected';
+  question?: Question;
+};
+
+function rebasePendingDuplicateReview(
+  proposal: QuestionProposal,
+  finalized: Map<string, FinalizedDuplicateCandidate>,
+  now: string,
+): QuestionProposal | undefined {
+  const review = proposal.duplicateReview;
+  if (proposal.status !== 'pending' || review?.status !== 'flagged') return undefined;
+  let changed = false;
+  const candidates = review.candidates.flatMap((finding) => {
+    if (finding.entityType !== 'pending_proposal') return [finding];
+    const outcome = finalized.get(finding.entityId);
+    if (!outcome) return [finding];
+    changed = true;
+    if (outcome.status === 'rejected' || !outcome.question) return [];
+    const question = outcome.question;
+    const replacement = detectDuplicateReview({
+      incoming: proposal.payload,
+      qbankId: proposal.qbankId,
+      sourceEntityId: proposal.id,
+      now,
+      candidates: [prepareDuplicateCandidate({
+        entityId: question.id,
+        entityType: 'approved_question',
+        questionId: question.questionId,
+        qbankId: question.qbankId ?? proposal.qbankId,
+        payload: question,
+      })],
+    })?.candidates[0];
+    return replacement ? [replacement] : [];
+  });
+  if (!changed) return undefined;
+  return {
+    ...proposal,
+    duplicateReview: candidates.length ? { ...review, candidates } : undefined,
+  };
+}
 
 const backupEncoder = new TextEncoder();
 
@@ -97,7 +146,7 @@ async function personalBackupSignatureIsValid(
 }
 
 export function auditStatement(
-  user: AppUser,
+  user: Pick<AppUser, 'uid' | 'displayName'>,
   action: string,
   target: string,
   previous: unknown,
@@ -215,31 +264,12 @@ async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'pro')
   };
 }
 
-function normalizeQuestionText(value: string) {
-  return value
-    .normalize('NFKC')
-    .toLocaleLowerCase('en-US')
-    .replace(/^\s*(?:q(?:uestion)?\s*)?\d+[.)\-:]\s*/i, '')
-    .replace(/[“”‘’]/g, "'")
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function normalizeClassificationName(value: string) {
   return value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
 }
 
 function validClassificationName(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 120;
-}
-
-function tokenSimilarity(left: string, right: string) {
-  const a = new Set(normalizeQuestionText(left).split(' ').filter(Boolean));
-  const b = new Set(normalizeQuestionText(right).split(' ').filter(Boolean));
-  if (!a.size || !b.size) return 0;
-  const intersection = [...a].filter((token) => b.has(token)).length;
-  return intersection / (a.size + b.size - intersection);
 }
 
 function contributionReward(proposal: QuestionProposal) {
@@ -281,14 +311,9 @@ function proposalRequiresTwoReviewers(proposal: QuestionProposal) {
   );
 }
 
-async function sha256Text(value: string) {
-  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 async function recordConfirmedDuplicateAttempt(
-  user: AppUser,
-  kind: 'file' | 'question',
+  user: Pick<AppUser, 'uid' | 'displayName'>,
+  kind: 'question',
   contentHash: string,
   referenceId?: string,
 ) {
@@ -300,7 +325,7 @@ async function recordConfirmedDuplicateAttempt(
     Date.now() - ABUSE_LIMITS.rollingWindowDays * 86_400_000,
   ).toISOString();
   const count = await env.DB.prepare(
-    'SELECT count(*) AS value FROM duplicate_attempts WHERE user_id=? AND confirmed=1 AND created_at>=?',
+    "SELECT count(*) AS value FROM duplicate_attempts WHERE user_id=? AND kind='question' AND confirmed=1 AND created_at>=?",
   ).bind(user.uid, windowStart).first<{ value: number }>();
   if ((count?.value ?? 0) < ABUSE_LIMITS.confirmedDuplicateAttempts) return null;
   const active = await env.DB.prepare(
@@ -334,6 +359,204 @@ async function recordConfirmedDuplicateAttempt(
   return endsAt;
 }
 
+type ImportAttemptStatus =
+  | 'completed'
+  | 'partial'
+  | 'duplicate_only'
+  | 'rejected'
+  | 'failed';
+
+type ImportMonitorContext = {
+  runId: string;
+  requestId: string;
+  userId: string;
+  qbankId: string;
+  fileName: string;
+  normalizedName: string;
+  fileHash: string;
+  chunkHash: string;
+  sourceFile: string;
+  chunkIndex: number;
+  chunkCount: number;
+  startedAt: string;
+};
+
+type ImportMonitorOutcome = {
+  status: ImportAttemptStatus;
+  total?: number;
+  successful?: number;
+  invalid?: number;
+  skippedDuplicates?: number;
+  flaggedDuplicates?: number;
+  repaired?: boolean;
+  report?: unknown[];
+  errorCode?: string;
+  errorMessage?: string;
+};
+
+function importRunRefreshStatement(runId: string, now: string) {
+  return env.DB.prepare(`UPDATE json_import_runs AS run SET
+    completed_chunks=(SELECT count(*) FROM json_import_attempts WHERE run_id=run.id),
+    total_count=coalesce((SELECT sum(total_count) FROM json_import_attempts WHERE run_id=run.id),0),
+    successful_count=coalesce((SELECT sum(successful_count) FROM json_import_attempts WHERE run_id=run.id),0),
+    invalid_count=coalesce((SELECT sum(invalid_count) FROM json_import_attempts WHERE run_id=run.id),0),
+    skipped_duplicate_count=coalesce((SELECT sum(skipped_duplicate_count) FROM json_import_attempts WHERE run_id=run.id),0),
+    flagged_duplicate_count=coalesce((SELECT sum(flagged_duplicate_count) FROM json_import_attempts WHERE run_id=run.id),0),
+    error_code=(SELECT error_code FROM json_import_attempts WHERE run_id=run.id AND error_code IS NOT NULL ORDER BY updated_at DESC LIMIT 1),
+    error_message=(SELECT error_message FROM json_import_attempts WHERE run_id=run.id AND error_message IS NOT NULL ORDER BY updated_at DESC LIMIT 1),
+    status=CASE
+      WHEN EXISTS(SELECT 1 FROM json_import_attempts WHERE run_id=run.id AND status='failed') THEN 'failed'
+      WHEN EXISTS(SELECT 1 FROM json_import_attempts WHERE run_id=run.id AND status='rejected')
+       AND coalesce((SELECT sum(successful_count) FROM json_import_attempts WHERE run_id=run.id),0)=0 THEN 'rejected'
+      WHEN EXISTS(SELECT 1 FROM json_import_attempts WHERE run_id=run.id AND status='rejected') THEN 'partial'
+      WHEN (SELECT count(*) FROM json_import_attempts WHERE run_id=run.id)<run.chunk_count THEN 'processing'
+      WHEN coalesce((SELECT sum(successful_count) FROM json_import_attempts WHERE run_id=run.id),0)=0
+       AND coalesce((SELECT sum(skipped_duplicate_count) FROM json_import_attempts WHERE run_id=run.id),0)>0
+       AND NOT EXISTS(SELECT 1 FROM json_import_attempts WHERE run_id=run.id AND status='rejected') THEN 'duplicate_only'
+      WHEN EXISTS(SELECT 1 FROM json_import_attempts WHERE run_id=run.id AND status='partial')
+        OR coalesce((SELECT sum(invalid_count+skipped_duplicate_count+flagged_duplicate_count) FROM json_import_attempts WHERE run_id=run.id),0)>0 THEN 'partial'
+      ELSE 'completed'
+    END,
+    completed_at=CASE
+      WHEN (SELECT count(*) FROM json_import_attempts WHERE run_id=run.id)>=run.chunk_count THEN ?
+      ELSE NULL
+    END,
+    updated_at=?
+    WHERE run.id=?`).bind(now, now, runId);
+}
+
+async function beginImportMonitoring(context: ImportMonitorContext) {
+  const existing = await env.DB.prepare(
+    'SELECT user_id,qbank_id,normalized_name,file_hash FROM json_import_runs WHERE id=?',
+  )
+    .bind(context.runId)
+    .first<{
+      user_id: string;
+      qbank_id: string;
+      normalized_name: string;
+      file_hash: string;
+    }>();
+  if (
+    existing &&
+    (existing.user_id !== context.userId ||
+      existing.qbank_id !== context.qbankId ||
+      existing.normalized_name !== context.normalizedName ||
+      existing.file_hash !== context.fileHash)
+  )
+    throw new Error('Invalid or reused upload session ID.');
+  const write = await env.DB.prepare(`INSERT INTO json_import_runs(
+    id,user_id,qbank_id,file_name,normalized_name,file_hash,source_file,status,
+    chunk_count,started_at,updated_at
+  ) VALUES(?,?,?,?,?,?,?,'processing',?,?,?)
+  ON CONFLICT(id) DO UPDATE SET
+    qbank_id=excluded.qbank_id,
+    file_name=excluded.file_name,
+    normalized_name=excluded.normalized_name,
+    file_hash=excluded.file_hash,
+    source_file=CASE WHEN excluded.source_file<>'' THEN excluded.source_file ELSE json_import_runs.source_file END,
+    chunk_count=max(json_import_runs.chunk_count,excluded.chunk_count),
+    updated_at=excluded.updated_at
+  WHERE json_import_runs.user_id=excluded.user_id
+    AND json_import_runs.qbank_id=excluded.qbank_id
+    AND json_import_runs.normalized_name=excluded.normalized_name
+    AND json_import_runs.file_hash=excluded.file_hash`)
+    .bind(
+      context.runId,
+      context.userId,
+      context.qbankId,
+      context.fileName,
+      context.normalizedName,
+      context.fileHash,
+      context.sourceFile,
+      context.chunkCount,
+      context.startedAt,
+      context.startedAt,
+    )
+    .run();
+  if ((write.meta.changes ?? 0) === 0)
+    throw new Error('Invalid or reused upload session ID.');
+}
+
+function importMonitoringStatements(
+  context: ImportMonitorContext,
+  outcome: ImportMonitorOutcome,
+) {
+  const now = new Date().toISOString();
+  const total = Math.max(0, outcome.total ?? 0);
+  const successful = Math.max(0, outcome.successful ?? 0);
+  const invalid = Math.max(0, outcome.invalid ?? 0);
+  const skippedDuplicates = Math.max(0, outcome.skippedDuplicates ?? 0);
+  const flaggedDuplicates = Math.max(0, outcome.flaggedDuplicates ?? 0);
+  return [
+    env.DB.prepare(`UPDATE json_import_runs SET
+      source_file=CASE WHEN ?<>'' THEN ? ELSE source_file END,
+      repaired=max(repaired,?),updated_at=? WHERE id=?`)
+      .bind(
+        context.sourceFile,
+        context.sourceFile,
+        outcome.repaired ? 1 : 0,
+        now,
+        context.runId,
+      ),
+    env.DB.prepare(`INSERT INTO json_import_attempts(
+      request_id,run_id,user_id,chunk_index,chunk_hash,status,total_count,
+      successful_count,invalid_count,skipped_duplicate_count,
+      flagged_duplicate_count,report_json,error_code,error_message,started_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(request_id) DO UPDATE SET
+      run_id=excluded.run_id,
+      chunk_index=excluded.chunk_index,
+      chunk_hash=excluded.chunk_hash,
+      status=excluded.status,
+      total_count=excluded.total_count,
+      successful_count=excluded.successful_count,
+      invalid_count=excluded.invalid_count,
+      skipped_duplicate_count=excluded.skipped_duplicate_count,
+      flagged_duplicate_count=excluded.flagged_duplicate_count,
+      report_json=excluded.report_json,
+      error_code=excluded.error_code,
+      error_message=excluded.error_message,
+      updated_at=excluded.updated_at`)
+      .bind(
+        context.requestId,
+        context.runId,
+        context.userId,
+        context.chunkIndex,
+        context.chunkHash,
+        outcome.status,
+        total,
+        successful,
+        invalid,
+        skippedDuplicates,
+        flaggedDuplicates,
+        JSON.stringify(outcome.report ?? []),
+        outcome.errorCode ?? null,
+        outcome.errorMessage?.slice(0, 500) ?? null,
+        context.startedAt,
+        now,
+      ),
+    importRunRefreshStatement(context.runId, now),
+  ];
+}
+
+async function rejectImport(
+  context: ImportMonitorContext,
+  errorCode: string,
+  errorMessage: string,
+  status: number,
+  outcome: Omit<ImportMonitorOutcome, 'status' | 'errorCode' | 'errorMessage'> = {},
+) {
+  await env.DB.batch(
+    importMonitoringStatements(context, {
+      ...outcome,
+      status: 'rejected',
+      errorCode,
+      errorMessage,
+    }),
+  );
+  return json({ error: errorMessage, code: errorCode }, status);
+}
+
 export async function platformApi(request: Request, action: string) {
   if (request.method !== 'GET') assertSameOrigin(request);
   const user = await currentUser(request);
@@ -353,6 +576,7 @@ export async function platformApi(request: Request, action: string) {
     typeof input[key] === 'string' ? (input[key] as string).trim() : '';
   const root =
     user.role === 'super_admin' && user.mfaEnrolled && user.mfaVerified;
+  let activeImportContext: ImportMonitorContext | undefined;
   try {
     if (action === 'reviewer-performance' && request.method === 'GET') return reviewerPerformance(user, url);
     if (action === 'test-pool' && request.method === 'POST') return testPool(user, input);
@@ -555,6 +779,170 @@ export async function platformApi(request: Request, action: string) {
         suspended: Boolean(suspension),
         endsAt: suspension?.ends_at ?? null,
       });
+    }
+    if (action === 'json-imports') {
+      if (!root)
+        return json({ error: 'Verified Superadmin access required.' }, 403);
+      if (request.method === 'GET') {
+        const runId = (url.searchParams.get('run') ?? '').trim();
+        if (runId) {
+          const run = await env.DB.prepare(`SELECT
+            run.*,
+            profile.email AS user_email,
+            json_extract(profile.profile_json,'$.displayName') AS user_name,
+            json_extract(bank.payload,'$.name') AS qbank_name,
+            CASE WHEN run.status='processing'
+              AND julianday(run.updated_at)<julianday('now','-30 minutes')
+              THEN 1 ELSE 0 END AS stale,
+            (SELECT count(*) FROM json_import_runs AS sibling
+             WHERE sibling.file_hash=run.file_hash AND sibling.deleted_at IS NULL) AS same_hash_count
+          FROM json_import_runs AS run
+          LEFT JOIN profiles AS profile ON profile.uid=run.user_id
+          LEFT JOIN records AS bank ON bank.type='qbanks' AND bank.id=run.qbank_id
+          WHERE run.id=? AND run.deleted_at IS NULL LIMIT 1`)
+            .bind(runId)
+            .first<Record<string, unknown>>();
+          if (!run) return json({ error: 'Import run not found.' }, 404);
+          const attempts = await env.DB.prepare(`SELECT
+            request_id,chunk_index,chunk_hash,status,total_count,
+            successful_count,invalid_count,skipped_duplicate_count,
+            flagged_duplicate_count,report_json,error_code,error_message,
+            started_at,updated_at
+          FROM json_import_attempts WHERE run_id=? ORDER BY chunk_index,started_at`)
+            .bind(runId)
+            .all<Record<string, unknown>>();
+          return json({ run, attempts: attempts.results });
+        }
+
+        const requestedPage = Number(url.searchParams.get('page') ?? 0);
+        const page = Number.isInteger(requestedPage)
+          ? Math.max(0, Math.min(10_000, requestedPage))
+          : 0;
+        const requestedPageSize = Number(url.searchParams.get('pageSize') ?? 25);
+        const pageSize = Number.isInteger(requestedPageSize)
+          ? Math.max(10, Math.min(100, requestedPageSize))
+          : 25;
+        const status = (url.searchParams.get('status') ?? '').trim();
+        const qbankId = (url.searchParams.get('qbankId') ?? '').trim();
+        const userId = (url.searchParams.get('userId') ?? '').trim();
+        const search = (url.searchParams.get('search') ?? '')
+          .trim()
+          .slice(0, 120);
+        const validStatuses = new Set([
+          'processing',
+          'completed',
+          'partial',
+          'duplicate_only',
+          'rejected',
+          'failed',
+        ]);
+        if (status && !validStatuses.has(status))
+          return json({ error: 'Invalid import status filter.' }, 400);
+        const clauses = ['run.deleted_at IS NULL'];
+        const bindings: Array<string | number> = [];
+        if (status) {
+          clauses.push('run.status=?');
+          bindings.push(status);
+        }
+        if (qbankId) {
+          clauses.push('run.qbank_id=?');
+          bindings.push(qbankId);
+        }
+        if (userId) {
+          clauses.push('run.user_id=?');
+          bindings.push(userId);
+        }
+        if (search) {
+          clauses.push(`(
+            instr(lower(run.file_name),lower(?))>0 OR
+            instr(lower(run.file_hash),lower(?))>0 OR
+            instr(lower(run.id),lower(?))>0 OR
+            instr(lower(profile.email),lower(?))>0 OR
+            instr(lower(json_extract(profile.profile_json,'$.displayName')),lower(?))>0
+          )`);
+          bindings.push(search, search, search, search, search);
+        }
+        const where = clauses.join(' AND ');
+        const rows = await env.DB.prepare(`SELECT
+          run.*,
+          profile.email AS user_email,
+          json_extract(profile.profile_json,'$.displayName') AS user_name,
+          json_extract(bank.payload,'$.name') AS qbank_name,
+          CASE WHEN run.status='processing'
+            AND julianday(run.updated_at)<julianday('now','-30 minutes')
+            THEN 1 ELSE 0 END AS stale,
+          (SELECT count(*) FROM json_import_runs AS sibling
+           WHERE sibling.file_hash=run.file_hash AND sibling.deleted_at IS NULL) AS same_hash_count
+        FROM json_import_runs AS run
+        LEFT JOIN profiles AS profile ON profile.uid=run.user_id
+        LEFT JOIN records AS bank ON bank.type='qbanks' AND bank.id=run.qbank_id
+        WHERE ${where}
+        ORDER BY run.started_at DESC,run.id DESC LIMIT ? OFFSET ?`)
+          .bind(...bindings, pageSize, page * pageSize)
+          .all<Record<string, unknown>>();
+        const count = await env.DB.prepare(`SELECT count(*) AS value
+          FROM json_import_runs AS run
+          LEFT JOIN profiles AS profile ON profile.uid=run.user_id
+          WHERE ${where}`)
+          .bind(...bindings)
+          .first<{ value: number }>();
+        const summary = await env.DB.prepare(`SELECT
+          count(*) AS runs,
+          coalesce(sum(successful_count),0) AS successful,
+          coalesce(sum(invalid_count),0) AS invalid,
+          coalesce(sum(skipped_duplicate_count),0) AS duplicates,
+          coalesce(sum(flagged_duplicate_count),0) AS flagged,
+          coalesce(sum(CASE
+            WHEN status IN ('rejected','failed') THEN 1
+            WHEN status='processing'
+              AND julianday(updated_at)<julianday('now','-30 minutes') THEN 1
+            ELSE 0 END),0) AS failed
+        FROM json_import_runs WHERE deleted_at IS NULL`)
+          .first<Record<string, number>>();
+        return json({
+          runs: rows.results,
+          summary: summary ?? {
+            runs: 0,
+            successful: 0,
+            invalid: 0,
+            duplicates: 0,
+            flagged: 0,
+            failed: 0,
+          },
+          page,
+          pageSize,
+          total: count?.value ?? 0,
+        });
+      }
+      if (request.method === 'DELETE') {
+        const runId = text('runId');
+        if (!/^[a-zA-Z0-9:-]{20,120}$/.test(runId))
+          return json({ error: 'Invalid import run.' }, 400);
+        const now = new Date().toISOString();
+        const existing = await env.DB.prepare(
+          'SELECT status,file_name,updated_at FROM json_import_runs WHERE id=? AND deleted_at IS NULL',
+        )
+          .bind(runId)
+          .first<{ status: string; file_name: string; updated_at: string }>();
+        if (!existing) return json({ error: 'Import run not found.' }, 404);
+        const staleBefore = Date.now() - 30 * 60 * 1000;
+        if (
+          existing.status === 'processing' &&
+          Date.parse(existing.updated_at) >= staleBefore
+        )
+          return json({ error: 'A running import cannot be removed.' }, 409);
+        await env.DB.batch([
+          env.DB.prepare(
+            'UPDATE json_import_runs SET deleted_at=?,deleted_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL',
+          ).bind(now, user.uid, now, runId),
+          auditStatement(user, 'json_import_history_removed', runId, null, {
+            fileName: existing.file_name,
+            contentPreserved: true,
+          }),
+        ]);
+        return json({ ok: true });
+      }
+      return json({ error: 'Method not allowed.' }, 405);
     }
     if (action === 'announcement') {
       const defaults = { enabled: false, content: '', href: '' };
@@ -850,7 +1238,9 @@ export async function platformApi(request: Request, action: string) {
       const value = (result: D1Result<unknown>) => Number((result.results[0] as { value?: number } | undefined)?.value ?? 0);
       return json({
         plan,
-        limits,
+        limits: root
+          ? { ...limits, canUseJsonImport: true, jsonImportDailyLimit: Number.MAX_SAFE_INTEGER, jsonQuestionsPerImport: Number.MAX_SAFE_INTEGER, maxPendingReviewQuestions: Number.MAX_SAFE_INTEGER }
+          : limits,
         usage: {
           lifetimeStartedExams: value(lifetime),
           monthlyStartedExams: value(monthly),
@@ -1093,6 +1483,356 @@ export async function platformApi(request: Request, action: string) {
       }
       return json({ error: 'Invalid admin operation.' }, 400);
     }
+    if (action === 'duplicate-scan') {
+      const qbankId = request.method === 'GET' ? (url.searchParams.get('qbankId') ?? '') : text('qbankId');
+      if (request.method === 'GET') {
+        const state = await bankAccessState(qbankId);
+        const bank = state.qbanks.find((item) => item.id === qbankId);
+        if (!bank || !canReviewBank(user, bank, state.memberships))
+          return json({ error: 'Reviewer access is required to inspect this QBank scan.' }, 403);
+        const run = await env.DB.prepare(
+          "SELECT id AS runId,cursor,scanned_count AS scanned,flagged_count AS flagged,status,detector_version AS detectorVersion,updated_at AS updatedAt FROM duplicate_scan_runs WHERE qbank_id=? AND started_by=? ORDER BY created_at DESC LIMIT 1",
+        ).bind(qbankId, user.uid).first();
+        return json({ run: run ?? null });
+      }
+      if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+      const requestedRunId = text('runId');
+      const cursor = Math.max(0, Math.trunc(Number(input.cursor) || 0));
+      const batchSize = Math.min(100, Math.max(1, Math.trunc(Number(input.batchSize) || 50)));
+      const state = await bankAccessState(qbankId);
+      const bank = state.qbanks.find((item) => item.id === qbankId);
+      if (!bank || !canReviewBank(user, bank, state.memberships))
+        return json({ error: 'Reviewer access is required to scan this QBank.' }, 403);
+      const contentRows = await env.DB.prepare(
+        "SELECT type,payload FROM records WHERE qbank_id=? AND type IN ('sharedQuestions','questionProposals')",
+      ).bind(qbankId).all<{ type: string; payload: string }>();
+      const questions = contentRows.results
+        .filter((row) => row.type === 'sharedQuestions')
+        .map((row) => JSON.parse(row.payload) as Question)
+        .sort((left, right) => left.id.localeCompare(right.id));
+      if (cursor > questions.length) return json({ error: 'The scan cursor is stale.' }, 409);
+      const runId = requestedRunId || crypto.randomUUID();
+      if (requestedRunId) {
+        const existingRun = await env.DB.prepare('SELECT qbank_id,cursor,status FROM duplicate_scan_runs WHERE id=?')
+          .bind(runId).first<{ qbank_id: string; cursor: number; status: string }>();
+        if (!existingRun || existingRun.qbank_id !== qbankId || existingRun.cursor !== cursor || existingRun.status !== 'running')
+          return json({ error: 'This maintenance scan changed or already finished.' }, 409);
+      }
+      const priorCases = new Set(
+        contentRows.results
+          .filter((row) => row.type === 'questionProposals')
+          .map((row) => JSON.parse(row.payload) as QuestionProposal)
+          .filter((proposal) => proposal.duplicateScanId && proposal.questionId)
+          .flatMap((proposal) => (proposal.duplicateReview?.candidates ?? []).map((candidate) =>
+            `${proposal.questionId}|${candidate.entityId}|${proposal.duplicateReview?.sourceFingerprint}`,
+          )),
+      );
+      const prepared = questions.map((question) => prepareDuplicateCandidate({
+        entityId: question.id,
+        entityType: 'approved_question',
+        questionId: question.questionId,
+        qbankId,
+        payload: question,
+      }));
+      const now = new Date().toISOString();
+      const proposals: QuestionProposal[] = [];
+      const end = Math.min(questions.length, cursor + batchSize);
+      for (let index = cursor; index < end; index += 1) {
+        const source = questions[index];
+        const sourceFingerprint = duplicateFingerprint(source);
+        const review = detectDuplicateReview({
+          incoming: source,
+          qbankId,
+          sourceEntityId: source.id,
+          now,
+          candidates: prepared.slice(index + 1).filter((candidate) =>
+            !priorCases.has(`${source.id}|${candidate.entityId}|${sourceFingerprint}`),
+          ),
+        });
+        if (!review) continue;
+        proposals.push({
+          id: `duplicate-scan-${crypto.randomUUID()}`,
+          qbankId,
+          type: 'question_edit',
+          editKinds: ['duplicate'],
+          questionId: source.id,
+          payload: {
+            stem: source.stem,
+            options: source.options,
+            answer: source.answer,
+            specialty: source.specialty,
+            topic: source.topic,
+            specialtyId: source.specialtyId,
+            topicId: source.topicId,
+            explanation: source.explanation ?? '',
+            sourceReference: source.sourceReference ?? source.sourceFile,
+            sourceFile: source.sourceFile,
+            sourcePage: source.sourcePage,
+            images: source.images ?? [],
+          },
+          currentSnapshot: {
+            stem: source.stem,
+            options: source.options,
+            answer: source.answer,
+            specialty: source.specialty,
+            topic: source.topic,
+            specialtyId: source.specialtyId,
+            topicId: source.topicId,
+            explanation: source.explanation ?? '',
+            sourceReference: source.sourceReference ?? source.sourceFile,
+            sourceFile: source.sourceFile,
+            sourcePage: source.sourcePage,
+            images: source.images ?? [],
+          },
+          rationale: 'Controlled existing-QBank duplicate scan. No content was changed or deleted.',
+          submissionMethod: 'manual',
+          duplicateScanId: runId,
+          duplicateReview: review,
+          status: 'pending',
+          proposedById: 'system:duplicate-scan',
+          proposedByName: 'Qraft duplicate scan',
+          proposedAt: now,
+        });
+      }
+      const nextCursor = end;
+      const status = nextCursor >= questions.length ? 'completed' : 'running';
+      const statements: D1PreparedStatement[] = [];
+      if (proposals.length)
+        statements.push(env.DB.prepare(
+          "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'questionProposals',json_extract(value,'$.id'),?,json_extract(value,'$.proposedById'),value,? FROM json_each(?)",
+        ).bind(qbankId, now, JSON.stringify(proposals)));
+      if (requestedRunId)
+        statements.push(env.DB.prepare(
+          'UPDATE duplicate_scan_runs SET cursor=?,scanned_count=scanned_count+?,flagged_count=flagged_count+?,status=?,updated_at=? WHERE id=? AND cursor=? AND status=\'running\'',
+        ).bind(nextCursor, end - cursor, proposals.length, status, now, runId, cursor));
+      else
+        statements.push(env.DB.prepare(
+          'INSERT INTO duplicate_scan_runs(id,qbank_id,started_by,cursor,scanned_count,flagged_count,status,detector_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+        ).bind(runId, qbankId, user.uid, nextCursor, end - cursor, proposals.length, status, DUPLICATE_DETECTION_CONFIG.detectorVersion, now, now));
+      statements.push(auditStatement(user, 'duplicate_qbank_scan_batch', qbankId, null, {
+        runId, cursor, nextCursor, scanned: end - cursor, flagged: proposals.length, status,
+        detectorVersion: DUPLICATE_DETECTION_CONFIG.detectorVersion,
+      }));
+      await env.DB.batch(statements);
+      return json({ ok: true, runId, cursor: nextCursor, status, scanned: end - cursor, flagged: proposals.length, proposals });
+    }
+    if (action === 'duplicate-resolve') {
+      if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+      const proposalId = text('proposalId');
+      const candidateEntityId = text('candidateEntityId');
+      const decision = text('decision');
+      const note = text('note').slice(0, 1_000);
+      if (!proposalId || !candidateEntityId || (decision !== 'kept_both' && decision !== 'rejected_as_duplicate'))
+        return json({ error: 'Choose KEEP BOTH or REJECT NEW AS DUPLICATE.' }, 400);
+      const proposalRow = await env.DB.prepare(
+        "SELECT payload FROM records WHERE type='questionProposals' AND id=?",
+      ).bind(proposalId).first<{ payload: string }>();
+      if (!proposalRow) return json({ error: 'This proposal no longer exists.' }, 409);
+      const proposal = JSON.parse(proposalRow.payload) as QuestionProposal;
+      const state = await bankAccessState(proposal.qbankId);
+      const bank = state.qbanks.find((item) => item.id === proposal.qbankId);
+      if (!bank || !canReviewBank(user, bank, state.memberships))
+        return json({ error: 'Reviewer access is required for this QBank.' }, 403);
+      if (proposal.status !== 'pending' || proposal.proposedById === user.uid)
+        return json({ error: 'This case was resolved or was submitted by you. Refresh and try again.' }, 409);
+      const previousReview = await env.DB.prepare(
+        'SELECT 1 AS value FROM contribution_reviews WHERE proposal_id=? AND reviewer_id=? LIMIT 1',
+      ).bind(proposal.id, user.uid).first<{ value: number }>();
+      if (previousReview)
+        return json({ error: 'You have already reviewed this submission.' }, 409);
+
+      const richCandidates = proposal.duplicateReview?.candidates ?? [];
+      const legacyCandidateId = proposal.duplicateInfo?.matchedQuestionId;
+      const selectedFinding = richCandidates.find((item) => item.entityId === candidateEntityId)
+        ?? (legacyCandidateId === candidateEntityId ? {
+          entityId: candidateEntityId,
+          entityType: 'approved_question' as const,
+          questionId: undefined,
+          similarity: proposal.duplicateInfo?.similarity ?? 0,
+          classification: 'possible' as const,
+          signals: { stem: proposal.duplicateInfo?.similarity ?? 0, optionsSet: 0, optionsOrdered: 0, correctAnswer: 0, specialty: 0, topic: 0 },
+          candidateFingerprint: '',
+          detectedAt: proposal.proposedAt,
+        } : undefined);
+      if (!selectedFinding)
+        return json({ error: 'The selected duplicate candidate is no longer part of this case.' }, 409);
+      const findingsToValidate = decision === 'kept_both' && richCandidates.length
+        ? richCandidates
+        : [selectedFinding];
+      const candidateRows = await env.DB.prepare(
+        "SELECT id,type,qbank_id,payload FROM records WHERE id IN (SELECT value FROM json_each(?)) AND type IN ('sharedQuestions','questionProposals')",
+      ).bind(JSON.stringify(findingsToValidate.map((item) => item.entityId))).all<{
+        id: string;
+        type: string;
+        qbank_id: string | null;
+        payload: string;
+      }>();
+      const candidateById = new Map(candidateRows.results.map((row) => [row.id, row]));
+      const sourceFingerprint = duplicateFingerprint(proposal.payload);
+      if (proposal.duplicateReview?.sourceFingerprint && proposal.duplicateReview.sourceFingerprint !== sourceFingerprint)
+        return json({ error: 'The incoming question changed. Refresh to run duplicate detection again.' }, 409);
+      const validated = [] as Array<{
+        originalEntityId: string;
+        finding: typeof selectedFinding;
+        candidateFingerprint: string;
+      }>;
+      for (const finding of findingsToValidate) {
+        const row = candidateById.get(finding.entityId);
+        if (!row || row.qbank_id !== proposal.qbankId)
+          return json({ error: 'A matched question changed or was removed. Refresh this case.' }, 409);
+        if ((finding.entityType === 'approved_question') !== (row.type === 'sharedQuestions'))
+          return json({ error: 'A matched question changed status. Refresh this case.' }, 409);
+        const parsed = JSON.parse(row.payload) as Question | QuestionProposal;
+        let currentFinding = finding;
+        let payload = row.type === 'questionProposals' ? (parsed as QuestionProposal).payload : (parsed as Question);
+        if (row.type === 'questionProposals' && (parsed as QuestionProposal).status !== 'pending') {
+          const reviewedCandidate = parsed as QuestionProposal;
+          if (reviewedCandidate.status === 'rejected') {
+            const refreshedAt = new Date().toISOString();
+            const rebased = rebasePendingDuplicateReview(
+              proposal,
+              new Map([[finding.entityId, { status: 'rejected' }]]),
+              refreshedAt,
+            );
+            if (rebased) {
+              const update = await env.DB.prepare(
+                "UPDATE records SET payload=?,updated_at=? WHERE type='questionProposals' AND id=? AND payload=?",
+              ).bind(JSON.stringify(rebased), refreshedAt, proposal.id, proposalRow.payload).run();
+              if (update.meta.changes) {
+                await auditStatement(user, 'duplicate_case_rebased_after_matched_rejection', proposal.id, null, {
+                  rejectedCandidateId: finding.entityId,
+                  remainingCandidates: rebased.duplicateReview?.candidates.length ?? 0,
+                }).run();
+                return json({
+                  ok: true,
+                  reconciled: true,
+                  updatedProposals: [rebased],
+                  updatedQuestions: [],
+                  reviewed: 0,
+                  awaitingSecondReview: 0,
+                  queueDelta: 0,
+                  reviewerCompletedDelta: 0,
+                });
+              }
+            }
+            return json({ error: 'This duplicate case changed while you were reviewing it. Refresh and try again.' }, 409);
+          }
+          if (reviewedCandidate.status !== 'approved' || !reviewedCandidate.questionId)
+            return json({ error: 'A matched proposal changed. Refresh this case to review the remaining matches.' }, 409);
+          const approvedRow = await env.DB.prepare(
+            "SELECT qbank_id,payload FROM records WHERE type='sharedQuestions' AND id=?",
+          ).bind(reviewedCandidate.questionId).first<{ qbank_id: string | null; payload: string }>();
+          if (!approvedRow || approvedRow.qbank_id !== proposal.qbankId)
+            return json({ error: 'The approved matched question is unavailable. Refresh this case.' }, 409);
+          const approvedQuestion = JSON.parse(approvedRow.payload) as Question;
+          currentFinding = {
+            ...finding,
+            entityType: 'approved_question',
+            entityId: reviewedCandidate.questionId,
+            questionId: approvedQuestion.questionId,
+          };
+          payload = approvedQuestion;
+        }
+        const comparison = compareDuplicateContent(proposal.payload, payload);
+        if (finding.candidateFingerprint && finding.candidateFingerprint !== comparison.candidateFingerprint)
+          return json({ error: 'A matched question changed. Refresh to compare its latest content.' }, 409);
+        validated.push({ originalEntityId: finding.entityId, finding: currentFinding, candidateFingerprint: comparison.candidateFingerprint });
+      }
+      const selectedCurrentFinding = validated.find((item) => item.originalEntityId === candidateEntityId)?.finding ?? selectedFinding;
+      const now = new Date().toISOString();
+      const resolutions = validated.map(({ finding }) => ({
+        decision: decision as 'kept_both' | 'rejected_as_duplicate',
+        candidateEntityId: finding.entityId,
+        reviewerId: user.uid,
+        reviewerName: user.displayName,
+        reviewedAt: now,
+        note: note || undefined,
+      }));
+      const reviewedProposal: QuestionProposal = {
+        ...proposal,
+        duplicateReview: {
+          status: 'resolved',
+          detectorVersion: proposal.duplicateReview?.detectorVersion ?? 'legacy-v0',
+          sourceFingerprint,
+          detectedAt: proposal.duplicateReview?.detectedAt ?? proposal.proposedAt,
+          candidates: richCandidates.length
+            ? richCandidates.map((candidate) => validated.find((item) => item.originalEntityId === candidate.entityId)?.finding ?? candidate)
+            : [validated[0].finding],
+          resolutions: [...(proposal.duplicateReview?.resolutions ?? []), ...resolutions],
+        },
+        status: decision === 'rejected_as_duplicate' ? 'rejected' : proposal.duplicateScanId ? 'approved' : 'pending',
+        reviewedById: decision === 'rejected_as_duplicate' || proposal.duplicateScanId ? user.uid : proposal.reviewedById,
+        reviewedByName: decision === 'rejected_as_duplicate' || proposal.duplicateScanId ? user.displayName : proposal.reviewedByName,
+        reviewedAt: decision === 'rejected_as_duplicate' || proposal.duplicateScanId ? now : proposal.reviewedAt,
+        reviewNote: note || (decision === 'rejected_as_duplicate'
+          ? `Rejected as duplicate of ${selectedCurrentFinding.questionId ? `Question #${selectedCurrentFinding.questionId}` : selectedCurrentFinding.entityId}.`
+          : proposal.reviewNote),
+      };
+      const statements: D1PreparedStatement[] = [
+        env.DB.prepare('INSERT INTO duplicate_resolution_claims(proposal_id,source_fingerprint,reviewer_id,created_at) VALUES(?,?,?,?)')
+          .bind(proposal.id, sourceFingerprint, user.uid, now),
+        ...validated.map(({ finding, candidateFingerprint }) => env.DB.prepare(
+          'INSERT INTO duplicate_pair_decisions(id,qbank_id,proposal_id,source_fingerprint,candidate_entity_type,candidate_entity_id,candidate_fingerprint,classification,similarity,detector_version,decision,reviewer_id,review_note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ).bind(
+          crypto.randomUUID(), proposal.qbankId, proposal.id, sourceFingerprint,
+          finding.entityType, finding.entityId, candidateFingerprint, finding.classification,
+          finding.similarity, proposal.duplicateReview?.detectorVersion ?? 'legacy-v0', decision,
+          user.uid, note || null, now,
+        )),
+        env.DB.prepare(
+          "UPDATE records SET payload=?,updated_at=? WHERE type='questionProposals' AND id=? AND json_extract(payload,'$.status')='pending' AND (json_extract(payload,'$.duplicateReview.sourceFingerprint')=? OR (json_extract(payload,'$.duplicateReview.sourceFingerprint') IS NULL AND json_extract(payload,'$.duplicateInfo') IS NOT NULL))",
+        ).bind(JSON.stringify(reviewedProposal), now, proposal.id, sourceFingerprint),
+        auditStatement(user, decision === 'kept_both' ? 'duplicate_pair_kept' : 'proposal_rejected_as_duplicate', proposal.id, null, {
+          qbankId: proposal.qbankId,
+          candidates: validated.map(({ finding }) => ({ id: finding.entityId, type: finding.entityType, similarity: finding.similarity, classification: finding.classification })),
+          detectorVersion: proposal.duplicateReview?.detectorVersion ?? 'legacy-v0',
+          note: note || undefined,
+        }),
+      ];
+      if (decision === 'rejected_as_duplicate') {
+        statements.push(
+          // The existing finalized-proposal trigger creates the canonical
+          // rejected review/completion rows. Enrich that row instead of
+          // racing the trigger's unique constraints.
+          env.DB.prepare('UPDATE contribution_reviews SET metadata=? WHERE proposal_id=? AND reviewer_id=?')
+            .bind(JSON.stringify({ duplicateDecision: 'rejected_as_duplicate', candidateEntityId: selectedCurrentFinding.entityId, detectorVersion: proposal.duplicateReview?.detectorVersion ?? 'legacy-v0' }), proposal.id, user.uid),
+        );
+      }
+      try {
+        await env.DB.batch(statements);
+      } catch (error) {
+        if (String(error).includes('UNIQUE constraint failed'))
+          return json({ error: 'Another reviewer already resolved this duplicate case. Refresh and try again.' }, 409);
+        throw error;
+      }
+      const saved = await env.DB.prepare("SELECT payload FROM records WHERE type='questionProposals' AND id=?")
+        .bind(proposal.id).first<{ payload: string }>();
+      const savedProposal = saved ? JSON.parse(saved.payload) as QuestionProposal : undefined;
+      if (!savedProposal || savedProposal.duplicateReview?.sourceFingerprint !== sourceFingerprint || savedProposal.duplicateReview.status !== 'resolved')
+        return json({ error: 'This duplicate finding became stale. Refresh before deciding.' }, 409);
+      if (decision === 'rejected_as_duplicate') {
+        const authorRow = await profileById(proposal.proposedById);
+        if (authorRow) {
+          const author = JSON.parse(authorRow.profile_json) as MemberProfile;
+          await recordConfirmedDuplicateAttempt(
+            { uid: proposal.proposedById, displayName: author.displayName },
+            'question',
+            sourceFingerprint,
+            selectedCurrentFinding.entityId,
+          );
+        }
+      }
+      return json({
+        ok: true,
+        decision,
+        updatedProposals: [savedProposal],
+        updatedQuestions: [],
+        reviewed: decision === 'rejected_as_duplicate' || proposal.duplicateScanId ? 1 : 0,
+        awaitingSecondReview: 0,
+        queueDelta: decision === 'rejected_as_duplicate' || proposal.duplicateScanId ? -1 : 0,
+        reviewerCompletedDelta: decision === 'rejected_as_duplicate' || proposal.duplicateScanId ? 1 : 0,
+      });
+    }
     if (action === 'bulk-review') {
       if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
       const rawProposalIds = input.proposalIds;
@@ -1108,6 +1848,11 @@ export async function platformApi(request: Request, action: string) {
       ).bind(JSON.stringify(proposalIds)).all<{ id: string; payload: string }>();
       if (rows.results.length !== proposalIds.length) return json({ error: 'One or more proposals no longer exist. Refresh and try again.' }, 409);
       const proposals = rows.results.map(row => JSON.parse(row.payload) as QuestionProposal);
+      if (proposals.some((proposal) =>
+        proposal.duplicateReview?.status === 'flagged' ||
+        (!proposal.duplicateReview && Boolean(proposal.duplicateInfo)),
+      ))
+        return json({ error: 'Resolve possible duplicate cases with KEEP BOTH or REJECT NEW AS DUPLICATE before normal review.' }, 409);
       const bankStates = new Map<string, Awaited<ReturnType<typeof bankAccessState>>>();
       for (const bankId of new Set(proposals.map(proposal => proposal.qbankId))) {
         const state = await bankAccessState(bankId);
@@ -1274,17 +2019,54 @@ export async function platformApi(request: Request, action: string) {
           );
         }
       }
+      const publishedQuestions = new Map(updatedQuestions.map((question) => [question.id, question]));
+      const finalized = new Map<string, FinalizedDuplicateCandidate>(
+        updatedProposals.map((proposal) => [proposal.id, {
+          status,
+          question: proposal.questionId ? publishedQuestions.get(proposal.questionId) : undefined,
+        }]),
+      );
+      const dependentRows = finalized.size
+        ? await env.DB.prepare(
+          `SELECT source.id,source.payload FROM records AS source
+           WHERE source.type='questionProposals'
+             AND json_extract(source.payload,'$.status')='pending'
+             AND json_extract(source.payload,'$.duplicateReview.status')='flagged'
+             AND EXISTS (
+               SELECT 1 FROM json_each(source.payload,'$.duplicateReview.candidates') AS candidate
+               WHERE json_extract(candidate.value,'$.entityType')='pending_proposal'
+                 AND json_extract(candidate.value,'$.entityId') IN (SELECT value FROM json_each(?))
+             )`,
+        ).bind(JSON.stringify([...finalized.keys()])).all<{ id: string; payload: string }>()
+        : { results: [] as Array<{ id: string; payload: string }> };
+      const dependentUpdates: Array<{ statementIndex: number; proposal: QuestionProposal }> = [];
+      for (const row of dependentRows.results) {
+        const rebased = rebasePendingDuplicateReview(
+          JSON.parse(row.payload) as QuestionProposal, finalized, now,
+        );
+        if (!rebased) continue;
+        dependentUpdates.push({ statementIndex: statements.length, proposal: rebased });
+        statements.push(env.DB.prepare(
+          "UPDATE records SET payload=?,updated_at=? WHERE type='questionProposals' AND id=? AND payload=?",
+        ).bind(JSON.stringify(rebased), now, row.id, row.payload));
+      }
       statements.push(auditStatement(user, `questions_bulk_${status}`, crypto.randomUUID(), null, {
         count: proposals.length,
         proposalIds,
         submitters: [...new Set(proposals.map(proposal => proposal.proposedById))],
+        rebasedDuplicateCases: dependentUpdates.length,
       }));
-      await env.DB.batch(statements);
+      const batchResults = await env.DB.batch(statements);
       return json({
         ok: true,
         reviewed: proposalsToFinalize.length,
         awaitingSecondReview: awaitingSecond.size,
-        updatedProposals,
+        updatedProposals: [
+          ...updatedProposals,
+          ...dependentUpdates
+            .filter(({ statementIndex }) => batchResults[statementIndex]?.meta.changes)
+            .map(({ proposal }) => proposal),
+        ],
         updatedQuestions,
         queueDelta: -proposalsToFinalize.length,
         reviewerCompletedDelta: proposalsToFinalize.length,
@@ -1759,6 +2541,8 @@ export async function platformApi(request: Request, action: string) {
       });
     }
     if (action === 'import' && request.method === 'POST') {
+      if (user.role === 'super_admin' && !root)
+        return json({ error: 'Superadmin verification required.' }, 403);
       const batchId = text('requestId');
       if (!/^[a-zA-Z0-9-]{20,80}$/.test(batchId))
         throw new Error('Invalid import ID.');
@@ -1773,65 +2557,116 @@ export async function platformApi(request: Request, action: string) {
           : json({ error: 'Invalid import ID.' }, 409);
       const plan = user.effectivePlan ?? user.tier;
       const limits = getPlanLimits(plan);
-      if (!limits.canUseJsonImport)
-        return json({ error: 'JSON Import is available with Pro.' }, 403);
-      if (input.rightsConfirmed === false)
+      const now = new Date().toISOString();
+      const uploadedFileName = text('fileName')
+        .split(/[\\/]/)
+        .pop()
+        ?.trim()
+        .slice(0, 240) ?? '';
+      const fileHash = text('fileHash').toLowerCase();
+      const originalFileName = (text('originalFileName') || uploadedFileName)
+        .split(/[\\/]/)
+        .pop()
+        ?.trim()
+        .slice(0, 240) ?? '';
+      const originalFileHash = (
+        text('originalFileHash') || fileHash
+      ).toLowerCase();
+      const uploadSessionId = text('uploadSessionId') || batchId;
+      const chunkIndex = Number(input.chunkIndex ?? 0);
+      const chunkCount = Number(input.chunkCount ?? 1);
+      if (
+        !uploadedFileName ||
+        !originalFileName ||
+        !/^[a-f0-9]{64}$/.test(fileHash) ||
+        !/^[a-f0-9]{64}$/.test(originalFileHash) ||
+        !/^[a-zA-Z0-9-]{20,80}$/.test(uploadSessionId) ||
+        !Number.isInteger(chunkIndex) ||
+        chunkIndex < 0 ||
+        !Number.isInteger(chunkCount) ||
+        chunkCount < 1 ||
+        chunkCount > 10_000 ||
+        chunkIndex >= chunkCount
+      )
         return json(
-          { error: 'Confirm that you have the right to share this content.' },
+          { error: 'بيانات الملف أو عملية الرفع غير صالحة.', code: 'INVALID_IMPORT_METADATA' },
           400,
         );
-      const now = new Date().toISOString();
+      const context: ImportMonitorContext = {
+        runId: uploadSessionId,
+        requestId: batchId,
+        userId: user.uid,
+        qbankId: text('qbankId'),
+        fileName: originalFileName,
+        normalizedName: originalFileName.toLocaleLowerCase('en-US'),
+        fileHash: originalFileHash,
+        chunkHash: fileHash,
+        sourceFile: text('sourceFile').slice(0, 240),
+        chunkIndex,
+        chunkCount,
+        startedAt: now,
+      };
+      await beginImportMonitoring(context);
+      activeImportContext = context;
+      if (!root && !limits.canUseJsonImport)
+        return rejectImport(
+          context,
+          'PLAN_ACCESS_DENIED',
+          'JSON Import is available with Pro.',
+          403,
+        );
+      if (input.rightsConfirmed === false)
+        return rejectImport(
+          context,
+          'RIGHTS_CONFIRMATION_REQUIRED',
+          'Confirm that you have the right to share this content.',
+          400,
+        );
       const suspension = await env.DB.prepare(
         'SELECT ends_at,reason FROM json_import_suspensions WHERE user_id=? AND removed_at IS NULL AND starts_at<=? AND ends_at>? ORDER BY ends_at DESC LIMIT 1',
       ).bind(user.uid, now, now).first<{ ends_at: string; reason: string }>();
       if (suspension)
-        return json(
-          { error: `JSON Import is suspended until ${suspension.ends_at}.` },
-          403,
-        );
-      const dailyImports = await env.DB.prepare(
-        'SELECT count(*) AS value FROM imported_files WHERE user_id=? AND uploaded_at>=?',
-      ).bind(user.uid, utcDayStart()).first<{ value: number }>();
-      if ((dailyImports?.value ?? 0) >= limits.jsonImportDailyLimit)
-        return json(
-          { error: `You've reached your daily JSON import limit (${limits.jsonImportDailyLimit}).` },
+        return rejectImport(
+          context,
+          'IMPORT_SUSPENDED',
+          `JSON Import is suspended until ${suspension.ends_at}.`,
           403,
         );
       const state = await bankAccessState(text('qbankId'));
       const bank = state.qbanks.find((x) => x.id === text('qbankId'));
-      if (!bank || !canAccessBank(user, bank, state.memberships) || !limits.canAddQuestions)
-        return json({ error: 'Question contribution access requires Pro.' }, 403);
-      const uploadedFileName = text('fileName').split(/[\\/]/).pop()?.trim().slice(0, 240) ?? '';
-      const normalizedName = uploadedFileName.toLocaleLowerCase('en-US');
-      const fileHash = text('fileHash').toLowerCase();
-      if (!uploadedFileName || !/^[a-f0-9]{64}$/.test(fileHash))
-        return json({ error: 'اسم الملف أو بصمته غير صالح.' }, 400);
-      const duplicate = await env.DB.prepare(
-        'SELECT file_name FROM imported_files WHERE user_id=? AND (normalized_name=? OR file_hash=?) LIMIT 1',
-      ).bind(user.uid, normalizedName, fileHash).first<{ file_name: string }>();
-      if (duplicate) {
-        const suspendedUntil = await recordConfirmedDuplicateAttempt(
-          user,
-          'file',
-          fileHash,
-          duplicate.file_name,
+      if (!bank || !canAccessBank(user, bank, state.memberships) || (!root && !limits.canAddQuestions))
+        return rejectImport(
+          context,
+          bank ? 'QBANK_ACCESS_DENIED' : 'QBANK_NOT_FOUND',
+          bank
+            ? 'Question contribution access requires Pro.'
+            : 'The target QBank no longer exists.',
+          bank ? 403 : 404,
         );
-        return json({
-          error: suspendedUntil
-            ? `هذا الملف مكرر. تم تعليق JSON Import حتى ${suspendedUntil}.`
-            : 'هذا الملف تم رفعه مسبقًا. الأسئلة المستخرجة منه إما تحت المراجعة أو تمت معالجتها بالفعل، لذلك لا تحتاج إلى رفع الملف مرة أخرى. لرفع نسخة محدثة يجب أن يكون محتواها واسمها مختلفين.',
-          suspendedUntil,
-        }, 409);
-      }
+      const normalizedName = uploadedFileName.toLocaleLowerCase('en-US');
       const rawImport = typeof input.questions === 'string'
         ? input.questions
         : { sourceFile: text('sourceFile'), questions: input.questions, skipped: input.skipped };
-      const report = parseQuestionImportReport(rawImport);
+      const report = parseQuestionImportReport(rawImport, '', root ? Number.POSITIVE_INFINITY : 200);
+      context.sourceFile = report.sourceFile;
       if (!report.questions.length)
-        return json({ error: 'لم يتم العثور على أي سؤال مكتمل وصالح للاستيراد.', skipped: report.skipped }, 400);
-      if (report.questions.length > limits.jsonQuestionsPerImport)
-        return json(
-          { error: `${limits.name} allows at most ${limits.jsonQuestionsPerImport} questions per JSON import.` },
+        return rejectImport(
+          context,
+          'NO_VALID_QUESTIONS',
+          'لم يتم العثور على أي سؤال مكتمل وصالح للاستيراد.',
+          400,
+          {
+            total: report.skipped.length,
+            invalid: report.skipped.length,
+            repaired: report.repaired || input.repaired === true,
+            report: report.skipped,
+          },
+        );
+      if (!root && report.questions.length > limits.jsonQuestionsPerImport)
+        return rejectImport(
+          context,
+          'QUESTION_LIMIT_REACHED',
+          `${limits.name} allows at most ${limits.jsonQuestionsPerImport} questions per JSON import.`,
           403,
         );
       const candidateRows = await env.DB.prepare(
@@ -1842,69 +2677,86 @@ export async function platformApi(request: Request, action: string) {
         const payload = row.type === 'questionProposals'
           ? (parsed as QuestionProposal).payload
           : (parsed as Question);
-        return {
-          id: row.id,
-          stem: payload.stem,
-          key: `${normalizeQuestionText(payload.stem)}|${payload.options.map(normalizeQuestionText).join('|')}`,
-        };
+        return prepareDuplicateCandidate({
+          entityId: row.id,
+          entityType: row.type === 'questionProposals' ? 'pending_proposal' : 'approved_question',
+          qbankId: bank.id,
+          questionId: row.type === 'sharedQuestions' ? (parsed as Question).questionId : undefined,
+          payload,
+        });
       });
+      const preparedCandidates = [...candidates];
+      const exactFingerprints = new Set(candidates.map((candidate) => candidate.prepared.fingerprint));
+      let skippedDuplicates = 0;
+      const decisionRows = await env.DB.prepare(
+        'SELECT proposal_id,source_fingerprint,candidate_entity_type,candidate_entity_id,candidate_fingerprint FROM duplicate_pair_decisions WHERE qbank_id=?',
+      ).bind(bank.id).all<{
+        proposal_id: string;
+        source_fingerprint: string;
+        candidate_entity_type: string;
+        candidate_entity_id: string;
+        candidate_fingerprint: string;
+      }>();
+      const suppressedPairs = new Set(decisionRows.results.map((decision) =>
+        `${decision.proposal_id}|${decision.source_fingerprint}|${decision.candidate_entity_type}|${decision.candidate_entity_id}|${decision.candidate_fingerprint}`,
+      ));
       const accepted: Array<{
+        id: string;
         payload: QuestionProposal['payload'];
-        duplicateInfo?: QuestionProposal['duplicateInfo'];
+        duplicateReview?: QuestionProposal['duplicateReview'];
       }> = [];
-      const duplicateSkips = [] as typeof report.skipped;
-      for (const payload of report.questions) {
-        const key = `${normalizeQuestionText(payload.stem)}|${payload.options.map(normalizeQuestionText).join('|')}`;
-        const exact = [
-          ...candidates,
-          ...accepted.map((item, index) => ({
-            id: `incoming-${index}`,
-            stem: item.payload.stem,
-            key: `${normalizeQuestionText(item.payload.stem)}|${item.payload.options.map(normalizeQuestionText).join('|')}`,
-          })),
-        ].find((candidate) => candidate.key === key);
-        if (exact) {
-          duplicateSkips.push({
-            fileName: report.sourceFile,
-            page: payload.sourcePage,
-            reason: `Exact duplicate of ${exact.id}.`,
-          });
-          await recordConfirmedDuplicateAttempt(
-            user,
-            'question',
-            await sha256Text(key),
-            exact.id,
-          );
+      for (const [index, payload] of report.questions.entries()) {
+        const proposalId = `${batchId}-${index}`;
+        const prepared = prepareDuplicateCandidate({
+          entityId: proposalId,
+          entityType: 'pending_proposal',
+          qbankId: bank.id,
+          payload,
+        });
+        if (exactFingerprints.has(prepared.prepared.fingerprint)) {
+          skippedDuplicates += 1;
           continue;
         }
-        const nearest = candidates
-          .map((candidate) => ({ ...candidate, similarity: tokenSimilarity(payload.stem, candidate.stem) }))
-          .sort((left, right) => right.similarity - left.similarity)[0];
-        accepted.push({
-          payload,
-          duplicateInfo:
-            nearest && nearest.similarity >= ABUSE_LIMITS.nearDuplicateSimilarity
-              ? {
-                  type: 'possible',
-                  similarity: Math.round(nearest.similarity * 100),
-                  matchedQuestionId: nearest.id,
-                }
-              : undefined,
+        const duplicateReview = detectDuplicateReview({
+          incoming: payload,
+          qbankId: bank.id,
+          sourceEntityId: proposalId,
+          now,
+          suppressedPairs,
+          candidates: preparedCandidates,
         });
+        accepted.push({
+          id: proposalId,
+          payload,
+          duplicateReview,
+        });
+        exactFingerprints.add(prepared.prepared.fingerprint);
+        preparedCandidates.push(prepared);
       }
-      if (!accepted.length)
-        return json(
-          { error: 'All valid questions were exact duplicates.', skipped: [...report.skipped, ...duplicateSkips] },
-          409,
-        );
-      const pending = await env.DB.prepare(
-        "SELECT count(*) AS value FROM records WHERE type='questionProposals' AND owner_id=? AND json_extract(payload,'$.status')='pending'",
-      ).bind(user.uid).first<{ value: number }>();
-      if ((pending?.value ?? 0) + accepted.length > limits.maxPendingReviewQuestions)
-        return json(
-          { error: 'Your submission queue is full. Please wait until some questions are reviewed before importing more.' },
-          403,
-        );
+      if (!root && accepted.length) {
+        const dailyImports = await env.DB.prepare(
+          'SELECT count(*) AS value FROM imported_files WHERE user_id=? AND uploaded_at>=?',
+        ).bind(user.uid, utcDayStart()).first<{ value: number }>();
+        if ((dailyImports?.value ?? 0) >= limits.jsonImportDailyLimit)
+          return rejectImport(
+            context,
+            'DAILY_LIMIT_REACHED',
+            `You've reached your daily JSON import limit (${limits.jsonImportDailyLimit}).`,
+            403,
+          );
+      }
+      if (!root) {
+        const pending = await env.DB.prepare(
+          "SELECT count(*) AS value FROM records WHERE type='questionProposals' AND owner_id=? AND json_extract(payload,'$.status')='pending'",
+        ).bind(user.uid).first<{ value: number }>();
+        if ((pending?.value ?? 0) + accepted.length > limits.maxPendingReviewQuestions)
+          return rejectImport(
+            context,
+            'PENDING_QUEUE_FULL',
+            'Your submission queue is full. Please wait until some questions are reviewed before importing more.',
+            403,
+          );
+      }
       const classificationRows = await env.DB.prepare(
         "SELECT type,payload FROM records WHERE qbank_id=? AND type IN ('qbankSpecialties','qbankTopics')",
       ).bind(bank.id).all<{ type: string; payload: string }>();
@@ -1947,8 +2799,8 @@ export async function platformApi(request: Request, action: string) {
           topic: topic.name,
         };
       }
-      const proposals = accepted.map(({ payload, duplicateInfo }, index) => ({
-        id: `${batchId}-${index}`,
+      const proposals = accepted.map(({ id, payload, duplicateReview }) => ({
+        id,
         qbankId: bank.id,
         type: 'new_question',
         editKinds: [
@@ -1962,7 +2814,7 @@ export async function platformApi(request: Request, action: string) {
         rationale: 'Imported from JSON.',
         submissionMethod: 'json',
         importBatchId: batchId,
-        duplicateInfo,
+        duplicateReview,
         status: 'pending',
         proposedById: user.uid,
         proposedByName: user.displayName,
@@ -1972,20 +2824,53 @@ export async function platformApi(request: Request, action: string) {
         proposals,
         specialties: createdSpecialties,
         topics: createdTopics,
-        total: proposals.length + report.skipped.length + duplicateSkips.length,
+        uploadSessionId: context.runId,
+        requestId: context.requestId,
+        chunkIndex: context.chunkIndex,
+        chunkCount: context.chunkCount,
+        reuploadPolicy: 'question-level-deduplication' as const,
+        total: proposals.length + skippedDuplicates + report.skipped.length,
         successful: proposals.length,
-        failed: report.skipped.length + duplicateSkips.length,
-        skippedDuplicates: duplicateSkips.length,
+        failed: report.skipped.length,
+        skippedDuplicates,
+        flaggedDuplicates: proposals.filter((proposal) => proposal.duplicateReview).length,
         pendingReview: proposals.length,
-        skipped: [...report.skipped, ...duplicateSkips],
+        skipped: report.skipped,
         repaired: report.repaired || input.repaired === true,
       };
+      const attemptStatus: ImportAttemptStatus = !proposals.length && skippedDuplicates
+        ? 'duplicate_only'
+        : report.skipped.length || skippedDuplicates || result.flaggedDuplicates
+          ? 'partial'
+          : 'completed';
+      const monitoringStatements = importMonitoringStatements(context, {
+        status: attemptStatus,
+        total: result.total,
+        successful: result.successful,
+        invalid: result.failed,
+        skippedDuplicates,
+        flaggedDuplicates: result.flaggedDuplicates,
+        repaired: result.repaired,
+        report: report.skipped,
+      });
+      if (!proposals.length) {
+        await env.DB.batch([
+          env.DB.prepare(
+            'INSERT INTO import_batches(id,user_id,result) VALUES(?,?,?)',
+          ).bind(batchId, user.uid, JSON.stringify(result)),
+          ...monitoringStatements,
+        ]);
+        activeImportContext = undefined;
+        return json(result);
+      }
       try {
         await env.DB.batch([
-          env.DB.prepare('INSERT INTO import_batches VALUES(?,?,?)').bind(batchId, user.uid, JSON.stringify(result)),
+          env.DB.prepare(
+            'INSERT INTO import_batches(id,user_id,result) VALUES(?,?,?)',
+          ).bind(batchId, user.uid, JSON.stringify(result)),
           env.DB.prepare(
             'INSERT INTO imported_files(id,user_id,file_name,normalized_name,file_hash,batch_id,source_file,successful_count,skipped_count,report_json,uploaded_at,daily_limit,pending_limit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
-          ).bind(crypto.randomUUID(), user.uid, uploadedFileName, normalizedName, fileHash, batchId, report.sourceFile, proposals.length, report.skipped.length + duplicateSkips.length, JSON.stringify([...report.skipped, ...duplicateSkips]), now, limits.jsonImportDailyLimit, limits.maxPendingReviewQuestions),
+          ).bind(crypto.randomUUID(), user.uid, uploadedFileName, normalizedName, fileHash, batchId, report.sourceFile, proposals.length, report.skipped.length, JSON.stringify(report.skipped), now, root ? Number.MAX_SAFE_INTEGER : limits.jsonImportDailyLimit, root ? Number.MAX_SAFE_INTEGER : limits.maxPendingReviewQuestions),
           env.DB.prepare(
             "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'questionProposals',json_extract(value,'$.id'),?,?,value,? FROM json_each(?)",
           ).bind(bank.id, user.uid, now, JSON.stringify(proposals)),
@@ -2001,17 +2886,56 @@ export async function platformApi(request: Request, action: string) {
             .bind(bank.id, now, createdSpecialties.length + createdTopics.length, createdSpecialties.length + createdTopics.length),
           auditStatement(user, 'questions_json_imported', bank.id, null, {
             batchId, fileName: uploadedFileName, fileHash, count: proposals.length, skipped: report.skipped.length,
+            skippedDuplicates,
+            duplicateCandidates: proposals.filter((proposal) => proposal.duplicateReview).length,
           }),
+          ...(proposals.some((proposal) => proposal.duplicateReview)
+            ? [auditStatement(user, 'duplicate_candidate_flagged', batchId, null, {
+                qbankId: bank.id,
+                source: 'json_import',
+                detectorVersion: DUPLICATE_DETECTION_CONFIG.detectorVersion,
+                count: proposals.filter((proposal) => proposal.duplicateReview).length,
+              })]
+            : []),
+          ...monitoringStatements,
         ]);
       } catch (error) {
         if (String(error).includes('JSON_IMPORT_DAILY_LIMIT'))
-          return json({ error: `You've reached your daily JSON import limit (${limits.jsonImportDailyLimit}).` }, 403);
+          return rejectImport(
+            context,
+            'DAILY_LIMIT_REACHED',
+            `You've reached your daily JSON import limit (${limits.jsonImportDailyLimit}).`,
+            403,
+          );
         if (String(error).includes('JSON_IMPORT_PENDING_LIMIT'))
-          return json({ error: 'Your submission queue is full. Please wait until some questions are reviewed before importing more.' }, 403);
+          return rejectImport(
+            context,
+            'PENDING_QUEUE_FULL',
+            'Your submission queue is full. Please wait until some questions are reviewed before importing more.',
+            403,
+          );
+        if (
+          String(error).includes('idx_imported_files_user_name') ||
+          String(error).includes('idx_imported_files_user_hash') ||
+          String(error).includes('imported_files.user_id, imported_files.normalized_name') ||
+          String(error).includes('imported_files.user_id, imported_files.file_hash')
+        )
+          return rejectImport(
+            context,
+            'LEGACY_FILE_CONSTRAINT',
+            'A legacy file-history constraint is still active. Apply the latest D1 migrations; the file itself is allowed to be imported again.',
+            409,
+          );
         if (String(error).includes('UNIQUE constraint failed'))
-          return json({ error: 'هذا الملف تم رفعه مسبقًا. لا تحتاج إلى رفعه مرة أخرى.' }, 409);
+          return rejectImport(
+            context,
+            'DATABASE_CONFLICT',
+            'تعذر حفظ هذه الدفعة بسبب تعارض متزامن. أعد المحاولة بنفس المسودة.',
+            409,
+          );
         throw error;
       }
+      activeImportContext = undefined;
       if (createdSpecialties.length || createdTopics.length) {
         const classificationRevision = await env.DB.prepare(
           'SELECT revision FROM qbank_classification_revisions WHERE qbank_id=?',
@@ -2091,6 +3015,34 @@ export async function platformApi(request: Request, action: string) {
     }
     return json({ error: 'Not found.' }, 404);
   } catch (error) {
+    if (error instanceof Error && error.message.includes('D1_')) {
+      console.error(
+        JSON.stringify({
+          event: 'platform_database_error',
+          action,
+          error: error.message,
+        }),
+      );
+    }
+    if (activeImportContext) {
+      const message =
+        error instanceof Error && !error.message.includes('D1_')
+          ? error.message
+          : 'The import could not be completed.';
+      try {
+        await env.DB.batch(
+          importMonitoringStatements(activeImportContext, {
+            status: 'failed',
+            errorCode: 'IMPORT_PROCESSING_FAILED',
+            errorMessage: message,
+          }),
+        );
+      } catch {
+        console.error(
+          JSON.stringify({ event: 'json_import_monitoring_failed' }),
+        );
+      }
+    }
     return json(
       {
         error:

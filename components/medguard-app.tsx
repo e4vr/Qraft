@@ -11,6 +11,8 @@ import {
 } from '@/components/subscription-workspace';
 import { ContactWorkspace } from '@/components/contact-workspace';
 import { WorkspaceHeader } from '@/components/workspace-header';
+import { QraftBrand } from '@/components/brand/qraft-brand';
+import { QuestionNavigator } from '@/components/exams/question-navigator';
 import { QraftAppShell } from '@/components/presentation/qraft-app-shell';
 import { ContributionCenter } from '@/components/contribution-center';
 import { AccountProfile } from '@/components/account-profile';
@@ -28,14 +30,21 @@ import { appStateFreshness, mergeAppStates } from '@/lib/merge-app-state';
 import { recordStudyActivity } from '@/lib/study-streak';
 import { preserveNewerLocalAnswers } from '@/features/collaboration/domain/preserve-personal-answers';
 import {
+  availableExamQuestionLimit,
+  clampExamQuestionCount,
   formatDate,
   formatDuration,
-  mainProgressCategory,
   nextTestTitle,
   normalizedTestTitle,
 } from '@/features/exams/domain/exam-presenters';
+import { groupQuestionsByQBankClassification } from '@/features/progress/domain/qbank-classification';
 import { mergeRanges } from '@/features/exams/domain/highlight-ranges';
-import { loadActiveLocalTheme, loadLocalTheme, saveLocalTheme, type LocalTheme } from '@/lib/local-preferences';
+import {
+  loadActiveLocalTheme,
+  loadLocalTheme,
+  saveLocalTheme,
+  type LocalTheme,
+} from '@/lib/local-preferences';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { AdaptiveOverlay } from '@/components/ui/adaptive-overlay';
 import {
@@ -74,6 +83,7 @@ import {
   LockKeyhole,
   List,
   LogOut,
+  Menu,
   Moon,
   Pencil,
   Pause,
@@ -134,6 +144,7 @@ import {
 } from '@/lib/application-services';
 import {
   loadLocalCollaboration,
+  loadCollaborationSyncOutbox,
   loadLocalState,
   saveLocalState,
   saveLocalCollaboration,
@@ -160,6 +171,8 @@ import {
   type HighlightRange,
   type Question,
   type QuestionProgress,
+  type QBankSpecialty,
+  type QBankTopic,
   type QuestionProposal,
   type QuestionStatus,
   type ProposalEditKind,
@@ -177,7 +190,10 @@ import {
 } from '@/components/collaboration-dashboard';
 import { QBankWorkspace } from '@/components/qbank-workspace';
 import { QBankManagement } from '@/components/qbank-management';
-import { PreformedTestRunner, PreformedTestsWorkspace } from '@/components/preformed-tests-workspace';
+import {
+  PreformedTestRunner,
+  PreformedTestsWorkspace,
+} from '@/components/preformed-tests-workspace';
 import { ReviewWorkspace } from '@/components/review-workspace';
 import {
   ResizableHandle,
@@ -239,10 +255,13 @@ const VIEW_PATHS: Partial<Record<View, string>> = {
 
 function viewFromPath(pathname: string): View {
   if (pathname === '/' || pathname === '/study') return 'dashboard';
-  if (pathname === '/qbanks' || pathname.startsWith('/qbanks/')) return 'library';
+  if (pathname === '/qbanks' || pathname.startsWith('/qbanks/'))
+    return 'library';
   if (pathname === '/exams/new') return 'create';
   if (pathname.startsWith('/exams/')) return 'test';
-  const entry = Object.entries(VIEW_PATHS).find(([, path]) => path === pathname);
+  const entry = Object.entries(VIEW_PATHS).find(
+    ([, path]) => path === pathname,
+  );
   return (entry?.[0] as View | undefined) ?? 'dashboard';
 }
 
@@ -285,11 +304,7 @@ function AppLoadingScreen({ status }: { status: string }) {
         aria-busy="true"
         className="flex flex-col items-center text-center"
       >
-        <img
-          src="/11.svg"
-          alt="Qraft"
-          className="q-loading-wordmark h-auto"
-        />
+        <QraftBrand tone="adaptive" className="q-loading-wordmark h-[58px]" />
         <p className="q-loading-status mt-7 text-sm font-medium text-muted-foreground">
           {status}
         </p>
@@ -322,7 +337,6 @@ function getQuestionProgress(
 ): QuestionProgress {
   return state.progress[questionId] ?? emptyProgress();
 }
-
 
 function HighlightedText({
   text,
@@ -510,18 +524,22 @@ function AuthScreen({
 
   return (
     <main className="auth-layout relative grid min-h-screen overflow-hidden text-foreground lg:grid-cols-[0.95fr_1.05fr]">
-      <div aria-hidden="true" className="pointer-events-none absolute -right-[12vw] top-[8vh] z-0 select-none text-[72vw] font-black leading-none tracking-[-0.18em] text-primary/[0.045] dark:text-cyan-200/[0.055] sm:text-[58vw] lg:-right-[5vw] lg:top-[-8vh] lg:text-[55vw]">
-        Q
-      </div>
+      <QraftBrand
+        variant="mark"
+        label=""
+        className="pointer-events-none absolute -right-[12vw] top-[8vh] z-0 size-[72vw] select-none opacity-[0.045] dark:opacity-[0.055] sm:size-[58vw] lg:-right-[5vw] lg:top-[-8vh] lg:size-[55vw]"
+      />
       <section className="auth-story relative z-10 hidden overflow-hidden bg-[radial-gradient(circle_at_15%_15%,#168ee8_0,#075dab_36%,#073c74_100%)] p-14 text-white lg:flex lg:flex-col lg:justify-between">
         <div className="absolute -bottom-48 -left-40 size-[560px] rounded-full border border-white/10" />
         <div className="absolute -bottom-28 -left-20 size-[380px] rounded-full border border-cyan-300/15" />
-        <div aria-hidden="true" className="pointer-events-none absolute -bottom-[15vw] -right-[3vw] select-none text-[43vw] font-black leading-none tracking-[-0.18em] text-white/[0.055]">
-          Q
-        </div>
+        <QraftBrand
+          variant="mark"
+          label=""
+          className="pointer-events-none absolute -bottom-[15vw] -right-[3vw] size-[43vw] select-none opacity-[0.075] brightness-0 invert"
+        />
         <div className="relative flex items-center">
           <div className="flex h-12 w-[150px] items-center rounded-2xl bg-white px-3 shadow-lg ring-1 ring-white/30">
-            <img src="/11.svg" alt="Qraft" className="h-auto w-full object-contain" />
+            <QraftBrand className="h-full w-full" />
           </div>
         </div>
         <div className="relative max-w-xl">
@@ -561,7 +579,7 @@ function AuthScreen({
         <div className="auth-panel q-enter w-full max-w-[470px]">
           <div className="mb-9 flex items-center lg:hidden">
             <div className="flex h-10 w-[126px] items-center rounded-xl bg-white px-2.5 shadow-sm ring-1 ring-black/5 dark:bg-slate-50">
-              <img src="/11.svg" alt="Qraft" className="h-auto w-full object-contain" />
+              <QraftBrand className="h-full w-full" />
             </div>
           </div>
           <div className="mb-8">
@@ -787,7 +805,8 @@ function AuthScreen({
               onSubmit={(event) => {
                 event.preventDefault();
                 const value = testCode.trim().toUpperCase().replace(/\s+/g, '');
-                if (value) onJoinTest(value.startsWith('QF-') ? value : `QF-${value}`);
+                if (value)
+                  onJoinTest(value.startsWith('QF-') ? value : `QF-${value}`);
               }}
               className="mt-3 flex gap-2"
             >
@@ -1007,7 +1026,11 @@ function clearInvitationLink() {
 function clearTestLink() {
   const url = new URL(window.location.href);
   url.searchParams.delete('join_test');
-  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  window.history.replaceState(
+    {},
+    '',
+    `${url.pathname}${url.search}${url.hash}`,
+  );
 }
 
 function AppSidebar({
@@ -1072,7 +1095,10 @@ function AppSidebar({
     };
   }, [qbankMenuOpen]);
   useEffect(() => {
-    const timer = window.setInterval(() => setCountdownNow(Date.now()), 86_400_000);
+    const timer = window.setInterval(
+      () => setCountdownNow(Date.now()),
+      86_400_000,
+    );
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
@@ -1159,27 +1185,7 @@ function AppSidebar({
         <div className="flex h-[66px] shrink-0 items-center justify-between border-b border-sidebar-border/70 px-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-[112px] shrink-0 items-center px-1">
-              <img
-                src="/11.svg"
-                alt=""
-                aria-hidden="true"
-                className="h-auto w-full object-contain dark:hidden"
-              />
-              <span
-                aria-hidden="true"
-                className="hidden h-[34px] w-full bg-gradient-to-r from-cyan-200 via-teal-200 to-sky-100 dark:block"
-                style={{
-                  WebkitMaskImage: "url('/11.svg')",
-                  maskImage: "url('/11.svg')",
-                  WebkitMaskPosition: 'center',
-                  maskPosition: 'center',
-                  WebkitMaskRepeat: 'no-repeat',
-                  maskRepeat: 'no-repeat',
-                  WebkitMaskSize: 'contain',
-                  maskSize: 'contain',
-                }}
-              />
-              <span className="sr-only">Qraft</span>
+              <QraftBrand tone="adaptive" className="h-[34px] w-full" />
             </div>
           </div>
           <button
@@ -1207,10 +1213,14 @@ function AppSidebar({
               className="group flex h-9 min-w-0 flex-1 items-center rounded-xl px-3 text-left text-sm font-bold text-foreground transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             >
               <span className="min-w-0 flex-1 truncate">
-                {qbanks.find((item) => item.id === activeQBankId)?.shortName ?? 'Select QBank'}
+                {qbanks.find((item) => item.id === activeQBankId)?.shortName ??
+                  'Select QBank'}
               </span>
               <ChevronDown
-                className={cx('size-4 shrink-0 text-muted-foreground transition-transform duration-200', qbankMenuOpen && 'rotate-180')}
+                className={cx(
+                  'size-4 shrink-0 text-muted-foreground transition-transform duration-200',
+                  qbankMenuOpen && 'rotate-180',
+                )}
                 aria-hidden="true"
               />
             </button>
@@ -1236,10 +1246,14 @@ function AppSidebar({
                     }}
                     className={cx(
                       'flex min-h-10 w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold transition-colors',
-                      active ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground',
+                      active
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-accent hover:text-accent-foreground',
                     )}
                   >
-                    <span className="min-w-0 flex-1 truncate">{qbank.shortName}</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {qbank.shortName}
+                    </span>
                     {active && <Check className="size-4 shrink-0" />}
                   </button>
                 );
@@ -1269,41 +1283,41 @@ function AppSidebar({
               item.id === 'flashcards' &&
               !hasFeature(user.effectivePlan ?? user.tier, 'flashcards');
             return (
-            <button
-              key={item.id}
-              aria-current={view === item.id ? 'page' : undefined}
-              onClick={() => (locked ? openUpgrade() : navigate(item.id))}
-              className={cx(
-                'group relative flex h-11 w-full min-w-0 items-center gap-3 overflow-hidden rounded-xl px-3 text-left text-sm font-semibold transition',
-                view === item.id
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-              )}
-            >
-              <span
+              <button
+                key={item.id}
+                aria-current={view === item.id ? 'page' : undefined}
+                onClick={() => (locked ? openUpgrade() : navigate(item.id))}
                 className={cx(
-                  'absolute inset-y-2 left-0 w-0.5 rounded-full bg-primary transition-opacity',
-                  view === item.id ? 'opacity-100' : 'opacity-0',
+                  'group relative flex h-11 w-full min-w-0 items-center gap-3 overflow-hidden rounded-xl px-3 text-left text-sm font-semibold transition',
+                  view === item.id
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
                 )}
-              />
-              <item.icon className="size-[18px] shrink-0 transition-transform group-hover:scale-105" />
-              <span className="min-w-0 truncate whitespace-nowrap">
-                {item.label}
-              </span>
-              {locked && (
-                <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-bold text-muted-foreground">
-                  <LockKeyhole className="size-3" /> Pro
-                </span>
-              )}
-              {item.id === 'flashcards' && dueFlashcardCount > 0 && (
+              >
                 <span
-                  aria-label={`${dueFlashcardCount} flashcards due`}
-                  className="ml-auto min-w-6 rounded-full bg-primary px-2 py-0.5 text-center text-[11px] font-black tabular-nums text-primary-foreground"
-                >
-                  {dueFlashcardCount > 99 ? '99+' : dueFlashcardCount}
+                  className={cx(
+                    'absolute inset-y-2 left-0 w-0.5 rounded-full bg-primary transition-opacity',
+                    view === item.id ? 'opacity-100' : 'opacity-0',
+                  )}
+                />
+                <item.icon className="size-[18px] shrink-0 transition-transform group-hover:scale-105" />
+                <span className="min-w-0 truncate whitespace-nowrap">
+                  {item.label}
                 </span>
-              )}
-            </button>
+                {locked && (
+                  <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-bold text-muted-foreground">
+                    <LockKeyhole className="size-3" /> Pro
+                  </span>
+                )}
+                {item.id === 'flashcards' && dueFlashcardCount > 0 && (
+                  <span
+                    aria-label={`${dueFlashcardCount} flashcards due`}
+                    className="ml-auto min-w-6 rounded-full bg-primary px-2 py-0.5 text-center text-[11px] font-black tabular-nums text-primary-foreground"
+                  >
+                    {dueFlashcardCount > 99 ? '99+' : dueFlashcardCount}
+                  </span>
+                )}
+              </button>
             );
           })}
           {showReview && (
@@ -1358,7 +1372,9 @@ function AppSidebar({
             )}
           >
             <Award className="size-[18px] shrink-0" />
-            <span className="min-w-0 truncate whitespace-nowrap">Contribution Center</span>
+            <span className="min-w-0 truncate whitespace-nowrap">
+              Contribution Center
+            </span>
           </button>
           <button
             aria-current={view === 'manager' ? 'page' : undefined}
@@ -1439,13 +1455,35 @@ function AppSidebar({
                 </span>
               </button>
               <span
-                title={syncStatus === 'syncing' ? 'Syncing changes' : syncStatus === 'synced' ? 'All changes synced' : syncStatus === 'error' ? 'Sync needs attention' : syncStatus === 'offline' ? 'Working offline' : 'Saved on this device'}
+                title={
+                  syncStatus === 'syncing'
+                    ? 'Syncing changes'
+                    : syncStatus === 'synced'
+                      ? 'All changes synced'
+                      : syncStatus === 'error'
+                        ? 'Sync needs attention'
+                        : syncStatus === 'offline'
+                          ? 'Working offline'
+                          : 'Saved on this device'
+                }
                 className={cx(
                   'ml-1.5 grid size-8 shrink-0 place-items-center rounded-xl',
-                  syncStatus === 'error' ? 'bg-red-50 text-red-600 dark:bg-red-500/10' : syncStatus === 'offline' || syncStatus === 'local' ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/10' : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10',
+                  syncStatus === 'error'
+                    ? 'bg-red-50 text-red-600 dark:bg-red-500/10'
+                    : syncStatus === 'offline' || syncStatus === 'local'
+                      ? 'bg-amber-50 text-amber-600 dark:bg-amber-500/10'
+                      : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10',
                 )}
               >
-                {syncStatus === 'syncing' ? <RefreshCw className="size-3.5 animate-spin" /> : syncStatus === 'error' ? <CircleAlert className="size-3.5" /> : syncStatus === 'offline' || syncStatus === 'local' ? <CloudOff className="size-3.5" /> : <Cloud className="size-3.5" />}
+                {syncStatus === 'syncing' ? (
+                  <RefreshCw className="size-3.5 animate-spin" />
+                ) : syncStatus === 'error' ? (
+                  <CircleAlert className="size-3.5" />
+                ) : syncStatus === 'offline' || syncStatus === 'local' ? (
+                  <CloudOff className="size-3.5" />
+                ) : (
+                  <Cloud className="size-3.5" />
+                )}
               </span>
               <button
                 title="Sign out"
@@ -1459,7 +1497,11 @@ function AppSidebar({
             <div className="flex items-center justify-between gap-2 border-t border-sidebar-border/60 px-2 pb-2 pt-2">
               <span
                 className="flex min-w-0 items-center gap-1.5 text-[10px] font-medium text-muted-foreground"
-                title={formattedExpiry ? `Plan ends ${formattedExpiry}` : 'No scheduled plan expiry'}
+                title={
+                  formattedExpiry
+                    ? `Plan ends ${formattedExpiry}`
+                    : 'No scheduled plan expiry'
+                }
               >
                 <Clock3 className="size-3.5 shrink-0 text-primary" />
                 <span className="truncate">{planExpiryLabel}</span>
@@ -1490,7 +1532,14 @@ function PageHeader({
   openMenu: () => void;
   actions?: React.ReactNode;
 }) {
-  return <WorkspaceHeader title={title} subtitle={subtitle} actions={actions} onOpenMenu={openMenu} />;
+  return (
+    <WorkspaceHeader
+      title={title}
+      subtitle={subtitle}
+      actions={actions}
+      onOpenMenu={openMenu}
+    />
+  );
 }
 
 function StatCard({
@@ -1560,11 +1609,18 @@ function CreateTest({
 }) {
   const { mode: presentationMode } = usePresentationEnvironment();
   const handheld = presentationMode === 'handheld';
-  const topics = useMemo(
-    () =>
-      Array.from(new Set(questions.map((question) => question.topic))).sort(),
-    [questions],
-  );
+  const topicOptions = useMemo(() => {
+    const counts = new Map<string, { specialty: string; topic: string; count: number }>();
+    for (const question of questions) {
+      const key = JSON.stringify([question.specialty, question.topic]);
+      const existing = counts.get(key);
+      if (existing) existing.count += 1;
+      else counts.set(key, { specialty: question.specialty, topic: question.topic, count: 1 });
+    }
+    return [...counts.values()].sort((left, right) =>
+      left.specialty.localeCompare(right.specialty) || left.topic.localeCompare(right.topic),
+    );
+  }, [questions]);
   const specialties = useMemo(
     () =>
       Array.from(
@@ -1577,34 +1633,72 @@ function CreateTest({
     statuses: [],
     specialty: '',
     topics: [],
-    count: Math.min(
-      20,
-      maxQuestionsPerExam,
-      Math.max(1, questions.length),
-    ),
+    includedTopics: [],
+    count: availableExamQuestionLimit(questions.length, maxQuestionsPerExam),
     randomAll: false,
     title: '',
   });
   const [message, setMessage] = useState('');
-  const [mobileStep, setMobileStep] = useState<'pool' | 'mode' | 'filters' | 'review'>('pool');
+  const [browseSpecialty, setBrowseSpecialty] = useState('');
+  const [countWasEdited, setCountWasEdited] = useState(false);
+  const [countDraft, setCountDraft] = useState<{ limit: number; value: string } | null>(null);
+  const [mobileStep, setMobileStep] = useState<
+    'pool' | 'mode' | 'filters' | 'review'
+  >('pool');
+  const selectedTopicKeys = useMemo(
+    () => new Set((config.includedTopics ?? []).map((item) => JSON.stringify([item.specialty, item.topic]))),
+    [config.includedTopics],
+  );
   // The complete accessible question metadata and personal progress are already
   // hydrated. Eligibility counting is therefore local; only final randomized
   // selection needs the authoritative server.
-  const eligibleCount = useMemo(() => questions.filter(question => {
-    if (config.randomAll) return true;
-    if (config.specialty && question.specialty !== config.specialty) return false;
-    if (config.topics.length && !config.topics.includes(question.topic)) return false;
-    if (!config.statuses.length) return true;
-    const progress = state.progress[question.id];
-    const attempts = progress?.attempts ?? 0;
-    return config.statuses.some(status =>
-      (status === 'new' && attempts === 0) ||
-      (status === 'previous' && attempts > 0) ||
-      (status === 'flagged' && progress?.flagged === true) ||
-      (status === 'correct' && attempts > 0 && progress?.lastAnswer === question.answer) ||
-      (status === 'incorrect' && attempts > 0 && progress?.lastAnswer !== question.answer),
-    );
-  }).length, [config.randomAll, config.specialty, config.statuses, config.topics, questions, state.progress]);
+  const eligibleCount = useMemo(
+    () =>
+      questions.filter((question) => {
+        if (config.randomAll) return true;
+        if (selectedTopicKeys.size) {
+          if (!selectedTopicKeys.has(JSON.stringify([question.specialty, question.topic])))
+            return false;
+        } else {
+          if (config.specialty && question.specialty !== config.specialty)
+            return false;
+          if (config.topics.length && !config.topics.includes(question.topic))
+            return false;
+        }
+        if (!config.statuses.length) return true;
+        const progress = state.progress[question.id];
+        const attempts = progress?.attempts ?? 0;
+        return config.statuses.some(
+          (status) =>
+            (status === 'new' && attempts === 0) ||
+            (status === 'previous' && attempts > 0) ||
+            (status === 'flagged' && progress?.flagged === true) ||
+            (status === 'correct' &&
+              attempts > 0 &&
+              progress?.lastAnswer === question.answer) ||
+            (status === 'incorrect' &&
+              attempts > 0 &&
+              progress?.lastAnswer !== question.answer),
+        );
+      }).length,
+    [
+      config.randomAll,
+      config.specialty,
+      config.statuses,
+      config.topics,
+      questions,
+      selectedTopicKeys,
+      state.progress,
+    ],
+  );
+  const questionLimit = availableExamQuestionLimit(
+    eligibleCount,
+    maxQuestionsPerExam,
+  );
+  const selectedCount = countWasEdited
+    ? clampExamQuestionCount(config.count, questionLimit)
+    : questionLimit;
+  const visibleCountDraft = countDraft?.limit === questionLimit ? countDraft.value : null;
   const statuses: Array<[QuestionStatus, string]> = [
     ['new', 'New'],
     ['previous', 'Previously tested'],
@@ -1620,13 +1714,37 @@ function CreateTest({
         : [...current.statuses, status],
     }));
   }
-  function toggleTopic(topic: string) {
+  function toggleTopic(specialty: string, topic: string) {
     setConfig((current) => ({
       ...current,
-      topics: current.topics.includes(topic)
-        ? current.topics.filter((item) => item !== topic)
-        : [...current.topics, topic],
+      specialty: '',
+      topics: [],
+      includedTopics: (current.includedTopics ?? []).some((item) =>
+        item.specialty === specialty && item.topic === topic,
+      )
+        ? (current.includedTopics ?? []).filter((item) =>
+            item.specialty !== specialty || item.topic !== topic,
+          )
+        : [...(current.includedTopics ?? []), { specialty, topic }],
     }));
+  }
+  function restartSetup() {
+    setConfig({
+      mode: 'tutor',
+      statuses: [],
+      specialty: '',
+      topics: [],
+      includedTopics: [],
+      count: availableExamQuestionLimit(questions.length, maxQuestionsPerExam),
+      randomAll: false,
+      title: '',
+    });
+    setBrowseSpecialty('');
+    setCountWasEdited(false);
+    setCountDraft(null);
+    setMessage('');
+    setMobileStep('pool');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
   const mobileSteps: ReadonlyArray<typeof mobileStep> = config.randomAll
     ? ['pool', 'mode', 'review']
@@ -1640,12 +1758,7 @@ function CreateTest({
       );
       return;
     }
-    if (config.count > eligibleCount) {
-      setMessage(
-        `Only ${eligibleCount} questions are currently available in this QBank.`,
-      );
-      return;
-    }
+    const count = selectedCount;
     const requestedTitle = (config.title ?? '').trim().replace(/\s+/g, ' ');
     if (
       requestedTitle &&
@@ -1660,6 +1773,7 @@ function CreateTest({
     }
     onStart({
       ...config,
+      count,
       title: requestedTitle,
     });
   }
@@ -1673,6 +1787,7 @@ function CreateTest({
     setMobileStep(mobileSteps[nextIndex]);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
+  const includedTopics = config.includedTopics ?? [];
   return (
     <>
       <PageHeader
@@ -1680,11 +1795,29 @@ function CreateTest({
         subtitle="Build a focused question block"
         openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
       />
-      <div className={cx('mx-auto max-w-5xl p-4 sm:p-7', handheld && 'pb-24')}>
+      <div className={cx('mx-auto max-w-5xl p-4 sm:p-7', handheld && 'pb-[calc(var(--q-mobile-navigation)+var(--q-safe-bottom)+7rem)]')}>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="min-w-0 text-sm text-muted-foreground">
+            Select topics from any specialty to build one focused test.
+          </p>
+          <button
+            type="button"
+            onClick={restartSetup}
+            className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border bg-card px-4 text-sm font-semibold transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          >
+            <RotateCcw className="size-4" />
+            Restart setup
+          </button>
+        </div>
         {handheld && (
-          <div className="q-test-builder-progress" aria-label="Test setup progress">
+          <div
+            className="q-test-builder-progress"
+            aria-label="Test setup progress"
+          >
             <div className="flex items-center justify-between text-xs font-bold">
-              <span>Step {mobileStepIndex + 1} of {mobileSteps.length}</span>
+              <span>
+                Step {mobileStepIndex + 1} of {mobileSteps.length}
+              </span>
               <span className="text-muted-foreground">
                 {mobileStep === 'pool'
                   ? 'Question pool'
@@ -1698,14 +1831,21 @@ function CreateTest({
             <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
               <div
                 className="h-full rounded-full bg-primary transition-[width]"
-                style={{ width: `${((mobileStepIndex + 1) / mobileSteps.length) * 100}%` }}
+                style={{
+                  width: `${((mobileStepIndex + 1) / mobileSteps.length) * 100}%`,
+                }}
               />
             </div>
           </div>
         )}
-        <div className="grid gap-5 lg:grid-cols-[1fr_310px]">
+        <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_310px]">
           <div className="space-y-5">
-            <section className={cx('rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6', handheld && mobileStep !== 'pool' && 'hidden')}>
+            <section
+              className={cx(
+                'rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6',
+                handheld && mobileStep !== 'pool' && 'hidden',
+              )}
+            >
               <span className="text-xs font-bold text-primary">01</span>
               <h2 className="mt-1 text-lg font-bold">
                 Choose the question pool
@@ -1751,7 +1891,12 @@ function CreateTest({
                 ))}
               </div>
             </section>
-            <section className={cx('rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6', handheld && mobileStep !== 'mode' && 'hidden')}>
+            <section
+              className={cx(
+                'rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6',
+                handheld && mobileStep !== 'mode' && 'hidden',
+              )}
+            >
               <span className="text-xs font-bold text-primary">02</span>
               <h2 className="mt-1 text-lg font-bold">Choose your test mode</h2>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -1808,7 +1953,12 @@ function CreateTest({
               </div>
             </section>
             {!config.randomAll && (
-              <section className={cx('rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6', handheld && mobileStep !== 'filters' && 'hidden')}>
+              <section
+                className={cx(
+                  'rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6',
+                  handheld && mobileStep !== 'filters' && 'hidden',
+                )}
+              >
                 <span className="text-xs font-bold text-primary">03</span>
                 <h2 className="mt-1 text-lg font-bold">Question status</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
@@ -1835,91 +1985,106 @@ function CreateTest({
               </section>
             )}
             {!config.randomAll && (
-              <section className={cx('rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6', handheld && mobileStep !== 'filters' && 'hidden')}>
+              <section
+                className={cx(
+                  'rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6',
+                  handheld && mobileStep !== 'filters' && 'hidden',
+                )}
+              >
                 <span className="text-xs font-bold text-primary">04</span>
                 <h2 className="mt-1 text-lg font-bold">Specialty & topics</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Choose a specialty, then optionally narrow the block by topic.
+                  Browse specialties and select any combination of topics. Switching specialties keeps your selections.
                 </p>
                 {specialties.length > 1 && (
                   <label className="mt-4 block">
                     <span className="mb-1.5 block text-xs font-bold">
-                      Specialty
+                      Browse specialty
                     </span>
                     <select
-                      value={config.specialty}
-                      onChange={(event) =>
-                        setConfig({
-                          ...config,
-                          specialty: event.target.value,
-                          topics: [],
-                        })
-                      }
-                      className="h-11 w-full rounded-xl border bg-white px-3 text-sm dark:bg-card"
+                      value={browseSpecialty}
+                      onChange={(event) => setBrowseSpecialty(event.target.value)}
+                      className="min-h-11 w-full min-w-0 rounded-xl border bg-background px-3 text-sm"
                     >
                       <option value="">All specialties</option>
                       {specialties.map((item) => (
-                        <option key={item}>{item}</option>
+                        <option key={item} value={item}>
+                          {item} · {includedTopics.filter((selection) => selection.specialty === item).length} selected
+                        </option>
                       ))}
                     </select>
                   </label>
                 )}
-                <details className="mt-4">
-                  <summary className="cursor-pointer rounded-xl border bg-muted/30 p-3 text-sm font-semibold">
-                    Choose topics{' '}
-                    <span className="ml-2 text-muted-foreground">
-                      {config.topics.length
-                        ? `${config.topics.length} selected`
-                        : 'All topics included'}
-                    </span>
-                  </summary>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {topics
-                      .filter((topic) =>
-                        questions.some(
-                          (question) =>
-                            (!config.specialty || question.specialty === config.specialty) &&
-                            question.topic === topic,
-                        ),
-                      )
-                      .map((topic) => {
-                        const selected = config.topics.includes(topic);
-                        return (
-                          <button
-                            type="button"
-                            key={topic}
-                            aria-pressed={selected}
-                            onClick={() => toggleTopic(topic)}
-                            className="flex items-center gap-3 rounded-xl border p-3 text-left text-sm transition hover:bg-muted/50"
-                          >
-                            <span
+                <div className="mt-4 max-h-[min(52vh,520px)] space-y-5 overflow-y-auto overscroll-contain rounded-xl border bg-muted/10 p-3 sm:p-4">
+                  {(browseSpecialty ? [browseSpecialty] : specialties).map((specialty) => (
+                    <div key={specialty} className="min-w-0">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <h3 className="min-w-0 break-words text-sm font-bold">{specialty}</h3>
+                        <span className="text-xs text-muted-foreground">
+                          {includedTopics.filter((item) => item.specialty === specialty).length} included
+                        </span>
+                      </div>
+                      <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+                        {topicOptions.filter((item) => item.specialty === specialty).map((item) => {
+                          const selected = includedTopics.some((selection) =>
+                            selection.specialty === item.specialty && selection.topic === item.topic,
+                          );
+                          return (
+                            <button
+                              type="button"
+                              key={JSON.stringify([item.specialty, item.topic])}
+                              aria-pressed={selected}
+                              onClick={() => toggleTopic(item.specialty, item.topic)}
                               className={cx(
-                                'grid size-4 place-items-center rounded border',
-                                selected &&
-                                  'border-primary bg-primary text-white',
+                                'flex min-h-12 min-w-0 items-center gap-3 rounded-xl border p-3 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                                selected ? 'border-primary bg-primary/10' : 'bg-card hover:border-primary/35 hover:bg-muted/50',
                               )}
                             >
-                              {selected && <Check className="size-3" />}
-                            </span>
-                            <span className="flex-1 font-medium">{topic}</span>
-                            <span className="text-xs text-muted-foreground">
-                              {
-                                questions.filter(
-                                  (question) =>
-                                    (!config.specialty || question.specialty === config.specialty) &&
-                                    question.topic === topic,
-                                ).length
-                              }
-                            </span>
-                          </button>
-                        );
-                      })}
+                              <span className={cx('grid size-5 shrink-0 place-items-center rounded border', selected && 'border-primary bg-primary text-white')}>
+                                {selected && <Check className="size-3" />}
+                              </span>
+                              <span className="min-w-0 flex-1 break-words font-medium">{item.topic}</span>
+                              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{item.count}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 min-w-0 rounded-xl border border-primary/20 bg-primary/5 p-3 sm:p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-bold">Included topics</h3>
+                    <span aria-live="polite" className="rounded-full bg-card px-2.5 py-1 text-xs font-bold tabular-nums">{includedTopics.length}</span>
                   </div>
-                </details>
+                  {includedTopics.length ? (
+                    <div className="mt-3 flex flex-wrap gap-2" aria-label="Included topics">
+                      {includedTopics.map((item) => (
+                        <button
+                          type="button"
+                          key={JSON.stringify([item.specialty, item.topic])}
+                          onClick={() => toggleTopic(item.specialty, item.topic)}
+                          aria-label={`Remove ${item.topic} from ${item.specialty}`}
+                          className="inline-flex min-h-11 max-w-full items-center gap-2 rounded-xl border bg-card px-3 py-2 text-left text-xs font-medium hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                        >
+                          <span className="min-w-0 break-words">{item.specialty} · {item.topic}</span>
+                          <X className="size-3.5 shrink-0" />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted-foreground">No topics selected — the test includes every topic in this QBank.</p>
+                  )}
+                </div>
               </section>
             )}
           </div>
-          <aside className={cx('order-first h-fit rounded-2xl bg-card p-5 ring-1 ring-border lg:order-last lg:sticky lg:top-[92px]', handheld && mobileStep !== 'review' && 'hidden')}>
+          <aside
+            className={cx(
+              'order-last min-w-0 h-fit rounded-2xl bg-card p-5 ring-1 ring-border lg:sticky lg:top-[92px]',
+              handheld && mobileStep !== 'review' && 'hidden',
+            )}
+          >
             <span className="q-eyebrow">Ready when you are</span>
             <h3 className="mt-1 text-lg font-bold">Your session</h3>
             <p className="mt-2 text-sm text-muted-foreground lg:hidden">
@@ -1950,47 +2115,72 @@ function CreateTest({
                 <strong className="capitalize">{config.mode}</strong>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Available in QBank</span>
+                <span className="text-muted-foreground">
+                  Available in QBank
+                </span>
                 <strong>{questions.length}</strong>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Eligible</span>
                 <strong aria-live="polite">{eligibleCount ?? '…'}</strong>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Selected topics</span>
-                <strong>
-                  {config.randomAll
-                    ? 'Random all'
-                    : config.topics.length || 'All'}
-                </strong>
+            </div>
+            <div className="mt-5 min-w-0 rounded-xl border bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-2 text-sm">
+                <strong>Included topics</strong>
+                <span className="rounded-full bg-card px-2 py-0.5 text-xs font-bold tabular-nums">
+                  {config.randomAll ? 'All' : includedTopics.length || 'All'}
+                </span>
               </div>
+              {config.randomAll || !includedTopics.length ? (
+                <p className="mt-2 text-xs text-muted-foreground">All QBank topics are included.</p>
+              ) : (
+                <ul className="mt-2 max-h-48 space-y-1.5 overflow-y-auto overscroll-contain text-xs">
+                  {includedTopics.map((item) => (
+                    <li key={JSON.stringify([item.specialty, item.topic])} className="min-w-0 break-words rounded-lg bg-card px-2 py-1.5">
+                      <span className="font-semibold">{item.specialty}</span> · {item.topic}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <label htmlFor="test-question-count" className="mt-6 block">
               <span className="mb-2 flex justify-between text-sm font-semibold">
                 <span>Questions</span>
-                <strong className="text-primary">{config.count}</strong>
+                <strong className="text-primary">
+                  {selectedCount}
+                </strong>
               </span>
               <input
                 id="test-question-count"
                 aria-label="Number of questions"
                 type="number"
                 inputMode="numeric"
-                min="1"
-                value={config.count}
+                min={questionLimit > 0 ? 1 : 0}
+                value={visibleCountDraft ?? selectedCount}
                 onChange={(event) => {
                   setMessage('');
-                  setConfig({
-                    ...config,
-                    count: Math.min(
-                      maxQuestionsPerExam,
-                      Math.max(1, Number(event.target.value) || 1),
-                    ),
-                  });
+                  const raw = event.target.value;
+                  if (raw === '') {
+                    setCountDraft({ limit: questionLimit, value: '' });
+                    return;
+                  }
+                  const requested = Number(raw);
+                  if (!Number.isFinite(requested)) return;
+                  const count = clampExamQuestionCount(requested, questionLimit);
+                  setCountWasEdited(count < questionLimit);
+                  setCountDraft({ limit: questionLimit, value: String(count) });
+                  setConfig((current) => ({ ...current, count }));
                 }}
-                max={maxQuestionsPerExam}
+                onBlur={() => setCountDraft(null)}
+                max={questionLimit}
+                disabled={questionLimit === 0}
                 className="h-11 w-full rounded-xl border bg-background px-3"
               />
+              <span className="mt-1.5 block text-xs text-muted-foreground">
+                Maximum available: {questionLimit}
+                {eligibleCount > questionLimit ? ' (plan limit)' : ''}
+              </span>
             </label>
             {eligibleCount === 0 && (
               <output className="mt-4 block rounded-xl bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
@@ -2015,9 +2205,16 @@ function CreateTest({
           </aside>
         </div>
         {handheld && (
-          <div className="q-test-builder-actions" aria-label="Test setup navigation">
+          <div
+            className="q-test-builder-actions"
+            aria-label="Test setup navigation"
+          >
             {mobileStepIndex > 0 ? (
-              <button type="button" className="q-button q-button-secondary" onClick={() => moveMobileStep(-1)}>
+              <button
+                type="button"
+                className="q-button q-button-secondary"
+                onClick={() => moveMobileStep(-1)}
+              >
                 <ChevronLeft className="size-4" />
                 Back
               </button>
@@ -2025,7 +2222,11 @@ function CreateTest({
               <span />
             )}
             {mobileStep !== 'review' && (
-              <button type="button" className="q-button q-button-primary" onClick={() => moveMobileStep(1)}>
+              <button
+                type="button"
+                className="q-button q-button-primary"
+                onClick={() => moveMobileStep(1)}
+              >
                 Continue
                 <ChevronRight className="size-4" />
               </button>
@@ -2096,7 +2297,9 @@ function NotesSurface({
     >
       {children}
     </AdaptiveOverlay>
-  ) : <>{children}</>;
+  ) : (
+    <>{children}</>
+  );
 }
 
 function TestView({
@@ -2149,8 +2352,6 @@ function TestView({
   const { mode: presentationMode } = usePresentationEnvironment();
   const handheld = presentationMode === 'handheld';
   const stemRef = useRef<HTMLParagraphElement>(null);
-  const navigatorRef = useRef<HTMLDialogElement>(null);
-  const navigatorCurrentRef = useRef<HTMLButtonElement>(null);
   const activeQuestions = useMemo(() => {
     const questionsById = new Map(
       questions.map((question) => [question.id, question]),
@@ -2168,46 +2369,6 @@ function TestView({
   const progress = question
     ? getQuestionProgress(state, question.id)
     : emptyProgress();
-  useEffect(() => {
-    if (!navigatorOpen) return;
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    const frame = window.requestAnimationFrame(() => {
-      navigatorCurrentRef.current?.scrollIntoView({ block: 'center' });
-      (
-        navigatorCurrentRef.current ??
-        navigatorRef.current?.querySelector<HTMLButtonElement>('button')
-      )?.focus();
-    });
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setNavigatorOpen(false);
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const controls = Array.from(
-        navigatorRef.current?.querySelectorAll<HTMLButtonElement>(
-          'button:not([disabled])',
-        ) ?? [],
-      );
-      const first = controls[0];
-      const last = controls.at(-1);
-      if (!first || !last) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener('keydown', handleKeyDown);
-      previouslyFocused?.focus();
-    };
-  }, [navigatorOpen]);
   useEffect(() => {
     stemRef.current
       ?.closest('.q-viewport')
@@ -2339,7 +2500,8 @@ function TestView({
   }
 
   function finishTest() {
-    setFinishConfirmOpen(true);
+    if (allQuestionsAnswered) setFinishConfirmOpen(true);
+    else completeLater();
   }
 
   function pauseTest() {
@@ -2377,12 +2539,7 @@ function TestView({
       timerStartedAt: pausedAt,
       updatedAt: pausedAt,
     }));
-    onExit('dashboard');
-  }
-
-  function saveForLater() {
-    setFinishConfirmOpen(false);
-    completeLater();
+    onExit('history');
   }
 
   function restartQuestion() {
@@ -2401,10 +2558,6 @@ function TestView({
   }
 
   function completeTest() {
-    if (!allQuestionsAnswered) {
-      saveForLater();
-      return;
-    }
     setFinishConfirmOpen(false);
     setState((current) => {
       const currentTest =
@@ -2447,7 +2600,10 @@ function TestView({
                       timerPaused: true,
                       timerStartedAt: new Date().toISOString(),
                       graded: [
-                        ...new Set([...item.graded, ...Object.keys(item.answers)]),
+                        ...new Set([
+                          ...item.graded,
+                          ...Object.keys(item.answers),
+                        ]),
                       ],
                       revealed: [
                         ...new Set([...item.revealed, ...item.questionIds]),
@@ -2902,19 +3058,19 @@ function TestView({
         onOpenChange={setExplanationOpen}
         title="Explanation"
       >
-          <p
-            dir="auto"
-            onPointerUp={(event) =>
-              copySelectionAndMark('explanation', event.currentTarget)
-            }
-            className="select-text whitespace-pre-wrap break-words leading-7"
-          >
-            <HighlightedText
-              text={displayedExplanation}
-              ranges={sectionHighlights('explanation')}
-              onRemove={(range) => removeHighlight('explanation', range)}
-            />
-          </p>
+        <p
+          dir="auto"
+          onPointerUp={(event) =>
+            copySelectionAndMark('explanation', event.currentTarget)
+          }
+          className="select-text whitespace-pre-wrap break-words leading-7"
+        >
+          <HighlightedText
+            text={displayedExplanation}
+            ranges={sectionHighlights('explanation')}
+            onRemove={(range) => removeHighlight('explanation', range)}
+          />
+        </p>
       </AdaptiveOverlay>
       <AdaptiveOverlay
         open={labsOpen}
@@ -2923,29 +3079,29 @@ function TestView({
         description="Quick study reference based on ABIM adult ranges. Local laboratory ranges and the clinical context may differ."
         className="sm:max-w-3xl"
       >
-          <div className="grid gap-3 sm:grid-cols-2">
-            {LAB_REFERENCE_GROUPS.map((group) => (
-              <section
-                key={group.name}
-                className="rounded-2xl border bg-muted/20 p-4"
-              >
-                <h3 className="font-bold text-primary">{group.name}</h3>
-                <dl className="mt-3 divide-y">
-                  {group.values.map(([name, value]) => (
-                    <div
-                      key={name}
-                      className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-2 text-sm"
-                    >
-                      <dt>{name}</dt>
-                      <dd className="text-right font-semibold tabular-nums">
-                        {value}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            ))}
-          </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {LAB_REFERENCE_GROUPS.map((group) => (
+            <section
+              key={group.name}
+              className="rounded-2xl border bg-muted/20 p-4"
+            >
+              <h3 className="font-bold text-primary">{group.name}</h3>
+              <dl className="mt-3 divide-y">
+                {group.values.map(([name, value]) => (
+                  <div
+                    key={name}
+                    className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-2 text-sm"
+                  >
+                    <dt>{name}</dt>
+                    <dd className="text-right font-semibold tabular-nums">
+                      {value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ))}
+        </div>
       </AdaptiveOverlay>
       <AdaptiveOverlay
         open={privateNotesOpen}
@@ -2953,27 +3109,27 @@ function TestView({
         title="Private note"
         description="Only you can see this note. It follows this question across every test and saves automatically."
       >
-          <textarea
-            dir="auto"
-            value={progress.note}
-            onChange={(event) => updatePrivateNote(event.target.value)}
-            placeholder="Write a private note for this question…"
-            className="min-h-52 w-full resize-y rounded-xl border bg-muted/20 p-4 text-sm leading-7 outline-none focus:border-primary focus:ring-3 focus:ring-primary/10"
-          />
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span className="text-xs font-medium text-emerald-700 dark:text-emerald-300">
-              Saved automatically to your account
-            </span>
-            <button
-              type="button"
-              disabled={!progress.note}
-              onClick={() => updatePrivateNote('')}
-              className="inline-flex min-h-11 items-center gap-2 rounded-xl px-3 text-sm font-bold text-red-600 hover:bg-red-50 disabled:opacity-40 dark:text-red-300 dark:hover:bg-red-500/10"
-            >
-              <Trash2 className="size-4" />
-              Delete note
-            </button>
-          </div>
+        <textarea
+          dir="auto"
+          value={progress.note}
+          onChange={(event) => updatePrivateNote(event.target.value)}
+          placeholder="Write a private note for this question…"
+          className="min-h-52 w-full resize-y rounded-xl border bg-muted/20 p-4 text-sm leading-7 outline-none focus:border-primary focus:ring-3 focus:ring-primary/10"
+        />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="text-xs font-medium text-emerald-700 dark:text-emerald-300">
+            Saved automatically to your account
+          </span>
+          <button
+            type="button"
+            disabled={!progress.note}
+            onClick={() => updatePrivateNote('')}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl px-3 text-sm font-bold text-red-600 hover:bg-red-50 disabled:opacity-40 dark:text-red-300 dark:hover:bg-red-500/10"
+          >
+            <Trash2 className="size-4" />
+            Delete note
+          </button>
+        </div>
       </AdaptiveOverlay>
       <AdaptiveOverlay
         open={toolsOpen}
@@ -2982,24 +3138,81 @@ function TestView({
         description="Tools for this question. Your place in the exam will not change."
       >
         <div className="q-mobile-tool-list">
-          <button type="button" aria-pressed={markerActive} onClick={() => setMarkerActive((value) => !value)}>
-            <Highlighter className="size-5" /><span><strong>{markerActive ? 'Marker on' : 'Highlight text'}</strong><small>Select text in the question or explanation.</small></span>
+          <button
+            type="button"
+            aria-pressed={markerActive}
+            onClick={() => setMarkerActive((value) => !value)}
+          >
+            <Highlighter className="size-5" />
+            <span>
+              <strong>{markerActive ? 'Marker on' : 'Highlight text'}</strong>
+              <small>Select text in the question or explanation.</small>
+            </span>
           </button>
-          <button type="button" onClick={() => { setToolsOpen(false); setPrivateNotesOpen(true); }}>
-            <StickyNote className="size-5" /><span><strong>Private note</strong><small>{progress.note.trim() ? 'Edit your saved note.' : 'Add a note only you can see.'}</small></span>
+          <button
+            type="button"
+            onClick={() => {
+              setToolsOpen(false);
+              setPrivateNotesOpen(true);
+            }}
+          >
+            <StickyNote className="size-5" />
+            <span>
+              <strong>Private note</strong>
+              <small>
+                {progress.note.trim()
+                  ? 'Edit your saved note.'
+                  : 'Add a note only you can see.'}
+              </small>
+            </span>
           </button>
-          <button type="button" onClick={() => { setToolsOpen(false); setLabsOpen(true); }}>
-            <FlaskConical className="size-5" /><span><strong>Laboratory values</strong><small>Open the quick reference.</small></span>
+          <button
+            type="button"
+            onClick={() => {
+              setToolsOpen(false);
+              setLabsOpen(true);
+            }}
+          >
+            <FlaskConical className="size-5" />
+            <span>
+              <strong>Laboratory values</strong>
+              <small>Open the quick reference.</small>
+            </span>
           </button>
-          <button type="button" onClick={() => { setToolsOpen(false); setFlashcardOpen(true); }}>
-            <Layers3 className="size-5" /><span><strong>Create flashcard</strong><small>Turn this question into a study card.</small></span>
+          <button
+            type="button"
+            onClick={() => {
+              setToolsOpen(false);
+              setFlashcardOpen(true);
+            }}
+          >
+            <Layers3 className="size-5" />
+            <span>
+              <strong>Create flashcard</strong>
+              <small>Turn this question into a study card.</small>
+            </span>
           </button>
-          <button type="button" disabled={selected === undefined && !revealed} onClick={() => { restartQuestion(); setToolsOpen(false); }}>
-            <RotateCcw className="size-5" /><span><strong>Restart question</strong><small>Clear this answer and try again.</small></span>
+          <button
+            type="button"
+            disabled={selected === undefined && !revealed}
+            onClick={() => {
+              restartQuestion();
+              setToolsOpen(false);
+            }}
+          >
+            <RotateCcw className="size-5" />
+            <span>
+              <strong>Restart question</strong>
+              <small>Clear this answer and try again.</small>
+            </span>
           </button>
           {progress.highlights.length > 0 && (
             <button type="button" onClick={clearHighlights}>
-              <Trash2 className="size-5" /><span><strong>Clear highlights</strong><small>Remove highlights from this question.</small></span>
+              <Trash2 className="size-5" />
+              <span>
+                <strong>Clear highlights</strong>
+                <small>Remove highlights from this question.</small>
+              </span>
             </button>
           )}
         </div>
@@ -3026,12 +3239,6 @@ function TestView({
         >
           Previous
         </SecondaryButton>
-        <button
-          className="text-sm font-bold"
-          onClick={() => setNavigatorOpen(true)}
-        >
-          {test.currentIndex + 1}/{activeQuestions.length}
-        </button>
         <SecondaryButton
           onClick={() => move(test.currentIndex + 1)}
           disabled={test.currentIndex >= activeQuestions.length - 1}
@@ -3039,30 +3246,26 @@ function TestView({
           Next
         </SecondaryButton>
       </nav>
-      <header className="sticky top-0 z-30 flex h-[64px] items-center justify-between border-b bg-white px-3 shadow-sm dark:bg-card sm:px-5">
-        <div className="flex items-center gap-2 sm:gap-3">
-          <button
-            aria-label="Exit test"
-            onClick={finishTest}
-            className="grid size-9 place-items-center rounded-xl hover:bg-muted"
-          >
-            <X className="size-5" />
-          </button>
-          <span className="sm:hidden">
-            <QuestionId value={question.questionId} compact />
+      <header className="q-exam-header sticky top-0 z-30 flex min-h-[68px] items-center gap-2 border-b bg-white px-3 shadow-sm dark:bg-card sm:gap-4 sm:px-5">
+        <button
+          type="button"
+          aria-label="Open question list"
+          aria-expanded={navigatorOpen}
+          title="Open question list"
+          onClick={() => setNavigatorOpen(true)}
+          className="grid size-11 shrink-0 place-items-center rounded-xl border text-muted-foreground transition hover:border-primary/35 hover:bg-primary/5 hover:text-primary"
+        >
+          <Menu className="size-5" />
+        </button>
+        <div className="q-exam-heading min-w-0 flex-1 text-center sm:text-left">
+          <strong className="block truncate text-sm font-bold tabular-nums text-foreground sm:text-base">
+            Question {test.currentIndex + 1} of {activeQuestions.length}
+          </strong>
+          <span className="block truncate text-[11px] text-muted-foreground sm:text-xs">
+            {test.title}
           </span>
-          <span className="text-xs font-bold sm:hidden">
-            {test.currentIndex + 1}/{activeQuestions.length}
-          </span>
-          <div className="hidden h-7 w-px bg-border sm:block" />
-          <div className="hidden sm:block">
-            <strong className="block text-sm">{test.title}</strong>
-            <span className="text-xs font-semibold uppercase text-muted-foreground">
-              {test.mode} mode
-            </span>
-          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="q-exam-header-actions flex shrink-0 items-center gap-1 sm:gap-2">
           <div
             className="hidden items-center gap-1.5 rounded-xl bg-muted px-2 py-2 text-xs font-bold tabular-nums sm:flex sm:gap-2 sm:px-3"
             title="Elapsed test time"
@@ -3083,7 +3286,9 @@ function TestView({
             />
           </IconButton>
           <IconButton
-            label={progress.bookmarked ? 'Remove bookmark' : 'Bookmark question'}
+            label={
+              progress.bookmarked ? 'Remove bookmark' : 'Bookmark question'
+            }
             active={progress.bookmarked}
             onClick={toggleBookmark}
           >
@@ -3095,12 +3300,18 @@ function TestView({
             {allQuestionsAnswered ? (
               <CheckCircle2 className="size-4" />
             ) : (
-              <Clock3 className="size-4" />
+              <Save className="size-4" />
             )}
-            {allQuestionsAnswered ? 'End and Save' : 'Continue Later and Save'}
+            {allQuestionsAnswered ? 'Finish' : 'Continue later'}
           </SecondaryButton>
         </div>
       </header>
+      <progress
+        className="q-exam-progress h-1 w-full shrink-0"
+        aria-label="Question progress"
+        max={Math.max(1, activeQuestions.length)}
+        value={test.currentIndex + 1}
+      />
       <div className="q-test-body flex w-full min-w-0 flex-1">
         <section className="min-w-0 flex-1 p-3 sm:p-6 lg:p-8">
           <div
@@ -3111,22 +3322,6 @@ function TestView({
                 : 'max-w-[890px]',
             )}
           >
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-bold text-primary">
-                  {question.specialty}
-                </span>
-                <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
-                  {question.topic}
-                </span>
-              </div>
-              <button
-                onClick={() => setNavigatorOpen(true)}
-                className="min-h-11 rounded-xl px-3 text-xs font-bold text-primary hover:bg-primary/5"
-              >
-                Question {test.currentIndex + 1} of {test.questionIds.length}
-              </button>
-            </div>
             <TestPanels
               key={`${question.id}:${revealed ? 'revealed' : 'answering'}`}
               mobile={handheld}
@@ -3136,12 +3331,20 @@ function TestView({
                 explanation={Boolean(revealed && displayedExplanation)}
               >
                 <article className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-border dark:bg-card sm:p-8">
-                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b pb-3">
-                    <div>
-                      <span className="text-xs font-bold text-muted-foreground">
-                        QUESTION {test.currentIndex + 1}
-                      </span>
-                      <QuestionId value={question.questionId} />
+                  <div className="mb-5 flex min-w-0 items-center justify-between gap-2 border-b pb-4">
+                    {handheld && (
+                      <button
+                        type="button"
+                        className="q-exam-tools-trigger"
+                        aria-label="Open study tools"
+                        title="Open study tools"
+                        onClick={() => setToolsOpen(true)}
+                      >
+                        <Ellipsis className="size-5" />
+                      </button>
+                    )}
+                    <div className={cx('min-w-0', handheld && 'ml-auto')}>
+                      <QuestionId value={question.questionId} compact />
                       {markerActive && (
                         <span className="ml-2 rounded-full bg-yellow-100 px-2 py-1 text-xs font-bold text-yellow-800 dark:bg-yellow-400/15 dark:text-yellow-200">
                           MARKER ON
@@ -3193,15 +3396,14 @@ function TestView({
                         </IconButton>
                       )}
                     </div>
-                    {handheld && (
-                      <button
-                        type="button"
-                        className="q-exam-tools-trigger"
-                        onClick={() => setToolsOpen(true)}
-                      >
-                        <Ellipsis className="size-5" /> Tools
-                      </button>
-                    )}
+                  </div>
+                  <div className="mb-5 flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-bold text-primary">
+                      {question.specialty}
+                    </span>
+                    <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
+                      {question.topic}
+                    </span>
                   </div>
                   <p
                     ref={stemRef}
@@ -3217,23 +3419,20 @@ function TestView({
                       onRemove={(range) => removeHighlight('stem', range)}
                     />
                   </p>
-                  {(question.writtenByName || question.reviewedByName) && (
-                    <p className="mt-3 text-xs font-medium text-muted-foreground">
-                      Written by{' '}
-                      <strong className="text-foreground">
-                        {question.writtenByName ?? 'Qraft'}
+                  <div className="mt-5 grid gap-3 border-t pt-4 text-xs sm:grid-cols-2">
+                    <div className="min-w-0">
+                      <span className="block text-muted-foreground">Written by</span>
+                      <strong className="mt-1 block truncate font-semibold text-foreground">
+                        {question.writtenByName?.trim() || 'Not recorded'}
                       </strong>
-                      {' · '}Reviewed by{' '}
-                      <strong className="text-foreground">
-                        {question.reviewedByName ?? 'Pending'}
+                    </div>
+                    <div className="min-w-0">
+                      <span className="block text-muted-foreground">Reviewed by</span>
+                      <strong className="mt-1 block truncate font-semibold text-foreground">
+                        {question.reviewedByName?.trim() || 'Not reviewed'}
                       </strong>
-                    </p>
-                  )}
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Turn Marker on, then select text with touch, Apple Pencil,
-                    or mouse. Highlights work only in the question stem and
-                    read-only explanation; tap a yellow highlight to remove it.
-                  </p>
+                    </div>
+                  </div>
                   {question.images?.length > 0 && (
                     <section
                       className="mt-6 rounded-2xl border bg-muted/20 p-3 sm:p-4"
@@ -3334,10 +3533,7 @@ function TestView({
               </TestQuestionPanel>
               {revealed && displayedExplanation && !handheld && (
                 <>
-                  <ResizableHandle
-                    withHandle
-                    className="mx-4 bg-transparent"
-                  />
+                  <ResizableHandle withHandle className="mx-4 bg-transparent" />
                   <ResizablePanel
                     id="explanation-panel"
                     defaultSize="32%"
@@ -3402,9 +3598,9 @@ function TestView({
                 <ChevronLeft className="size-4" />
                 Previous
               </SecondaryButton>
-              <div className="flex min-w-0 flex-wrap justify-center gap-2">
+              <div className="q-test-secondary-actions flex min-w-0 flex-wrap justify-center gap-2">
                 {handheld && revealed && displayedExplanation && (
-                  <SecondaryButton onClick={() => setExplanationOpen(true)}>
+                  <SecondaryButton className="q-test-explanation-action" onClick={() => setExplanationOpen(true)}>
                     Explanation
                   </SecondaryButton>
                 )}
@@ -3574,14 +3770,6 @@ function TestView({
           </div>
         </section>
       </div>
-      <div className="q-test-save-actions flex gap-2 sm:hidden">
-        <button
-          onClick={finishTest}
-          className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-xl"
-        >
-          {allQuestionsAnswered ? 'End and Save' : 'Continue Later and Save'}
-        </button>
-      </div>
       {test.timerPaused && test.status === 'active' && (
         <dialog
           open
@@ -3631,17 +3819,14 @@ function TestView({
                     Test checkpoint
                   </p>
                   <h2 id="end-test-title" className="mt-1 text-xl font-bold">
-                    {allQuestionsAnswered
-                      ? 'End and save this test?'
-                      : 'Continue this test later?'}
+                    Finish this test?
                   </h2>
                   <p
                     id="end-test-description"
                     className="mt-2 text-sm leading-6 text-muted-foreground"
                   >
-                    {allQuestionsAnswered
-                      ? 'All questions are answered. Your answers will be graded and the completed test will be saved in Test history.'
-                      : 'Your current answers and position will be saved. The test will remain not completed so you can resume it later.'}
+                    All questions are answered. Your answers will be graded and
+                    the completed test will be saved in Test history.
                   </p>
                 </div>
               </div>
@@ -3673,15 +3858,6 @@ function TestView({
                   </span>
                 </div>
               </div>
-              {!allQuestionsAnswered && (
-                <div className="mt-4 flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-                  <CircleAlert className="mt-0.5 size-4 shrink-0" />
-                  <span>
-                    You still have unanswered questions. Saving now keeps this
-                    test active and available to resume.
-                  </span>
-                </div>
-              )}
               <div className="mt-6 grid gap-2 sm:grid-cols-2">
                 <SecondaryButton
                   onClick={() => setFinishConfirmOpen(false)}
@@ -3691,17 +3867,11 @@ function TestView({
                 </SecondaryButton>
                 <PrimaryButton
                   tone="study"
-                  onClick={allQuestionsAnswered ? completeTest : saveForLater}
+                  onClick={completeTest}
                   className="w-full"
                 >
-                  {allQuestionsAnswered ? (
-                    <CheckCircle2 className="size-4" />
-                  ) : (
-                    <Clock3 className="size-4" />
-                  )}
-                  {allQuestionsAnswered
-                    ? 'End and Save'
-                    : 'Continue Later and Save'}
+                  <CheckCircle2 className="size-4" />
+                  Finish
                 </PrimaryButton>
               </div>
               <p className="mt-3 text-center text-xs text-muted-foreground">
@@ -3711,128 +3881,48 @@ function TestView({
           </section>
         </div>
       )}
-      {navigatorOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-stretch justify-start bg-slate-950/40 backdrop-blur-[1px]"
-          onPointerDown={(event) => {
-            if (event.target === event.currentTarget) setNavigatorOpen(false);
-          }}
-        >
-          <dialog
-            open
-            ref={navigatorRef}
-            aria-modal="true"
-            aria-labelledby="question-navigator-title"
-            className="q-question-drawer relative m-0 flex min-w-0 max-w-none flex-col border-0 border-r bg-card p-0 text-foreground shadow-[20px_0_60px_rgba(2,12,27,.22)]"
-          >
-            <header className="shrink-0 border-b px-5 pb-4">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0" dir="auto">
-                  <h2
-                    id="question-navigator-title"
-                    className="truncate text-lg font-bold tracking-tight"
-                  >
-                    {test.title}
-                  </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {answeredCount} of {test.questionIds.length} answered
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  aria-label="Close question navigator"
-                  onClick={() => setNavigatorOpen(false)}
-                  className="q-icon -mr-2 -mt-1 border-0 bg-transparent"
-                >
-                  <X className="size-5" />
-                </button>
-              </div>
-              <div
-                className="mt-4 h-1 overflow-hidden rounded-full bg-muted"
-                aria-hidden="true"
-              >
-                <span
-                  className="block h-full rounded-full bg-primary transition-[width] duration-200"
-                  style={{
-                    width: `${test.questionIds.length ? (answeredCount / test.questionIds.length) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-            </header>
-            <div
-              className="q-question-drawer-list min-h-0 flex-1 overflow-y-auto py-2"
-              dir="ltr"
-            >
-              {activeQuestions.map((item, index) => {
-                const itemProgress = getQuestionProgress(state, item.id);
-                const answered = test.answers[item.id] !== undefined;
-                const current = index === test.currentIndex;
-                return (
-                  <button
-                    ref={current ? navigatorCurrentRef : undefined}
-                    type="button"
-                    key={item.id}
-                    onClick={() => {
-                      move(index);
-                      setNavigatorOpen(false);
-                    }}
-                    aria-label={`Question ${index + 1}: ${item.stem}${answered ? ', answered' : ', unanswered'}${itemProgress.flagged ? ', flagged' : ''}`}
-                    aria-current={current ? 'step' : undefined}
-                    className={cx(
-                      'group grid min-h-14 w-full grid-cols-[24px_32px_minmax(0,1fr)_20px] items-center gap-2 border-l-[3px] border-transparent px-5 py-2.5 text-left transition-colors',
-                      current
-                        ? 'border-l-primary bg-primary/8 text-foreground'
-                        : 'hover:bg-muted/60',
-                    )}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={cx(
-                        'grid size-5 place-items-center rounded-full border-2 transition-colors',
-                        answered
-                          ? 'border-primary bg-primary text-primary-foreground'
-                          : current
-                            ? 'border-primary text-primary'
-                            : itemProgress.flagged
-                              ? 'border-amber-500'
-                              : 'border-muted-foreground/70',
-                      )}
-                    >
-                      {answered ? (
-                        <Check className="size-3" strokeWidth={3} />
-                      ) : current ? (
-                        <span className="size-1.5 rounded-full bg-current" />
-                      ) : null}
-                    </span>
-                    <span
-                      className={cx(
-                        'text-sm font-bold tabular-nums',
-                        current ? 'text-primary' : 'text-muted-foreground',
-                      )}
-                    >
-                      {index + 1}
-                    </span>
-                    <span
-                      dir="auto"
-                      className="block min-w-0 truncate text-sm font-medium text-foreground/85"
-                    >
-                      {item.stem}
-                    </span>
-                    {itemProgress.flagged ? (
-                      <Flag
-                        aria-hidden="true"
-                        className="size-4 fill-amber-400 text-amber-500"
-                      />
-                    ) : (
-                      <span aria-hidden="true" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </dialog>
-        </div>
-      )}
+      <QuestionNavigator
+        open={navigatorOpen}
+        title={test.title}
+        currentIndex={test.currentIndex}
+        items={activeQuestions.map((item) => {
+          const itemProgress = getQuestionProgress(state, item.id);
+          const answer = test.answers[item.id];
+          const graded = test.graded.includes(item.id);
+          return {
+            id: item.id,
+            preview: item.stem,
+            answered: answer !== undefined,
+            flagged: itemProgress.flagged,
+            bookmarked: itemProgress.bookmarked,
+            revealed: test.revealed.includes(item.id),
+            result: graded
+              ? answer === item.answer
+                ? ('correct' as const)
+                : ('incorrect' as const)
+              : undefined,
+          };
+        })}
+        onSelect={move}
+        onClose={() => setNavigatorOpen(false)}
+        secondaryAction={{
+          label: 'Close',
+          icon: <X className="size-4" />,
+          onClick: () => setNavigatorOpen(false),
+        }}
+        primaryAction={{
+          label: allQuestionsAnswered ? 'Finish' : 'Continue later',
+          icon: allQuestionsAnswered ? (
+            <CheckCircle2 className="size-4" />
+          ) : (
+            <Save className="size-4" />
+          ),
+          onClick: () => {
+            setNavigatorOpen(false);
+            finishTest();
+          },
+        }}
+      />
       {reportOpen && (
         <div className="q-safe-overlay fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm">
           <div className="mx-auto my-6 w-full max-w-4xl rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border">
@@ -4202,9 +4292,13 @@ function HistoryView({
 function ProgressView({
   state,
   questions,
+  specialties,
+  topics,
 }: {
   state: AppState;
   questions: Question[];
+  specialties: QBankSpecialty[];
+  topics: QBankTopic[];
 }) {
   const { mode: presentationMode } = usePresentationEnvironment();
   const summary = useMemo(() => {
@@ -4219,11 +4313,12 @@ function ProgressView({
     const flagged = questions.filter(
       (question) => getQuestionProgress(state, question.id).flagged,
     ).length;
-    const categories = Array.from(new Set(questions.map(mainProgressCategory)))
-      .map((category) => {
-        const categoryPool = questions.filter(
-          (question) => mainProgressCategory(question) === category,
-        );
+    const categories = groupQuestionsByQBankClassification(
+      questions,
+      specialties,
+      topics,
+    ).map((group) => {
+        const categoryPool = group.questions;
         const categoryAttempted = categoryPool.filter(
           (question) => getQuestionProgress(state, question.id).attempts > 0,
         );
@@ -4232,14 +4327,8 @@ function ProgressView({
             getQuestionProgress(state, question.id).lastAnswer ===
             question.answer,
         ).length;
-        const topics = Array.from(
-          new Set(categoryPool.map((question) => question.topic)),
-        )
-          .sort()
-          .map((topic) => {
-            const pool = categoryPool.filter(
-              (question) => question.topic === topic,
-            );
+        const topicSummaries = group.topics.map((topicGroup) => {
+            const pool = topicGroup.questions;
             const attempted = pool.filter(
               (question) =>
                 getQuestionProgress(state, question.id).attempts > 0,
@@ -4250,7 +4339,8 @@ function ProgressView({
                 question.answer,
             ).length;
             return {
-              topic,
+              id: topicGroup.id,
+              topic: topicGroup.name,
               total: pool.length,
               completed: attempted.length,
               accuracy: attempted.length
@@ -4259,25 +4349,15 @@ function ProgressView({
             };
           });
         return {
-          category,
+          id: group.id,
+          category: group.name,
           total: categoryPool.length,
           completed: categoryAttempted.length,
           accuracy: categoryAttempted.length
             ? Math.round((categoryRight / categoryAttempted.length) * 100)
             : 0,
-          topics,
+          topics: topicSummaries,
         };
-      })
-      .sort((a, b) => {
-        const order = ['Medicine', 'Surgery', 'OB/GYN', 'Pediatrics', 'Basics'];
-        const rank = (value: string) => {
-          const index = order.indexOf(value);
-          return index < 0 ? order.length : index;
-        };
-        return (
-          rank(a.category) - rank(b.category) ||
-          a.category.localeCompare(b.category)
-        );
       });
     return {
       completed: completed.length,
@@ -4286,8 +4366,10 @@ function ProgressView({
       flagged,
       categories,
     };
-  }, [questions, state]);
-  const completion = Math.round((summary.completed / questions.length) * 100);
+  }, [questions, specialties, topics, state]);
+  const completion = questions.length
+    ? Math.round((summary.completed / questions.length) * 100)
+    : 0;
   const accuracy = summary.completed
     ? Math.round((summary.correct / summary.completed) * 100)
     : 0;
@@ -4303,25 +4385,47 @@ function ProgressView({
           <section className="q-mobile-progress-hero">
             <div
               className="q-mobile-progress-ring"
-              style={{ background: `conic-gradient(var(--study) ${completion}%, var(--muted) 0)` }}
+              style={{
+                background: `conic-gradient(var(--study) ${completion}%, var(--muted) 0)`,
+              }}
               aria-label={`${completion}% of this QBank completed`}
             >
-              <div><strong>{completion}%</strong><span>complete</span></div>
+              <div>
+                <strong>{completion}%</strong>
+                <span>complete</span>
+              </div>
             </div>
             <div className="min-w-0 flex-1">
               <span className="q-eyebrow">QBank overview</span>
-              <h2>{summary.completed} of {questions.length} completed</h2>
+              <h2>
+                {summary.completed} of {questions.length} completed
+              </h2>
               <p>{accuracy}% accuracy across answered questions.</p>
             </div>
           </section>
           <div className="q-mobile-progress-signals">
-            <article><CircleAlert className="size-5 text-red-500" /><strong>{summary.incorrect}</strong><span>Incorrect</span></article>
-            <article><Flag className="size-5 text-amber-500" /><strong>{summary.flagged}</strong><span>Flagged</span></article>
-            <article><CheckCircle2 className="size-5 text-emerald-500" /><strong>{summary.correct}</strong><span>Correct</span></article>
+            <article>
+              <CircleAlert className="size-5 text-red-500" />
+              <strong>{summary.incorrect}</strong>
+              <span>Incorrect</span>
+            </article>
+            <article>
+              <Flag className="size-5 text-amber-500" />
+              <strong>{summary.flagged}</strong>
+              <span>Flagged</span>
+            </article>
+            <article>
+              <CheckCircle2 className="size-5 text-emerald-500" />
+              <strong>{summary.correct}</strong>
+              <span>Correct</span>
+            </article>
           </div>
           <section className="q-mobile-progress-topics">
             <div className="mobile-section-heading">
-              <div><span className="q-eyebrow">Breakdown</span><h2>Topics</h2></div>
+              <div>
+                <span className="q-eyebrow">Breakdown</span>
+                <h2>Specialties & topics</h2>
+              </div>
             </div>
             <div className="mt-3 space-y-3">
               {summary.categories.map((category) => {
@@ -4329,20 +4433,44 @@ function ProgressView({
                   ? Math.round((category.completed / category.total) * 100)
                   : 0;
                 return (
-                  <details key={category.category} className="group rounded-2xl border bg-card">
+                  <details
+                    key={category.id}
+                    className="group rounded-2xl border bg-card"
+                  >
                     <summary className="list-none p-4">
                       <div className="flex items-center justify-between gap-3">
                         <strong>{category.category}</strong>
-                        <span className="text-xs text-muted-foreground">{category.accuracy}% accuracy <ChevronRight className="ml-1 inline size-4 transition group-open:rotate-90" /></span>
+                        <span className="text-xs text-muted-foreground">
+                          {category.accuracy}% accuracy{' '}
+                          <ChevronRight className="ml-1 inline size-4 transition group-open:rotate-90" />
+                        </span>
                       </div>
-                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${categoryCompletion}%` }} /></div>
-                      <p className="mt-2 text-xs text-muted-foreground">{category.completed}/{category.total} questions · {categoryCompletion}% complete</p>
+                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-primary"
+                          style={{ width: `${categoryCompletion}%` }}
+                        />
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {category.completed}/{category.total} questions ·{' '}
+                        {categoryCompletion}% complete
+                      </p>
                     </summary>
                     <div className="space-y-2 border-t p-3">
                       {category.topics.map((topic) => (
-                        <div key={topic.topic} className="rounded-xl bg-muted/35 p-3">
-                          <div className="flex items-start justify-between gap-3 text-sm"><strong>{topic.topic}</strong><span className="shrink-0 text-xs text-muted-foreground">{topic.accuracy}%</span></div>
-                          <p className="mt-1 text-xs text-muted-foreground">{topic.completed}/{topic.total} completed</p>
+                        <div
+                          key={topic.id}
+                          className="rounded-xl bg-muted/35 p-3"
+                        >
+                          <div className="flex items-start justify-between gap-3 text-sm">
+                            <strong>{topic.topic}</strong>
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {topic.accuracy}%
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {topic.completed}/{topic.total} completed
+                          </p>
                         </div>
                       ))}
                     </div>
@@ -4390,9 +4518,9 @@ function ProgressView({
         </div>
         <section className="mt-6 rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border sm:p-6">
           <div>
-            <h2 className="font-bold">Progress by Topics</h2>
+            <h2 className="font-bold">Progress by Specialty & Topic</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Open a main category to see progress for its individual topics.
+              Open a QBank specialty to see progress for its topics.
             </p>
           </div>
           <div className="mt-5 space-y-2">
@@ -4402,7 +4530,7 @@ function ProgressView({
                 : 0;
               return (
                 <details
-                  key={category.category}
+                  key={category.id}
                   className="group rounded-xl border bg-background/40"
                 >
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-4 text-sm">
@@ -4425,7 +4553,7 @@ function ProgressView({
                         : 0;
                       return (
                         <details
-                          key={topic.topic}
+                          key={topic.id}
                           className="rounded-xl bg-muted/35 p-3"
                         >
                           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm">
@@ -4473,8 +4601,7 @@ function RoleRequestPanel({
   ) => void;
 }) {
   const [roleReason, setRoleReason] = useState('');
-  const [requestedRole, setRequestedRole] =
-    useState<PlatformRole>('reviewer');
+  const [requestedRole, setRequestedRole] = useState<PlatformRole>('reviewer');
   const pendingRole = collaboration.roleApplications.find(
     (item) =>
       item.userId === user.uid &&
@@ -4510,7 +4637,8 @@ function RoleRequestPanel({
     <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
       <h2 className="font-bold">Request an additional role</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        A Moderator reviews every Moderator, Reviewer, and Access Manager request.
+        A Moderator reviews every Moderator, Reviewer, and Access Manager
+        request.
       </p>
       {pendingRole ? (
         <div className="mt-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
@@ -4574,7 +4702,10 @@ function SettingsView({
     updater: (current: CollaborationState) => CollaborationState,
   ) => void;
 }) {
-  const [legalLinks, setLegalLinks] = useState({ termsUrl: '', privacyUrl: '' });
+  const [legalLinks, setLegalLinks] = useState({
+    termsUrl: '',
+    privacyUrl: '',
+  });
   const [personalBackupBusy, setPersonalBackupBusy] = useState(false);
   const [personalBackupMessage, setPersonalBackupMessage] = useState('');
   const [dailyGoalOverride, setDailyGoalDraft] = useState<number>();
@@ -4592,27 +4723,52 @@ function SettingsView({
       active = false;
     };
   }, []);
-  const backupAvailable = hasFeature(user.effectivePlan ?? user.tier, 'flashcards') || hasFeature(user.effectivePlan ?? user.tier, 'createPrivateQBank');
+  const backupAvailable =
+    hasFeature(user.effectivePlan ?? user.tier, 'flashcards') ||
+    hasFeature(user.effectivePlan ?? user.tier, 'createPrivateQBank');
   const downloadPersonalBackup = async () => {
-    setPersonalBackupBusy(true); setPersonalBackupMessage('');
+    setPersonalBackupBusy(true);
+    setPersonalBackupMessage('');
     try {
-      const backup = await api<Record<string, unknown>>('/platform/personal-backup');
-      const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
-      const anchor = document.createElement('a'); anchor.href = url; anchor.download = `qraft-personal-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(url);
+      const backup = await api<Record<string, unknown>>(
+        '/platform/personal-backup',
+      );
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(backup, null, 2)], {
+          type: 'application/json',
+        }),
+      );
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `qraft-personal-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
       setPersonalBackupMessage('Your personal backup was downloaded.');
-    } catch (error) { setPersonalBackupMessage(error instanceof Error ? error.message : 'Unable to create backup.'); }
-    finally { setPersonalBackupBusy(false); }
+    } catch (error) {
+      setPersonalBackupMessage(
+        error instanceof Error ? error.message : 'Unable to create backup.',
+      );
+    } finally {
+      setPersonalBackupBusy(false);
+    }
   };
   const restorePersonalBackup = async (file?: File) => {
     if (!file) return;
-    setPersonalBackupBusy(true); setPersonalBackupMessage('');
+    setPersonalBackupBusy(true);
+    setPersonalBackupMessage('');
     try {
       const raw = await file.text();
-      if (raw.length > 50_000_000) throw new Error('Backup exceeds the 50 MB restore limit.');
+      if (raw.length > 50_000_000)
+        throw new Error('Backup exceeds the 50 MB restore limit.');
       await api('/platform/personal-backup', { method: 'PUT', body: raw });
       setPersonalBackupMessage('Backup restored. Refreshing your workspace…');
       window.location.reload();
-    } catch (error) { setPersonalBackupMessage(error instanceof Error ? error.message : 'Unable to restore backup.'); setPersonalBackupBusy(false); }
+    } catch (error) {
+      setPersonalBackupMessage(
+        error instanceof Error ? error.message : 'Unable to restore backup.',
+      );
+      setPersonalBackupBusy(false);
+    }
   };
   return (
     <>
@@ -4643,15 +4799,24 @@ function SettingsView({
             </PrimaryButton>
           </div>
           <div className="mt-4 flex items-center gap-2 rounded-xl bg-emerald-50 p-3 text-xs font-bold text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200">
-            {syncStatus === 'offline' ? <CloudOff className="size-4" /> : <Cloud className="size-4" />}
-            {{
-              syncing: 'Synchronizing saved changes…',
-              synced: 'All saved changes are synchronized.',
-              local: 'Saved on this device and waiting to synchronize.',
-              offline: 'Saved on this device. Synchronization will resume online.',
-              error: 'Saved locally. Cloud synchronization needs attention.',
-            }[syncStatus]}
-            {state.lastSyncAt ? ` · Last manual sync ${new Date(state.lastSyncAt).toLocaleString()}` : ''}
+            {syncStatus === 'offline' ? (
+              <CloudOff className="size-4" />
+            ) : (
+              <Cloud className="size-4" />
+            )}
+            {
+              {
+                syncing: 'Synchronizing saved changes…',
+                synced: 'All saved changes are synchronized.',
+                local: 'Saved on this device and waiting to synchronize.',
+                offline:
+                  'Saved on this device. Synchronization will resume online.',
+                error: 'Saved locally. Cloud synchronization needs attention.',
+              }[syncStatus]
+            }
+            {state.lastSyncAt
+              ? ` · Last manual sync ${new Date(state.lastSyncAt).toLocaleString()}`
+              : ''}
           </div>
         </section>
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
@@ -4705,7 +4870,9 @@ function SettingsView({
               {dailyGoalDraft}
             </strong>
             <PrimaryButton
-              disabled={dailyGoalBusy || dailyGoalDraft === state.settings.dailyGoal}
+              disabled={
+                dailyGoalBusy || dailyGoalDraft === state.settings.dailyGoal
+              }
               onClick={() => {
                 setDailyGoalBusy(true);
                 setDailyGoalMessage('');
@@ -4714,7 +4881,13 @@ function SettingsView({
                     setDailyGoalDraft(undefined);
                     setDailyGoalMessage('Daily goal saved.');
                   })
-                  .catch(error => setDailyGoalMessage(error instanceof Error ? error.message : 'Unable to save your daily goal.'))
+                  .catch((error) =>
+                    setDailyGoalMessage(
+                      error instanceof Error
+                        ? error.message
+                        : 'Unable to save your daily goal.',
+                    ),
+                  )
                   .finally(() => setDailyGoalBusy(false));
               }}
             >
@@ -4722,7 +4895,11 @@ function SettingsView({
               {dailyGoalBusy ? 'Saving…' : 'Save'}
             </PrimaryButton>
           </div>
-          {dailyGoalMessage && <output className="mt-3 block text-xs font-semibold text-muted-foreground">{dailyGoalMessage}</output>}
+          {dailyGoalMessage && (
+            <output className="mt-3 block text-xs font-semibold text-muted-foreground">
+              {dailyGoalMessage}
+            </output>
+          )}
         </section>
         <RoleRequestPanel
           user={user}
@@ -4732,12 +4909,39 @@ function SettingsView({
         {backupAvailable && (
           <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
             <h2 className="font-bold">Your personal backup</h2>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">Download your Flashcards and the private QBanks you own. A private QBank backup can only be restored by the same account and always remains private.</p>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
+              Download your Flashcards and the private QBanks you own. A private
+              QBank backup can only be restored by the same account and always
+              remains private.
+            </p>
             <div className="mt-5 flex flex-wrap gap-3">
-              <PrimaryButton onClick={() => void downloadPersonalBackup()} disabled={personalBackupBusy}><Download className="size-4" />Download my backup</PrimaryButton>
-              <label className="q-button q-button-secondary cursor-pointer"><Upload className="size-4" />Restore my backup<input type="file" accept="application/json,.json" disabled={personalBackupBusy} className="sr-only" onChange={(event) => { void restorePersonalBackup(event.target.files?.[0]); event.target.value = ''; }} /></label>
+              <PrimaryButton
+                onClick={() => void downloadPersonalBackup()}
+                disabled={personalBackupBusy}
+              >
+                <Download className="size-4" />
+                Download my backup
+              </PrimaryButton>
+              <label className="q-button q-button-secondary cursor-pointer">
+                <Upload className="size-4" />
+                Restore my backup
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  disabled={personalBackupBusy}
+                  className="sr-only"
+                  onChange={(event) => {
+                    void restorePersonalBackup(event.target.files?.[0]);
+                    event.target.value = '';
+                  }}
+                />
+              </label>
             </div>
-            {personalBackupMessage && <output className="mt-3 block text-sm text-muted-foreground">{personalBackupMessage}</output>}
+            {personalBackupMessage && (
+              <output className="mt-3 block text-sm text-muted-foreground">
+                {personalBackupMessage}
+              </output>
+            )}
           </section>
         )}
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
@@ -4751,7 +4955,10 @@ function SettingsView({
               target={legalLinks.termsUrl ? '_blank' : undefined}
               rel={legalLinks.termsUrl ? 'noreferrer' : undefined}
               aria-disabled={!legalLinks.termsUrl}
-              className={cx('flex min-h-12 items-center gap-3 rounded-xl border px-4 text-sm font-bold transition hover:border-primary/40 hover:bg-primary/5', !legalLinks.termsUrl && 'pointer-events-none opacity-50')}
+              className={cx(
+                'flex min-h-12 items-center gap-3 rounded-xl border px-4 text-sm font-bold transition hover:border-primary/40 hover:bg-primary/5',
+                !legalLinks.termsUrl && 'pointer-events-none opacity-50',
+              )}
             >
               <FileText className="size-5 text-primary" />
               شروط الاستخدام
@@ -4762,7 +4969,10 @@ function SettingsView({
               target={legalLinks.privacyUrl ? '_blank' : undefined}
               rel={legalLinks.privacyUrl ? 'noreferrer' : undefined}
               aria-disabled={!legalLinks.privacyUrl}
-              className={cx('flex min-h-12 items-center gap-3 rounded-xl border px-4 text-sm font-bold transition hover:border-primary/40 hover:bg-primary/5', !legalLinks.privacyUrl && 'pointer-events-none opacity-50')}
+              className={cx(
+                'flex min-h-12 items-center gap-3 rounded-xl border px-4 text-sm font-bold transition hover:border-primary/40 hover:bg-primary/5',
+                !legalLinks.privacyUrl && 'pointer-events-none opacity-50',
+              )}
             >
               <ShieldCheck className="size-5 text-primary" />
               سياسة الخصوصية
@@ -4770,7 +4980,10 @@ function SettingsView({
             </a>
           </div>
           {(!legalLinks.termsUrl || !legalLinks.privacyUrl) && (
-            <p className="mt-3 text-xs text-muted-foreground">The Superadmin can configure unavailable links from the Admin page.</p>
+            <p className="mt-3 text-xs text-muted-foreground">
+              The Superadmin can configure unavailable links from the Admin
+              page.
+            </p>
           )}
         </section>
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
@@ -5242,13 +5455,18 @@ function QuestionManager({
             )}
             <SecondaryButton
               onClick={() =>
-                hasFeature(user.effectivePlan ?? user.tier, 'jsonImport')
+                user.role === 'super_admin' || hasFeature(user.effectivePlan ?? user.tier, 'jsonImport')
                   ? setImportOpen(true)
                   : openUpgrade()
               }
             >
-              {!hasFeature(user.effectivePlan ?? user.tier, 'jsonImport') && <LockKeyhole className="size-4" />}
-              Import JSON {hasFeature(user.effectivePlan ?? user.tier, 'jsonImport') ? '/ Use AI' : '· Pro'}
+              {user.role !== 'super_admin' && !hasFeature(user.effectivePlan ?? user.tier, 'jsonImport') && (
+                <LockKeyhole className="size-4" />
+              )}
+              Import JSON{' '}
+              {user.role === 'super_admin' || hasFeature(user.effectivePlan ?? user.tier, 'jsonImport')
+                ? '/ Use AI'
+                : '· Pro'}
             </SecondaryButton>
             <PrimaryButton
               tone="contribute"
@@ -5258,8 +5476,15 @@ function QuestionManager({
                   : openUpgrade()
               }
             >
-              {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions') ? <Plus className="size-4" /> : <LockKeyhole className="size-4" />}
-              Add Manually {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions') ? '' : '· Pro'}
+              {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions') ? (
+                <Plus className="size-4" />
+              ) : (
+                <LockKeyhole className="size-4" />
+              )}
+              Add Manually{' '}
+              {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions')
+                ? ''
+                : '· Pro'}
             </PrimaryButton>
           </div>
         }
@@ -5269,6 +5494,7 @@ function QuestionManager({
           <DialogTitle>Import JSON / Use AI</DialogTitle>
           <QuestionImportReview
             bankId={activeQBankId}
+            unlimited={user.role === 'super_admin'}
             onImported={(result) =>
               confirmUpdate((current) => ({
                 ...current,
@@ -5278,9 +5504,31 @@ function QuestionManager({
                     (p) => !result.proposals.some((n) => n.id === p.id),
                   ),
                 ],
-                specialties: [...current.specialties, ...result.specialties.filter((item) => !current.specialties.some((existing) => existing.id === item.id))],
-                topics: [...current.topics, ...result.topics.filter((item) => !current.topics.some((existing) => existing.id === item.id))],
-                classificationRevisions: result.classificationRevision === undefined ? current.classificationRevisions : { ...current.classificationRevisions, [activeQBankId]: result.classificationRevision },
+                specialties: [
+                  ...current.specialties,
+                  ...result.specialties.filter(
+                    (item) =>
+                      !current.specialties.some(
+                        (existing) => existing.id === item.id,
+                      ),
+                  ),
+                ],
+                topics: [
+                  ...current.topics,
+                  ...result.topics.filter(
+                    (item) =>
+                      !current.topics.some(
+                        (existing) => existing.id === item.id,
+                      ),
+                  ),
+                ],
+                classificationRevisions:
+                  result.classificationRevision === undefined
+                    ? current.classificationRevisions
+                    : {
+                        ...current.classificationRevisions,
+                        [activeQBankId]: result.classificationRevision,
+                      },
               }))
             }
           />
@@ -5417,10 +5665,27 @@ function QuestionManager({
                               : 'bg-amber-50 text-amber-800 dark:bg-amber-500/12 dark:text-amber-200',
                         )}
                       >
-                        {proposal.status}
+                        {proposal.status === 'pending' && (proposal.duplicateReview?.status === 'flagged' || proposal.duplicateInfo)
+                          ? 'possible duplicate · review pending'
+                          : proposal.duplicateReview?.resolutions?.at(-1)?.decision === 'rejected_as_duplicate'
+                            ? 'rejected as duplicate'
+                            : proposal.status}
                       </span>
-                      <span className="line-clamp-2">
-                        {proposal.payload.stem}
+                      <span>
+                        <span className="line-clamp-2">{proposal.payload.stem}</span>
+                        {proposal.status === 'pending' && (proposal.duplicateReview?.status === 'flagged' || proposal.duplicateInfo) && (
+                          <small className="mt-1 block text-amber-700 dark:text-amber-300">Possible duplicate — awaiting reviewer decision. This is not a confirmed duplicate.</small>
+                        )}
+                        {proposal.duplicateReview?.resolutions?.at(-1)?.decision === 'rejected_as_duplicate' && (
+                          <small className="mt-1 block text-red-700 dark:text-red-300">
+                            Rejected after reviewer confirmation
+                            {(() => {
+                              const candidateId = proposal.duplicateReview?.resolutions?.at(-1)?.candidateEntityId;
+                              const matched = collaboration.approvedQuestions.find((question) => question.id === candidateId && question.qbankId === proposal.qbankId);
+                              return matched ? ` as duplicate of Question #${matched.questionId}.` : ' as a duplicate.';
+                            })()}
+                          </small>
+                        )}
                       </span>
                       <div className="rounded-lg bg-muted/45 px-3 py-2">
                         <span className="block text-[9px] font-bold uppercase tracking-wide text-muted-foreground">
@@ -5513,7 +5778,7 @@ export default function MedGuardApp({
   const [user, setUser] = useState<AppUser | null | undefined>(undefined);
   const [state, setStateRaw] = useState<AppState>(initialAppState);
   const setState = useCallback((update: React.SetStateAction<AppState>) => {
-    setStateRaw(current => {
+    setStateRaw((current) => {
       const next = typeof update === 'function' ? update(current) : update;
       if (next === current) return current;
       const updatedAt = new Date().toISOString();
@@ -5543,12 +5808,19 @@ export default function MedGuardApp({
   const [view, setViewState] = useState<View>(initialView);
   const [directTestCode, setDirectTestCode] = useState(() => {
     if (typeof window === 'undefined') return '';
-    return new URL(window.location.href).searchParams.get('join_test')?.trim().toUpperCase() ?? '';
+    return (
+      new URL(window.location.href).searchParams
+        .get('join_test')
+        ?.trim()
+        .toUpperCase() ?? ''
+    );
   });
   const [testError, setTestError] = useState('');
   const creatingTest = useRef(false);
   const [examPool, setExamPool] = useState<Question[]>([]);
-  const [activeTestId, setActiveTestId] = useState<string | undefined>(initialTestId);
+  const [activeTestId, setActiveTestId] = useState<string | undefined>(
+    initialTestId,
+  );
   const setView = useCallback(
     (next: View) => {
       setViewState(next);
@@ -5573,7 +5845,11 @@ export default function MedGuardApp({
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [flashcardClock, setFlashcardClock] = useState(() => Date.now());
-  const [announcement, setAnnouncement] = useState({ enabled: false, content: '', href: '' });
+  const [announcement, setAnnouncement] = useState({
+    enabled: false,
+    content: '',
+    href: '',
+  });
   const [linkInvitation, setLinkInvitation] = useState<
     (QBankLinkInvitation & { token: string }) | null
   >(null);
@@ -5639,9 +5915,12 @@ export default function MedGuardApp({
         .catch(() => undefined);
     };
     refresh();
-    const stop = subscribeLive((topic) => {
-      if (topic === 'announcement') refresh();
-    }, ['announcement']);
+    const stop = subscribeLive(
+      (topic) => {
+        if (topic === 'announcement') refresh();
+      },
+      ['announcement'],
+    );
     return () => {
       active = false;
       stop();
@@ -5658,7 +5937,11 @@ export default function MedGuardApp({
       lastSavedCollaboration.current = next;
       setCollaboration(next);
       if (user) {
-        setApiCache('/collaboration', { collaboration: next }, { cacheScope: user.uid });
+        setApiCache(
+          '/collaboration',
+          { collaboration: next },
+          { cacheScope: user.uid },
+        );
         void saveLocalCollaboration(next, user.uid);
       }
     },
@@ -5695,13 +5978,33 @@ export default function MedGuardApp({
 
   useEffect(() => {
     if (!user || !collaborationHydrated || user.status !== 'approved') return;
-    if (!['library', 'create', 'review', 'manager', 'qbank-management'].includes(view)) return;
-    if (collaborationWriteInFlight.current || collaborationSaveTimer.current) return;
+    if (
+      !['library', 'create', 'review', 'manager', 'qbank-management'].includes(
+        view,
+      )
+    )
+      return;
+    if (collaborationWriteInFlight.current || collaborationSaveTimer.current)
+      return;
     let active = true;
+    const baseline = lastSavedCollaboration.current;
     void loadCollaborationState(user)
-      .then(next => { if (active && next !== lastSavedCollaboration.current) replaceCollaborationFromServer(next); })
+      .then(async (next) => {
+        if (!active || (await loadCollaborationSyncOutbox(user.uid))) return;
+        if (
+          collaborationWriteInFlight.current ||
+          collaborationSaveTimer.current ||
+          baseline !== lastSavedCollaboration.current ||
+          JSON.stringify(liveSnapshot.current.collaboration) !==
+            JSON.stringify(lastSavedCollaboration.current)
+        )
+          return;
+        if (next !== baseline) replaceCollaborationFromServer(next);
+      })
       .catch(() => undefined);
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [collaborationHydrated, replaceCollaborationFromServer, user, view]);
 
   const allQuestions = useMemo(() => {
@@ -5713,7 +6016,10 @@ export default function MedGuardApp({
         images: question.images ?? [],
         qbankId: question.qbankId ?? 'smle-gs',
       })),
-      ...[...collaboration.approvedQuestions, ...(view === 'test' ? examPool : [])].map((question) => ({
+      ...[
+        ...collaboration.approvedQuestions,
+        ...(view === 'test' ? examPool : []),
+      ].map((question) => ({
         ...question,
         images: question.images ?? [],
       })),
@@ -5762,57 +6068,70 @@ export default function MedGuardApp({
         .filter((question) => bankIds.has(question.qbankId ?? 'smle-gs'))
         .map((question) => question.id),
     );
-    const cleanup = window.setTimeout(() => setState((current) => {
-      const favoriteQBankIds = current.settings.favoriteQBankIds.filter((id) =>
-        bankIds.has(id),
-      );
-      const pinnedQBankIds = current.settings.pinnedQBankIds.filter((id) =>
-        bankIds.has(id),
-      );
-      const quickAccessQBankIds = current.settings.quickAccessQBankIds
-        .filter((id) => bankIds.has(id))
-        .slice(0, 5);
-      const qbankOrderBySection = {
-        mine: [...new Set(current.settings.qbankOrderBySection.mine)].filter((id) =>
-          bankIds.has(id),
-        ),
-        shared: [...new Set(current.settings.qbankOrderBySection.shared)].filter(
-          (id) => bankIds.has(id),
-        ),
-      };
-      let progressChanged = false;
-      const progress = Object.fromEntries(
-        Object.entries(current.progress).map(([id, value]) => {
-          if (value.bookmarked && !questionIds.has(id)) {
-            progressChanged = true;
-            return [id, { ...value, bookmarked: false }];
-          }
-          return [id, value];
+    const cleanup = window.setTimeout(
+      () =>
+        setState((current) => {
+          const favoriteQBankIds = current.settings.favoriteQBankIds.filter(
+            (id) => bankIds.has(id),
+          );
+          const pinnedQBankIds = current.settings.pinnedQBankIds.filter((id) =>
+            bankIds.has(id),
+          );
+          const quickAccessQBankIds = current.settings.quickAccessQBankIds
+            .filter((id) => bankIds.has(id))
+            .slice(0, 5);
+          const qbankOrderBySection = {
+            mine: [
+              ...new Set(current.settings.qbankOrderBySection.mine),
+            ].filter((id) => bankIds.has(id)),
+            shared: [
+              ...new Set(current.settings.qbankOrderBySection.shared),
+            ].filter((id) => bankIds.has(id)),
+          };
+          let progressChanged = false;
+          const progress = Object.fromEntries(
+            Object.entries(current.progress).map(([id, value]) => {
+              if (value.bookmarked && !questionIds.has(id)) {
+                progressChanged = true;
+                return [id, { ...value, bookmarked: false }];
+              }
+              return [id, value];
+            }),
+          );
+          const settingsChanged =
+            favoriteQBankIds.length !==
+              current.settings.favoriteQBankIds.length ||
+            pinnedQBankIds.length !== current.settings.pinnedQBankIds.length ||
+            quickAccessQBankIds.length !==
+              current.settings.quickAccessQBankIds.length ||
+            qbankOrderBySection.mine.length !==
+              current.settings.qbankOrderBySection.mine.length ||
+            qbankOrderBySection.shared.length !==
+              current.settings.qbankOrderBySection.shared.length;
+          if (!progressChanged && !settingsChanged) return current;
+          return {
+            ...current,
+            progress,
+            settings: {
+              ...current.settings,
+              favoriteQBankIds,
+              pinnedQBankIds,
+              quickAccessQBankIds,
+              qbankOrderBySection,
+            },
+          };
         }),
-      );
-      const settingsChanged =
-        favoriteQBankIds.length !== current.settings.favoriteQBankIds.length ||
-        pinnedQBankIds.length !== current.settings.pinnedQBankIds.length ||
-        quickAccessQBankIds.length !== current.settings.quickAccessQBankIds.length ||
-        qbankOrderBySection.mine.length !==
-          current.settings.qbankOrderBySection.mine.length ||
-        qbankOrderBySection.shared.length !==
-          current.settings.qbankOrderBySection.shared.length;
-      if (!progressChanged && !settingsChanged) return current;
-      return {
-        ...current,
-        progress,
-        settings: {
-          ...current.settings,
-          favoriteQBankIds,
-          pinnedQBankIds,
-          quickAccessQBankIds,
-          qbankOrderBySection,
-        },
-      };
-    }), 0);
+      0,
+    );
     return () => window.clearTimeout(cleanup);
-  }, [accessibleQBanks, allQuestions, collaborationHydrated, hydrated, setState, user]);
+  }, [
+    accessibleQBanks,
+    allQuestions,
+    collaborationHydrated,
+    hydrated,
+    setState,
+    user,
+  ]);
   const activeQBank = collaboration.qbanks.find(
     (bank) => bank.id === activeQBankId,
   );
@@ -5866,6 +6185,9 @@ export default function MedGuardApp({
       const pathname = window.location.pathname;
       const next = viewFromPath(pathname);
       setViewState(next);
+      setDirectTestCode(
+        new URL(window.location.href).searchParams.get('join_test')?.trim().toUpperCase() ?? '',
+      );
       if (next === 'test') {
         const id = decodeURIComponent(pathname.slice('/exams/'.length));
         setActiveTestId(id === 'active' ? undefined : id);
@@ -5902,7 +6224,14 @@ export default function MedGuardApp({
       );
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [collaboration.qbanks, collaboration.memberships, collaborationHydrated, initialQBankId, setState, user]);
+  }, [
+    collaboration.qbanks,
+    collaboration.memberships,
+    collaborationHydrated,
+    initialQBankId,
+    setState,
+    user,
+  ]);
 
   useEffect(() => {
     if (view !== 'test' || !activeTestHasQuestion) return;
@@ -5928,7 +6257,10 @@ export default function MedGuardApp({
           registration.addEventListener('updatefound', () => {
             const worker = registration.installing;
             worker?.addEventListener('statechange', () => {
-              if (worker.state === 'installed' && navigator.serviceWorker.controller)
+              if (
+                worker.state === 'installed' &&
+                navigator.serviceWorker.controller
+              )
                 setUpdateAvailable(true);
             });
           });
@@ -5970,10 +6302,12 @@ export default function MedGuardApp({
         document.head.appendChild(themeColor);
       }
       // Safari may use the first matching server-rendered theme entry.
-      document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach((meta) => {
-        meta.removeAttribute('media');
-        meta.content = dark ? '#0d1b2a' : '#ffffff';
-      });
+      document
+        .querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')
+        .forEach((meta) => {
+          meta.removeAttribute('media');
+          meta.content = dark ? '#0d1b2a' : '#ffffff';
+        });
     };
     apply();
     media.addEventListener('change', apply);
@@ -6031,25 +6365,35 @@ export default function MedGuardApp({
           ]);
           const localIsNewer = Boolean(
             localState &&
-            (!cloud || appStateFreshness(localState) > appStateFreshness(cloud)),
+            (!cloud ||
+              appStateFreshness(localState) > appStateFreshness(cloud)),
           );
           if (cloud) {
             resolved = localState
-              ? mergeAppStates(normalizeAppState(localState), normalizeAppState(cloud))
+              ? mergeAppStates(
+                  normalizeAppState(localState),
+                  normalizeAppState(cloud),
+                )
               : normalizeAppState(cloud);
             cloudStateSnapshot.current = normalizeAppState(cloud);
           }
-          shared = !collaborationReplaySucceeded && localCollaboration
-            ? localCollaboration
-            : localIsNewer && localCollaboration
-              ? preserveNewerLocalAnswers(remoteCollaboration, localCollaboration, user!.uid)
-              : remoteCollaboration;
+          shared =
+            !collaborationReplaySucceeded && localCollaboration
+              ? localCollaboration
+              : localIsNewer && localCollaboration
+                ? preserveNewerLocalAnswers(
+                    remoteCollaboration,
+                    localCollaboration,
+                    user!.uid,
+                  )
+                : remoteCollaboration;
           cloudLoaded.current = true;
           setSyncStatus('synced');
         }
         if (!cancelled) {
           hydratedIdentity.current = identity;
-          const accountTheme = loadLocalTheme(user!.uid) ?? resolved.settings.theme;
+          const accountTheme =
+            loadLocalTheme(user!.uid) ?? resolved.settings.theme;
           saveLocalTheme(user!.uid, accountTheme);
           setTheme(accountTheme);
           setStateRaw(resolved);
@@ -6061,12 +6405,10 @@ export default function MedGuardApp({
       } catch {
         if (!cancelled) {
           const shared = normalizeCollaborationState(
-            localCollaboration ?? await loadLocalCollaboration(user!.uid),
+            localCollaboration ?? (await loadLocalCollaboration(user!.uid)),
           );
           setStateRaw(
-            normalizeAppState(
-              localState ?? await loadLocalState(user!.uid),
-            ),
+            normalizeAppState(localState ?? (await loadLocalState(user!.uid))),
           );
           setCollaboration(shared);
           lastSavedCollaboration.current = shared;
@@ -6132,7 +6474,10 @@ export default function MedGuardApp({
       );
       confirmUpdate((current) => ({
         ...current,
-        memberships: [membership, ...current.memberships.filter((item) => item.id !== membership.id)],
+        memberships: [
+          membership,
+          ...current.memberships.filter((item) => item.id !== membership.id),
+        ],
       }));
       setState((current) => ({
         ...current,
@@ -6161,22 +6506,31 @@ export default function MedGuardApp({
     cloudStateSnapshot.current = undefined;
     if (!alreadySynced) stateDirty.current = true;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      if (creatingTest.current) return;
-      void saveLocalState(user.uid, state);
-      if (!alreadySynced)
-        setSyncStatus(navigator.onLine ? 'local' : 'offline');
-    }, view === 'test' || flashcardReviewActive.current ? 0 : 200);
+    saveTimer.current = window.setTimeout(
+      () => {
+        if (creatingTest.current) return;
+        void saveLocalState(user.uid, state);
+        if (!alreadySynced)
+          setSyncStatus(navigator.onLine ? 'local' : 'offline');
+      },
+      view === 'test' || flashcardReviewActive.current ? 0 : 200,
+    );
     return () => {
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
     };
   }, [state, user, hydrated, view]);
 
   useEffect(() => {
-    if (!user || !hydrated || !navigator.onLine || outboxReplayedFor.current === user.uid) return;
+    if (
+      !user ||
+      !hydrated ||
+      !navigator.onLine ||
+      outboxReplayedFor.current === user.uid
+    )
+      return;
     outboxReplayedFor.current = user.uid;
     void flushPendingCloudState(user.uid)
-      .then(remote => {
+      .then((remote) => {
         if (!remote) return;
         const merged = mergeAppStates(stateSnapshot.current, remote);
         cloudStateSnapshot.current = merged;
@@ -6191,7 +6545,7 @@ export default function MedGuardApp({
 
   useEffect(() => {
     if (!user || !hydrated) return;
-    return observeCloudStateSync(user.uid, remote => {
+    return observeCloudStateSync(user.uid, (remote) => {
       const merged = mergeAppStates(stateSnapshot.current, remote);
       cloudStateSnapshot.current = merged;
       setStateRaw(merged);
@@ -6242,7 +6596,12 @@ export default function MedGuardApp({
     if (!user || !hydrated) return;
     const previous = flashcardCrudSnapshot.current;
     flashcardCrudSnapshot.current = flashcardCrudVersion;
-    if (!previous || previous === flashcardCrudVersion || flashcardReviewActive.current) return;
+    if (
+      !previous ||
+      previous === flashcardCrudVersion ||
+      flashcardReviewActive.current
+    )
+      return;
     // Card/deck CRUD intentionally keeps its established autosave behavior.
     // Review ratings are excluded because they change only schedules/logs.
     const timer = window.setTimeout(() => void flushCloudState(), 800);
@@ -6265,24 +6624,35 @@ export default function MedGuardApp({
       const snapshot = stateSnapshot.current;
       void saveLocalState(user.uid, snapshot);
       if (!snapshot.settings.autoSync || !stateDirty.current) return;
-      const kind = viewSnapshot.current === 'test'
-        ? 'exam'
-        : flashcardReviewActive.current
-          ? 'flashcards'
-          : 'full';
+      const kind =
+        viewSnapshot.current === 'test'
+          ? 'exam'
+          : flashcardReviewActive.current
+            ? 'flashcards'
+            : 'full';
       const checkpointKey = `${kind}:${snapshot.clientUpdatedAt ?? ''}`;
       if (lastLeaveCheckpoint.current === checkpointKey) return;
       lastLeaveCheckpoint.current = checkpointKey;
-      const activeCheckpointTest = kind === 'exam'
-        ? snapshot.tests.find(item => item.id === activeTestIdSnapshot.current) ??
-          snapshot.tests.find(item => item.status === 'active')
-        : undefined;
+      const activeCheckpointTest =
+        kind === 'exam'
+          ? (snapshot.tests.find(
+              (item) => item.id === activeTestIdSnapshot.current,
+            ) ?? snapshot.tests.find((item) => item.status === 'active'))
+          : undefined;
       const answerSelections = activeCheckpointTest
-        ? activeCheckpointTest.questionIds.flatMap(questionId => {
-            const question = allQuestions.find(item => item.id === questionId);
-            const qbankId = question?.qbankId ?? activeCheckpointTest.qbankId ?? 'smle-gs';
-            const answer = liveSnapshot.current.collaboration.answerStats[`${qbankId}:${questionId}`]?.selections[user.uid];
-            return Number.isInteger(answer) ? [{ qbankId, questionId, answer }] : [];
+        ? activeCheckpointTest.questionIds.flatMap((questionId) => {
+            const question = allQuestions.find(
+              (item) => item.id === questionId,
+            );
+            const qbankId =
+              question?.qbankId ?? activeCheckpointTest.qbankId ?? 'smle-gs';
+            const answer =
+              liveSnapshot.current.collaboration.answerStats[
+                `${qbankId}:${questionId}`
+              ]?.selections[user.uid];
+            return Number.isInteger(answer)
+              ? [{ qbankId, questionId, answer }]
+              : [];
           })
         : [];
       saveBestEffortStateCheckpoint(
@@ -6315,8 +6685,10 @@ export default function MedGuardApp({
       return;
     if (
       viewSnapshot.current === 'test' &&
-      JSON.stringify({ ...collaboration, answerStats: lastSavedCollaboration.current.answerStats }) ===
-        JSON.stringify(lastSavedCollaboration.current)
+      JSON.stringify({
+        ...collaboration,
+        answerStats: lastSavedCollaboration.current.answerStats,
+      }) === JSON.stringify(lastSavedCollaboration.current)
     ) {
       void saveLocalCollaboration(collaboration, user.uid);
       setSyncStatus(navigator.onLine ? 'local' : 'offline');
@@ -6324,20 +6696,25 @@ export default function MedGuardApp({
     }
     if (collaborationSaveTimer.current)
       window.clearTimeout(collaborationSaveTimer.current);
+    const previous = lastSavedCollaboration.current;
+    const queued = Promise.all([
+      saveLocalCollaboration(collaboration, user.uid),
+      queueCollaborationState(user.uid, collaboration, previous),
+    ]);
+    void queued.catch(() => setSyncStatus('error'));
     const persist = () => {
       if (collaborationWriteInFlight.current) {
         collaborationSaveTimer.current = window.setTimeout(persist, 100);
         return;
       }
       collaborationSaveTimer.current = undefined;
-      const previous = lastSavedCollaboration.current;
-      void saveLocalCollaboration(collaboration, user.uid);
       if (navigator.onLine && cloudLoaded.current) {
         collaborationWriteInFlight.current = true;
         setSyncStatus('syncing');
-        void saveCollaborationState(collaboration, previous, user.uid)
-          .then(() => {
-            lastSavedCollaboration.current = collaboration;
+        void queued
+          .then(() => flushPendingCollaborationState(user.uid))
+          .then((synced) => {
+            if (synced) lastSavedCollaboration.current = synced;
             setSyncStatus('synced');
           })
           .catch(() => setSyncStatus('error'))
@@ -6345,9 +6722,6 @@ export default function MedGuardApp({
             collaborationWriteInFlight.current = false;
           });
       } else {
-        void queueCollaborationState(user.uid, collaboration, previous).catch(
-          () => setSyncStatus('error'),
-        );
         setSyncStatus(navigator.onLine ? 'local' : 'offline');
       }
     };
@@ -6383,7 +6757,8 @@ export default function MedGuardApp({
     if (!channels.length || !collaborationHydrated) return;
     let stopped = false;
     const refreshAccount = async () => {
-      if (stopped || !navigator.onLine || document.visibilityState === 'hidden') return;
+      if (stopped || !navigator.onLine || document.visibilityState === 'hidden')
+        return;
       await observeCloudflareUser((account) => {
         if (!stopped) setUser(account ?? null);
       }).catch(() => undefined);
@@ -6395,7 +6770,8 @@ export default function MedGuardApp({
         document.visibilityState === 'hidden' ||
         collaborationWriteInFlight.current ||
         collaborationSaveTimer.current
-      ) return;
+      )
+        return;
       const baseline = lastSavedCollaboration.current;
       try {
         const currentAccount = liveSnapshot.current.user;
@@ -6404,6 +6780,8 @@ export default function MedGuardApp({
         if (stopped) return;
         if (
           collaborationWriteInFlight.current ||
+          collaborationSaveTimer.current ||
+          (await loadCollaborationSyncOutbox(currentAccount.uid)) ||
           baseline !== lastSavedCollaboration.current
         ) {
           return;
@@ -6421,11 +6799,14 @@ export default function MedGuardApp({
         )
           setCollaboration(merged);
         void saveLocalCollaboration(merged, currentAccount.uid);
-      } catch { /* The stale entry remains stale and will retry on actual use. */ }
+      } catch {
+        /* The stale entry remains stale and will retry on actual use. */
+      }
     };
     const disconnect = openLiveChannels(channels, (topic) => {
       if (topic === 'account' || topic === 'connected') void refreshAccount();
-      if (topic === 'collaboration' || topic === 'connected') void refreshCollaboration();
+      if (topic === 'collaboration' || topic === 'connected')
+        void refreshCollaboration();
     });
     return () => {
       stopped = true;
@@ -6433,50 +6814,64 @@ export default function MedGuardApp({
     };
   }, [liveChannels, collaborationHydrated]);
 
-  const checkpointPersonalState = useCallback(async (kind: 'exam' | 'flashcards', testId?: string) => {
-    if (!user) return;
-    const snapshot = stateSnapshot.current;
-    const checkpointTest = kind === 'exam'
-      ? snapshot.tests.find(item => item.id === testId) ?? snapshot.tests.find(item => item.status === 'active')
-      : undefined;
-    const answerSelections = checkpointTest
-      ? checkpointTest.questionIds.flatMap(questionId => {
-          const question = allQuestions.find(item => item.id === questionId);
-          const qbankId = question?.qbankId ?? checkpointTest.qbankId ?? 'smle-gs';
-          const answer = liveSnapshot.current.collaboration.answerStats[`${qbankId}:${questionId}`]?.selections[user.uid];
-          return Number.isInteger(answer) ? [{ qbankId, questionId, answer }] : [];
-        })
-      : [];
-    if (kind === 'exam')
-      lastSavedCollaboration.current = {
-        ...lastSavedCollaboration.current,
-        answerStats: liveSnapshot.current.collaboration.answerStats,
-      };
-    void saveLocalState(user.uid, snapshot);
-    stateDirty.current = false;
-    if (!snapshot.settings.autoSync) {
-      setSyncStatus(navigator.onLine ? 'local' : 'offline');
-      return;
-    }
-    checkpointInFlight.current = true;
-    setSyncStatus('syncing');
-    try {
-      const remote = kind === 'exam'
-        ? await saveExamCheckpoint(user.uid, snapshot, answerSelections)
-        : await saveFlashcardCheckpoint(user.uid, snapshot);
-      if (remote) {
-        const merged = mergeAppStates(stateSnapshot.current, remote);
-        cloudStateSnapshot.current = merged;
-        setStateRaw(merged);
-        await saveLocalState(user.uid, merged);
+  const checkpointPersonalState = useCallback(
+    async (kind: 'exam' | 'flashcards', testId?: string) => {
+      if (!user) return;
+      const snapshot = stateSnapshot.current;
+      const checkpointTest =
+        kind === 'exam'
+          ? (snapshot.tests.find((item) => item.id === testId) ??
+            snapshot.tests.find((item) => item.status === 'active'))
+          : undefined;
+      const answerSelections = checkpointTest
+        ? checkpointTest.questionIds.flatMap((questionId) => {
+            const question = allQuestions.find(
+              (item) => item.id === questionId,
+            );
+            const qbankId =
+              question?.qbankId ?? checkpointTest.qbankId ?? 'smle-gs';
+            const answer =
+              liveSnapshot.current.collaboration.answerStats[
+                `${qbankId}:${questionId}`
+              ]?.selections[user.uid];
+            return Number.isInteger(answer)
+              ? [{ qbankId, questionId, answer }]
+              : [];
+          })
+        : [];
+      if (kind === 'exam')
+        lastSavedCollaboration.current = {
+          ...lastSavedCollaboration.current,
+          answerStats: liveSnapshot.current.collaboration.answerStats,
+        };
+      void saveLocalState(user.uid, snapshot);
+      stateDirty.current = false;
+      if (!snapshot.settings.autoSync) {
+        setSyncStatus(navigator.onLine ? 'local' : 'offline');
+        return;
       }
-      setSyncStatus('synced');
-    } catch {
-      setSyncStatus(navigator.onLine ? 'local' : 'offline');
-    } finally {
-      checkpointInFlight.current = false;
-    }
-  }, [allQuestions, user]);
+      checkpointInFlight.current = true;
+      setSyncStatus('syncing');
+      try {
+        const remote =
+          kind === 'exam'
+            ? await saveExamCheckpoint(user.uid, snapshot, answerSelections)
+            : await saveFlashcardCheckpoint(user.uid, snapshot);
+        if (remote) {
+          const merged = mergeAppStates(stateSnapshot.current, remote);
+          cloudStateSnapshot.current = merged;
+          setStateRaw(merged);
+          await saveLocalState(user.uid, merged);
+        }
+        setSyncStatus('synced');
+      } catch {
+        setSyncStatus(navigator.onLine ? 'local' : 'offline');
+      } finally {
+        checkpointInFlight.current = false;
+      }
+    },
+    [allQuestions, user],
+  );
   const setFlashcardReviewActivity = useCallback((active: boolean) => {
     flashcardReviewActive.current = active;
   }, []);
@@ -6484,39 +6879,47 @@ export default function MedGuardApp({
     if (document.visibilityState === 'hidden') return;
     void checkpointPersonalState('flashcards');
   }, [checkpointPersonalState]);
-  const updateLocalTheme = useCallback((nextTheme: LocalTheme) => {
-    setTheme(nextTheme);
-    if (user) saveLocalTheme(user.uid, nextTheme);
-  }, [user]);
+  const updateLocalTheme = useCallback(
+    (nextTheme: LocalTheme) => {
+      setTheme(nextTheme);
+      if (user) saveLocalTheme(user.uid, nextTheme);
+    },
+    [user],
+  );
   const toggleDashboardTheme = useCallback(() => {
-    updateLocalTheme(document.documentElement.classList.contains('dark') ? 'light' : 'dark');
+    updateLocalTheme(
+      document.documentElement.classList.contains('dark') ? 'light' : 'dark',
+    );
   }, [updateLocalTheme]);
-  const persistDailyGoal = useCallback(async (dailyGoal: number) => {
-    if (!user) throw new Error('Sign in to save your daily goal.');
-    const next: AppState = {
-      ...stateSnapshot.current,
-      clientUpdatedAt: new Date().toISOString(),
-      settings: { ...stateSnapshot.current.settings, dailyGoal },
-    };
-    cloudStateSnapshot.current = next;
-    setStateRaw(next);
-    await saveLocalState(user.uid, next);
-    stateDirty.current = false;
-    setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-    try {
-      const remote = await saveDailyGoal(user.uid, next, dailyGoal);
-      if (remote) {
-        const merged = mergeAppStates(next, remote);
-        cloudStateSnapshot.current = merged;
-        setStateRaw(merged);
-        await saveLocalState(user.uid, merged);
+  const persistDailyGoal = useCallback(
+    async (dailyGoal: number) => {
+      if (!user) throw new Error('Sign in to save your daily goal.');
+      const next: AppState = {
+        ...stateSnapshot.current,
+        clientUpdatedAt: new Date().toISOString(),
+        settings: { ...stateSnapshot.current.settings, dailyGoal },
+      };
+      cloudStateSnapshot.current = next;
+      setStateRaw(next);
+      await saveLocalState(user.uid, next);
+      stateDirty.current = false;
+      setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
+      try {
+        const remote = await saveDailyGoal(user.uid, next, dailyGoal);
+        if (remote) {
+          const merged = mergeAppStates(next, remote);
+          cloudStateSnapshot.current = merged;
+          setStateRaw(merged);
+          await saveLocalState(user.uid, merged);
+        }
+        setSyncStatus(navigator.onLine ? 'synced' : 'offline');
+      } catch (error) {
+        setSyncStatus(navigator.onLine ? 'local' : 'offline');
+        if (navigator.onLine) throw error;
       }
-      setSyncStatus(navigator.onLine ? 'synced' : 'offline');
-    } catch (error) {
-      setSyncStatus(navigator.onLine ? 'local' : 'offline');
-      if (navigator.onLine) throw error;
-    }
-  }, [user]);
+    },
+    [user],
+  );
 
   async function manualSync() {
     if (!user || !navigator.onLine) {
@@ -6591,15 +6994,29 @@ export default function MedGuardApp({
           setStateRaw(testBaseState);
           await saveLocalState(user.uid, testBaseState);
         }
-        const result = await api<{ questions: Question[] }>('/platform/test-pool', {
-          method: 'POST', body: JSON.stringify({ qbankId: activeQBankId, config, select: true }),
-        });
+        const result = await api<{ questions: Question[] }>(
+          '/platform/test-pool',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              qbankId: activeQBankId,
+              config,
+              select: true,
+            }),
+          },
+        );
         selected = result.questions;
         setExamPool(selected);
       } catch (error) {
-        setTestError(error instanceof Error ? error.message : 'Unable to select questions.');
+        setTestError(
+          error instanceof Error
+            ? error.message
+            : 'Unable to select questions.',
+        );
         return;
-      } finally { creatingTest.current = false; }
+      } finally {
+        creatingTest.current = false;
+      }
       if (!selected.length) {
         setView('create');
         return;
@@ -6763,11 +7180,14 @@ export default function MedGuardApp({
     );
   if (user === undefined) return <AppLoadingScreen status="Starting Qraft…" />;
   if (directTestCode) {
-    const participant = user?.status === 'approved' && !user.suspended ? user : null;
+    const participant =
+      user?.status === 'approved' && !user.suspended ? user : null;
     return (
       <PreformedTestRunner
+        key={directTestCode}
         user={participant}
         code={directTestCode}
+        onTestEntered={participant ? recordStudyVisit : undefined}
         onClose={() => {
           clearTestLink();
           setDirectTestCode('');
@@ -6787,7 +7207,11 @@ export default function MedGuardApp({
         onJoinTest={(code) => {
           const url = new URL(window.location.href);
           url.searchParams.set('join_test', code);
-          window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+          window.history.replaceState(
+            {},
+            '',
+            `${url.pathname}${url.search}${url.hash}`,
+          );
           setDirectTestCode(code);
         }}
       />
@@ -6811,11 +7235,17 @@ export default function MedGuardApp({
         <main className="grid min-h-screen place-items-center bg-background p-6">
           <section className="w-full max-w-lg rounded-3xl border bg-card p-8 text-center shadow-xl">
             <ShieldCheck className="mx-auto size-10 text-muted-foreground" />
-            <h1 className="mt-5 text-2xl font-bold">Superadmin access required</h1>
+            <h1 className="mt-5 text-2xl font-bold">
+              Superadmin access required
+            </h1>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              This workspace is available only to the verified Superadmin account.
+              This workspace is available only to the verified Superadmin
+              account.
             </p>
-            <Link href="/" className="q-button q-button-primary mt-6 inline-flex">
+            <Link
+              href="/"
+              className="q-button q-button-primary mt-6 inline-flex"
+            >
               Return to Qraft
             </Link>
           </section>
@@ -6850,7 +7280,10 @@ export default function MedGuardApp({
             destination ??
               (activeTest.status === 'completed' ? 'history' : 'dashboard'),
           );
-          window.setTimeout(() => void checkpointPersonalState('exam', activeTest.id), 0);
+          window.setTimeout(
+            () => void checkpointPersonalState('exam', activeTest.id),
+            0,
+          );
         }}
       />
     );
@@ -6949,308 +7382,338 @@ export default function MedGuardApp({
       <QraftAppShell
         contentKey={view}
         navigationOpen={mobileOpen}
-        handheldNavigation={
-          <StudyMobileNav view={view} onNavigate={setView} />
-        }
+        handheldNavigation={<StudyMobileNav view={view} onNavigate={setView} />}
         tabletNavigation={
           <StudyTabletRail
             view={view}
             onNavigate={setView}
             onMore={() => setMobileOpen(true)}
+            showReview={showReview}
+            showSubscribe={(user.effectivePlan ?? user.tier) !== 'unlimited'}
           />
         }
         navigation={
           <AppSidebar
-          view={view}
-          setView={setView}
-          user={user}
-          syncStatus={syncStatus}
-          onSignOut={() => void signOut()}
-          mobileOpen={mobileOpen}
-          closeMobile={() => setMobileOpen(false)}
-          qbanks={accessibleQBanks}
-          quickAccessQBankIds={state.settings.quickAccessQBankIds}
-          activeQBankId={activeQBankId}
-          onSelectQBank={(id) => {
-            const nextBank = collaboration.qbanks.find(
-              (bank) => bank.id === id,
-            );
-            setState((current) => ({
-              ...current,
-              settings: { ...current.settings, activeQBankId: id },
-            }));
-            if (
-              view === 'review' &&
-              (!nextBank ||
-                !canReviewBank(user, nextBank, collaboration.memberships))
-            )
-              setView('dashboard');
-          }}
-          showReview={showReview}
-          pendingReviewCount={pendingReviewCount}
-          dueFlashcardCount={dueFlashcardCount}
-          persistent={presentation.mode === 'desktop'}
-        />
+            view={view}
+            setView={setView}
+            user={user}
+            syncStatus={syncStatus}
+            onSignOut={() => void signOut()}
+            mobileOpen={mobileOpen}
+            closeMobile={() => setMobileOpen(false)}
+            qbanks={accessibleQBanks}
+            quickAccessQBankIds={state.settings.quickAccessQBankIds}
+            activeQBankId={activeQBankId}
+            onSelectQBank={(id) => {
+              const nextBank = collaboration.qbanks.find(
+                (bank) => bank.id === id,
+              );
+              setState((current) => ({
+                ...current,
+                settings: { ...current.settings, activeQBankId: id },
+              }));
+              if (
+                view === 'review' &&
+                (!nextBank ||
+                  !canReviewBank(user, nextBank, collaboration.memberships))
+              )
+                setView('dashboard');
+            }}
+            showReview={showReview}
+            pendingReviewCount={pendingReviewCount}
+            dueFlashcardCount={dueFlashcardCount}
+            persistent={presentation.mode === 'desktop'}
+          />
         }
       >
-          {portal === 'app' && announcement.enabled && announcement.content && (
-            <output className="q-announcement flex min-h-10 items-center justify-center gap-3 bg-gradient-to-r from-primary via-cyan-600 to-teal-600 px-4 py-2 text-center text-xs font-bold text-white shadow-sm sm:text-sm">
-              <span>{announcement.content}</span>
-              {announcement.href && (
-                <a href={announcement.href} className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-[11px] ring-1 ring-white/30 transition hover:bg-white/25">
-                  معرفة المزيد
-                </a>
-              )}
-            </output>
-          )}
-          {view === 'subscribe' && (
-            <>
-              <PageHeader
-                title="Subscription"
-                subtitle="Plans and account access"
-                openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
-              />
-              <Subscribe user={user} onUser={setUser} />
-            </>
-          )}
-          {view === 'contact' && (
-            <>
-              <PageHeader
-                title="Contact Us"
-                subtitle="Private support for technical, account, and question issues"
-                openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
-              />
-              <ContactWorkspace />
-            </>
-          )}
-          {view === 'account' && (
-            <AccountProfile user={user} onUser={setUser} />
-          )}
-          {testError && (
-            <div
-              role="alert"
-              className="m-4 rounded-xl border border-amber-400 bg-card p-4"
-            >
-              <p className="mb-3">{testError}</p>
-              <UpgradeButton />
-            </div>
-          )}
-          {view === 'dashboard' && (
-            <StudyDashboard
-              state={state}
-              questions={questions}
-              name={user.displayName}
-              bankName={
-                collaboration.qbanks.find((bank) => bank.id === activeQBankId)
-                  ?.name
+        {portal === 'app' && announcement.enabled && announcement.content && (
+          <output className="q-announcement flex min-h-10 items-center justify-center gap-3 bg-gradient-to-r from-primary via-cyan-600 to-teal-600 px-4 py-2 text-center text-xs font-bold text-white shadow-sm sm:text-sm">
+            <span>{announcement.content}</span>
+            {announcement.href && (
+              <a
+                href={announcement.href}
+                className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-[11px] ring-1 ring-white/30 transition hover:bg-white/25"
+              >
+                معرفة المزيد
+              </a>
+            )}
+          </output>
+        )}
+        {view === 'subscribe' && (
+          <>
+            <PageHeader
+              title="Subscription"
+              subtitle="Plans and account access"
+              openMenu={() =>
+                window.dispatchEvent(new Event('medguard-open-menu'))
               }
-              navigate={setView}
-              startQuickTest={quickTest}
-              theme={theme}
-              onToggleTheme={toggleDashboardTheme}
             />
-          )}
-          {view === 'library' && (
-            <QBankWorkspace
-              confirmUpdate={confirmUpdate}
-              user={user}
-              collaboration={collaboration}
-              questionPool={allQuestions}
-              update={(updater) => setCollaboration(updater)}
-              activeQBankId={activeQBankId}
-              organization={{
-                favoriteIds: state.settings.favoriteQBankIds,
-                pinnedIds: state.settings.pinnedQBankIds,
-                quickAccessIds: state.settings.quickAccessQBankIds,
-                orderBySection: state.settings.qbankOrderBySection,
-              }}
-              bookmarkedQuestionIds={Object.entries(state.progress)
-                .filter(([, progress]) => progress.bookmarked)
-                .map(([questionId]) => questionId)}
-              onToggleBookmark={(questionId) =>
-                setState((current) => {
-                  const old = getQuestionProgress(current, questionId);
-                  return {
-                    ...current,
-                    progress: {
-                      ...current.progress,
-                      [questionId]: {
-                        ...old,
-                        bookmarked: !old.bookmarked,
-                        updatedAt: new Date().toISOString(),
-                      },
+            <Subscribe user={user} onUser={setUser} />
+          </>
+        )}
+        {view === 'contact' && (
+          <>
+            <PageHeader
+              title="Contact Us"
+              subtitle="Private support for technical, account, and question issues"
+              openMenu={() =>
+                window.dispatchEvent(new Event('medguard-open-menu'))
+              }
+            />
+            <ContactWorkspace />
+          </>
+        )}
+        {view === 'account' && <AccountProfile user={user} onUser={setUser} />}
+        {testError && (
+          <div
+            role="alert"
+            className="m-4 rounded-xl border border-amber-400 bg-card p-4"
+          >
+            <p className="mb-3">{testError}</p>
+            <UpgradeButton />
+          </div>
+        )}
+        {view === 'dashboard' && (
+          <StudyDashboard
+            state={state}
+            questions={questions}
+            name={user.displayName}
+            bankName={
+              collaboration.qbanks.find((bank) => bank.id === activeQBankId)
+                ?.name
+            }
+            navigate={setView}
+            startQuickTest={quickTest}
+            theme={theme}
+            onToggleTheme={toggleDashboardTheme}
+          />
+        )}
+        {view === 'library' && (
+          <QBankWorkspace
+            confirmUpdate={confirmUpdate}
+            user={user}
+            collaboration={collaboration}
+            questionPool={allQuestions}
+            update={(updater) => setCollaboration(updater)}
+            activeQBankId={activeQBankId}
+            organization={{
+              favoriteIds: state.settings.favoriteQBankIds,
+              pinnedIds: state.settings.pinnedQBankIds,
+              quickAccessIds: state.settings.quickAccessQBankIds,
+              orderBySection: state.settings.qbankOrderBySection,
+            }}
+            bookmarkedQuestionIds={Object.entries(state.progress)
+              .filter(([, progress]) => progress.bookmarked)
+              .map(([questionId]) => questionId)}
+            onToggleBookmark={(questionId) =>
+              setState((current) => {
+                const old = getQuestionProgress(current, questionId);
+                return {
+                  ...current,
+                  progress: {
+                    ...current.progress,
+                    [questionId]: {
+                      ...old,
+                      bookmarked: !old.bookmarked,
+                      updatedAt: new Date().toISOString(),
                     },
-                  };
-                })
-              }
-              onStartBookmarks={(questionIds, title) => {
-                const now = new Date().toISOString();
-                const test: TestSession = {
-                  id: crypto.randomUUID(),
-                  title,
-                  mode: 'tutor',
-                  questionIds,
-                  currentIndex: 0,
-                  answers: {},
-                  revealed: [],
-                  graded: [],
-                  startedAt: now,
-                  updatedAt: now,
-                  elapsedSeconds: 0,
-                  timerStartedAt: now,
-                  timerPaused: false,
-                  status: 'active',
-                  origin: 'bookmarks',
-                };
-                setState((current) => ({
-                  ...current,
-                  tests: [test, ...current.tests],
-                }));
-                setActiveTestId(test.id);
-                setView('test');
-              }}
-              updateOrganization={(organization) =>
-                setState((current) => ({
-                  ...current,
-                  settings: {
-                    ...current.settings,
-                    favoriteQBankIds: organization.favoriteIds,
-                    pinnedQBankIds: organization.pinnedIds,
-                    quickAccessQBankIds: organization.quickAccessIds.slice(0, 5),
-                    qbankOrderBySection: organization.orderBySection,
                   },
-                }))
+                };
+              })
+            }
+            onStartBookmarks={(questionIds, title) => {
+              const now = new Date().toISOString();
+              const test: TestSession = {
+                id: crypto.randomUUID(),
+                title,
+                mode: 'tutor',
+                questionIds,
+                currentIndex: 0,
+                answers: {},
+                revealed: [],
+                graded: [],
+                startedAt: now,
+                updatedAt: now,
+                elapsedSeconds: 0,
+                timerStartedAt: now,
+                timerPaused: false,
+                status: 'active',
+                origin: 'bookmarks',
+                qbankId: activeQBankId,
+              };
+              setState((current) => ({
+                ...current,
+                tests: [test, ...current.tests],
+              }));
+              setActiveTestId(test.id);
+              setView('test');
+            }}
+            updateOrganization={(organization) =>
+              setState((current) => ({
+                ...current,
+                settings: {
+                  ...current.settings,
+                  favoriteQBankIds: organization.favoriteIds,
+                  pinnedQBankIds: organization.pinnedIds,
+                  quickAccessQBankIds: organization.quickAccessIds.slice(0, 5),
+                  qbankOrderBySection: organization.orderBySection,
+                },
+              }))
+            }
+            onSelect={(id) => {
+              setState((current) => ({
+                ...current,
+                settings: { ...current.settings, activeQBankId: id },
+              }));
+              setView('dashboard');
+            }}
+            onManageBank={(id, section) => {
+              setManagedBank({ id, section });
+              setView('qbank-management');
+            }}
+          />
+        )}
+        {view === 'review' && showReview && (
+          <ReviewWorkspace
+            activeQBankId={activeQBankId}
+            user={user}
+            collaboration={collaboration}
+            update={(updater) => setCollaboration(updater)}
+            replaceFromServer={replaceCollaborationFromServer}
+          />
+        )}
+        {view === 'create' && (
+          <CreateTest
+            key={activeQBankId}
+            questions={questions}
+            state={state}
+            bankName={activeQBank?.name ?? 'QBank'}
+            maxQuestionsPerExam={
+              getPlanLimits(user.effectivePlan ?? user.tier).maxQuestionsPerExam
+            }
+            onStart={createTest}
+          />
+        )}
+        {view === 'preformed' && (
+          <PreformedTestsWorkspace
+            user={user}
+            onUpgrade={openUpgrade}
+            onRunTest={(code) => {
+              const url = new URL(window.location.href);
+              url.searchParams.set('join_test', code);
+              window.history.replaceState(
+                {},
+                '',
+                `${url.pathname}${url.search}${url.hash}`,
+              );
+              setDirectTestCode(code);
+            }}
+          />
+        )}
+        {view === 'history' && (
+          <HistoryView
+            state={{
+              ...state,
+              tests: state.tests.filter(
+                (test) =>
+                  (test.origin !== 'bookmarks' || test.status === 'active') &&
+                  (test.qbankId ??
+                    allQuestions.find(
+                      (question) => question.id === test.questionIds[0],
+                    )?.qbankId ??
+                    'smle-gs') === activeQBankId,
+              ),
+            }}
+            questions={questions}
+            onOpen={(test) => {
+              setActiveTestId(test.id);
+              setView('test');
+            }}
+            onDelete={(id) =>
+              setState((current) => ({
+                ...current,
+                tests: current.tests.filter((test) => test.id !== id),
+              }))
+            }
+          />
+        )}
+        {view === 'progress' && (
+          <ProgressView
+            state={state}
+            questions={questions}
+            specialties={collaboration.specialties.filter((item) => item.qbankId === activeQBankId)}
+            topics={collaboration.topics.filter((item) => item.qbankId === activeQBankId)}
+          />
+        )}
+        {view === 'flashcards' && (
+          <FlashcardsWorkspace
+            key={activeQBankId}
+            state={state}
+            setState={setState}
+            qbankId={activeQBankId}
+            qbankName={activeQBank?.name ?? 'QBank'}
+            questions={questions}
+            onReviewActiveChange={setFlashcardReviewActivity}
+            onReviewCheckpoint={checkpointFlashcardReview}
+          />
+        )}
+        {view === 'settings' && (
+          <SettingsView
+            onAccountDeleted={() => {
+              setUser(null);
+              setState(initialAppState());
+              setCollaboration(initialCollaborationState());
+              setView('dashboard');
+            }}
+            state={state}
+            theme={theme}
+            onThemeChange={updateLocalTheme}
+            onSaveDailyGoal={persistDailyGoal}
+            syncStatus={syncStatus}
+            onSync={() => void manualSync()}
+            collaboration={collaboration}
+            user={user}
+            updateCollaboration={(updater) => setCollaboration(updater)}
+          />
+        )}
+        {view === 'manager' && (
+          <QuestionManager
+            confirmUpdate={confirmUpdate}
+            user={user}
+            collaboration={collaboration}
+            updateCollaboration={(updater) => setCollaboration(updater)}
+            questions={questions}
+            allQuestions={allQuestions}
+            activeQBankId={activeQBankId}
+          />
+        )}
+        {view === 'contribution-center' && (
+          <>
+            <PageHeader
+              title="Contribution Center"
+              subtitle="Credits, rewards, and contribution activity"
+              openMenu={() =>
+                window.dispatchEvent(new Event('medguard-open-menu'))
               }
-              onSelect={(id) => {
-                setState((current) => ({
-                  ...current,
-                  settings: { ...current.settings, activeQBankId: id },
-                }));
-                setView('dashboard');
-              }}
-              onManageBank={(id, section) => {
-                setManagedBank({ id, section });
-                setView('qbank-management');
+            />
+            <ContributionCenter
+              userId={user.uid}
+              onEntitlementChange={(next) => {
+                setAuthenticatedUserCache(next);
+                setUser(next);
               }}
             />
-          )}
-          {view === 'review' && showReview && (
-            <ReviewWorkspace
-              activeQBankId={activeQBankId}
-              user={user}
-              collaboration={collaboration}
-              update={(updater) => setCollaboration(updater)}
-              replaceFromServer={replaceCollaborationFromServer}
-            />
-          )}
-          {view === 'create' && (
-            <CreateTest
-              key={activeQBankId}
-              questions={questions}
-              state={state}
-              bankName={activeQBank?.name ?? 'QBank'}
-              maxQuestionsPerExam={
-                getPlanLimits(user.effectivePlan ?? user.tier)
-                  .maxQuestionsPerExam
-              }
-              onStart={createTest}
-            />
-          )}
-          {view === 'preformed' && (
-            <PreformedTestsWorkspace
-              user={user}
-              onUpgrade={openUpgrade}
-              onTestEntered={recordStudyVisit}
-            />
-          )}
-          {view === 'history' && (
-            <HistoryView
-              state={{
-                ...state,
-                tests: state.tests.filter(
-                  (test) =>
-                    test.origin !== 'bookmarks' &&
-                    (test.qbankId ?? 'smle-gs') === activeQBankId,
-                ),
-              }}
-              questions={questions}
-              onOpen={(test) => {
-                setActiveTestId(test.id);
-                setView('test');
-              }}
-              onDelete={(id) =>
-                setState((current) => ({
-                  ...current,
-                  tests: current.tests.filter((test) => test.id !== id),
-                }))
-              }
-            />
-          )}
-          {view === 'progress' && (
-            <ProgressView state={state} questions={questions} />
-          )}
-          {view === 'flashcards' && (
-            <FlashcardsWorkspace
-              key={activeQBankId}
-              state={state}
-              setState={setState}
-              qbankId={activeQBankId}
-              qbankName={activeQBank?.name ?? 'QBank'}
-              questions={questions}
-              onReviewActiveChange={setFlashcardReviewActivity}
-              onReviewCheckpoint={checkpointFlashcardReview}
-            />
-          )}
-          {view === 'settings' && (
-            <SettingsView
-              onAccountDeleted={() => { setUser(null); setState(initialAppState()); setCollaboration(initialCollaborationState()); setView('dashboard'); }}
-              state={state}
-              theme={theme}
-              onThemeChange={updateLocalTheme}
-              onSaveDailyGoal={persistDailyGoal}
-              syncStatus={syncStatus}
-              onSync={() => void manualSync()}
-              collaboration={collaboration}
-              user={user}
-              updateCollaboration={(updater) => setCollaboration(updater)}
-            />
-          )}
-          {view === 'manager' && (
-            <QuestionManager
-              confirmUpdate={confirmUpdate}
-              user={user}
-              collaboration={collaboration}
-              updateCollaboration={(updater) => setCollaboration(updater)}
-              questions={questions}
-              allQuestions={allQuestions}
-              activeQBankId={activeQBankId}
-            />
-          )}
-          {view === 'contribution-center' && (
-            <>
-              <PageHeader
-                title="Contribution Center"
-                subtitle="Credits, rewards, and contribution activity"
-                openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
-              />
-              <ContributionCenter
-                userId={user.uid}
-                onEntitlementChange={(next) => {
-                  setAuthenticatedUserCache(next);
-                  setUser(next);
-                }}
-              />
-            </>
-          )}
-          {view === 'admin' && user.isAdmin && (
-            <AdminDashboard
-              user={user}
-              collaboration={collaboration}
-              update={(updater) => setCollaboration(updater)}
-              replaceFromServer={replaceCollaborationFromServer}
-              scope="access"
-            />
-          )}
+          </>
+        )}
+        {view === 'admin' && user.isAdmin && (
+          <AdminDashboard
+            user={user}
+            collaboration={collaboration}
+            update={(updater) => setCollaboration(updater)}
+            replaceFromServer={replaceCollaborationFromServer}
+            scope="access"
+          />
+        )}
       </QraftAppShell>
     </>
   );

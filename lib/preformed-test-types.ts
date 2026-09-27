@@ -71,6 +71,7 @@ export interface PreformedLocalAttempt {
   test: PreformedTestDocument;
   participantName: string;
   answers: Record<string, number>;
+  currentIndex?: number;
   questionOrder: string[];
   optionOrder: Record<string, number[]>;
   submissionId: string;

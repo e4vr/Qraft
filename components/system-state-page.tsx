@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { QraftBrand } from '@/components/brand/qraft-brand';
 import {
   ArrowLeft,
   Home,
   RefreshCw,
   SearchX,
-  Sparkles,
   TriangleAlert,
   WifiOff,
 } from 'lucide-react';
@@ -94,8 +94,8 @@ export function SystemStatePage({
         <div className="border-b bg-gradient-to-br from-primary/10 via-card to-violet-500/5 p-7 sm:p-10">
           <div className="flex items-center justify-between gap-4">
             <span className="inline-flex items-center gap-2 text-sm font-black tracking-tight text-primary">
-              <span className="grid size-9 place-items-center rounded-xl bg-primary text-white">
-                <Sparkles className="size-4" />
+              <span className="q-brand-badge grid size-10 place-items-center rounded-xl bg-[#f3fafa] p-1.5 shadow-sm ring-1 ring-border/70">
+                <QraftBrand variant="mark" className="size-full" />
               </span>
               Qraft
             </span>

@@ -40,6 +40,7 @@ export const resourcePolicies: ResourcePolicy[] = [
   { name: 'reviewer-search', class: 'parameter-driven', tags: ['reviewers', 'collaboration'], persistence: 'memory', match: path => path.startsWith('/platform/reviewers') },
   { name: 'question-detail', class: 'parameter-driven', tags: ['question-catalog'], persistence: 'memory', match: path => path.startsWith('/platform/question') },
   { name: 'import-status', class: 'session', tags: ['import-status', 'economy'], persistence: 'memory', match: path => path.startsWith('/platform/json-import-status') },
+  { name: 'json-import-monitor', class: 'parameter-driven', tags: ['json-import-monitor'], persistence: 'memory', match: path => path.startsWith('/platform/json-imports') },
   { name: 'test-pool', class: 'parameter-driven', tags: ['test-pool', 'question-catalog', 'account'], persistence: 'memory', match: path => path.startsWith('/platform/test-pool') },
   { name: 'preformed-tests', class: 'event-driven', tags: ['preformed-tests'], persistence: 'indexed-db', match: path => path.startsWith('/preformed/') },
   { name: 'backup', class: 'transactional', tags: ['backup'], persistence: 'memory', match: path => path.includes('backup') },

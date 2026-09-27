@@ -36,6 +36,9 @@ void test('access policy preserves platform and QBank role outcomes', async () =
   const editorMembership = [
     { qbankId: 'private', userId: 'u1', role: 'editor' },
   ];
+  const reviewerMembership = [
+    { qbankId: 'private', userId: 'u2', role: 'reviewer' },
+  ];
 
   assert.equal(access.canAccessBank(student, publicBank, []), true);
   assert.equal(access.canAccessBank(student, privateBank, []), false);
@@ -46,7 +49,13 @@ void test('access policy preserves platform and QBank role outcomes', async () =
   assert.equal(access.canEditBank(student, privateBank, editorMembership), true);
   assert.equal(access.canManageBank(student, privateBank), false);
   assert.equal(access.canAccessBank(root, privateBank, []), true);
-  assert.equal(access.canReviewBank(reviewer, privateBank, []), true);
+  assert.equal(access.canReviewBank(root, privateBank, []), true);
+  assert.equal(access.canReviewBank(reviewer, publicBank, []), true);
+  assert.equal(access.canReviewBank(reviewer, privateBank, []), false);
+  assert.equal(
+    access.canReviewBank(reviewer, privateBank, reviewerMembership),
+    true,
+  );
 });
 
 void test('plan policy preserves limits, ordering, and feature gates', async () => {
@@ -99,11 +108,46 @@ void test('exam helpers preserve range, title, and progress behavior', async () 
     ]),
     'Surgery 3',
   );
-  assert.equal(
-    presenters.mainProgressCategory({ specialty: 'General Surgery', topic: '' }),
-    'Surgery',
-  );
   assert.equal(presenters.formatDuration(3661), '01:01:01');
+  assert.equal(presenters.availableExamQuestionLimit(84, 200), 84);
+  assert.equal(presenters.availableExamQuestionLimit(84, 50), 50);
+  assert.equal(presenters.availableExamQuestionLimit(0, 50), 0);
+  assert.equal(presenters.clampExamQuestionCount(500, 12), 12);
+  assert.equal(presenters.clampExamQuestionCount(7, 12), 7);
+  assert.equal(presenters.clampExamQuestionCount(0, 12), 1);
+  assert.equal(presenters.clampExamQuestionCount(5, 0), 0);
+});
+
+void test('Progress follows the QBank specialty and topic hierarchy exactly', async () => {
+  const { groupQuestionsByQBankClassification } = await loadTypeScript(
+    'features/progress/domain/qbank-classification.ts',
+  );
+  const specialties = [
+    { id: 'surgery', name: 'Surgery', order: 1 },
+    { id: 'pediatrics', name: 'Pediatrics', order: 0 },
+    { id: 'empty', name: 'Empty specialty', order: 2 },
+  ];
+  const topics = [
+    { id: 'surgical-children', specialtyId: 'surgery', name: 'Pediatric Surgery', order: 0 },
+    { id: 'pediatric-topic', specialtyId: 'pediatrics', name: 'Pediatric Surgery', order: 0 },
+  ];
+  const questions = [
+    { id: 'q1', specialtyId: 'surgery', topicId: 'surgical-children', specialty: 'Surgery', topic: 'Pediatric Surgery' },
+    { id: 'q2', specialtyId: 'surgery', topicId: 'pediatric-topic', specialty: 'Old specialty', topic: 'Old topic' },
+    { id: 'q3', specialty: 'Surgery', topic: 'General Surgery' },
+    { id: 'q4', specialty: 'Unlisted specialty', topic: 'Unlisted topic' },
+  ];
+  const groups = groupQuestionsByQBankClassification(questions, specialties, topics);
+  assert.deepEqual(groups.map((group) => group.name), [
+    'Pediatrics', 'Surgery', 'Empty specialty', 'Unlisted specialty',
+  ]);
+  assert.deepEqual(groups[0].questions.map((question) => question.id), ['q2']);
+  assert.deepEqual(groups[1].questions.map((question) => question.id), ['q1', 'q3']);
+  assert.deepEqual(groups[1].topics.map((topic) => topic.name), [
+    'Pediatric Surgery', 'General Surgery',
+  ]);
+  assert.equal(groups[2].questions.length, 0);
+  assert.equal(groups.reduce((total, group) => total + group.questions.length, 0), questions.length);
 });
 
 void test('collaboration merge preserves only the current local answer', async () => {

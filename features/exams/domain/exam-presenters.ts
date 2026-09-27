@@ -1,4 +1,4 @@
-import type { Question, TestSession } from '@/lib/medguard-types';
+import type { TestSession } from '@/lib/medguard-types';
 
 export function formatDate(value?: string): string {
   if (!value) return '—';
@@ -22,6 +22,18 @@ export function normalizedTestTitle(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
 }
 
+export function availableExamQuestionLimit(
+  eligibleCount: number,
+  planLimit: number,
+): number {
+  return Math.max(0, Math.min(Math.trunc(eligibleCount), Math.trunc(planLimit)));
+}
+
+export function clampExamQuestionCount(requested: number, limit: number): number {
+  if (limit < 1) return 0;
+  return Math.min(limit, Math.max(1, Math.trunc(requested) || 1));
+}
+
 export function nextTestTitle(
   bankName: string,
   tests: TestSession[],
@@ -31,32 +43,4 @@ export function nextTestTitle(
   while (used.has(normalizedTestTitle(`${bankName} ${sequence}`)))
     sequence += 1;
   return `${bankName} ${sequence}`;
-}
-
-export function mainProgressCategory(question: Question): string {
-  const value = `${question.specialty} ${question.topic}`.toLocaleLowerCase(
-    'en-US',
-  );
-  if (/p(a?ediatr|ediatric|child|neonat)/.test(value)) return 'Pediatrics';
-  if (/obstetric|gyne|gynae|ob\/gyn|maternal|pregnan|labor|labour/.test(value))
-    return 'OB/GYN';
-  if (
-    /anatom|physiolog|patholog|pharmacol|microbi|biochem|immunolog|genetic|histolog|embryolog|basic/.test(
-      value,
-    )
-  )
-    return 'Basics';
-  if (
-    /surg|orthop|urolog|neurosurg|ent\b|ophthalm|trauma|vascular|plastic|anesth/.test(
-      value,
-    )
-  )
-    return 'Surgery';
-  if (
-    /medicine|cardio|respirat|pulmon|gastro|nephro|renal|endocr|rheumat|hemat|infect|neurolog|dermat|psychiatr|emergency|family/.test(
-      value,
-    )
-  )
-    return 'Medicine';
-  return question.specialty.trim() || 'Other';
 }

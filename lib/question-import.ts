@@ -26,7 +26,7 @@ export interface QuestionImportReport {
   repaired: boolean;
 }
 
-export function buildQuestionPrompt(settings: QuestionPromptSettings): string {
+export function buildQuestionPrompt(settings: QuestionPromptSettings, perSlideLimit = 200): string {
   const { source, kind, length, countMode, count, optionCount } = settings;
   if (!Number.isInteger(count) || count < 1 || count > 200)
     throw new Error('Choose a whole number from 1 to 200 questions.');
@@ -47,7 +47,7 @@ export function buildQuestionPrompt(settings: QuestionPromptSettings): string {
 - Set sourceFile once to the original file's short filename only, never a path or description. Set sourcePage on each valid question. Do not put any additional source details inside the question.
 - For every skipped candidate, preserve originalQuestionNumber and page when determinable and give a factual reason. Unknown values may be omitted; never invent them.`
       : `SOURCE: Scientific content / lecture. Create high-quality medical multiple-choice questions grounded only in the supplied content.
-${countMode === 'per_slide' ? 'Create one question per substantive slide, with no more than 200 combined valid/skipped entries.' : `Attempt exactly ${count} distinct questions without repetitive filler.`}
+${countMode === 'per_slide' ? `Create one question per substantive slide, with no more than ${perSlideLimit} combined valid/skipped entries.` : `Attempt exactly ${count} distinct questions without repetitive filler.`}
 - Type: ${kind === 'clinical' ? 'Clinical: realistic vignettes that assess application and reasoning without unsupported clinical claims.' : 'Direct: focused knowledge questions without clinical vignettes.'}
 - Stem length: ${length === 'short' ? 'approximately 15–40 words' : length === 'long' ? 'approximately 90–150 words' : 'approximately 40–90 words'}.
 - Every valid question has exactly ${optionCount} distinct, plausible options and one unambiguously supported answer.
@@ -259,6 +259,7 @@ function salvageQuestionObjects(raw: string): unknown[] {
 export function parseQuestionImportReport(
   input: unknown,
   fallbackSourceFile = '',
+  maxEntries = 200,
 ): QuestionImportReport {
   let parsed = input;
   let repaired = false;
@@ -294,13 +295,8 @@ export function parseQuestionImportReport(
   const declaredSkipped = Array.isArray(envelope.skipped)
     ? envelope.skipped
     : [];
-  if (
-    rows.length + declaredSkipped.length < 1 ||
-    rows.length + declaredSkipped.length > 200
-  )
-    throw new Error(
-      'Provide 1–200 combined questions and skipped entries per import.',
-    );
+  if (rows.length + declaredSkipped.length < 1 || rows.length + declaredSkipped.length > maxEntries)
+    throw new Error(`Provide 1–${maxEntries} combined questions and skipped entries per import.`);
   const questions: QuestionProposalPayload[] = [];
   const skipped = declaredSkipped.map((value) =>
     skippedFrom(value, sourceFile, 'Skipped by extraction model.'),

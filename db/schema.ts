@@ -449,10 +449,100 @@ export const importedFiles = sqliteTable(
     pendingLimit: integer('pending_limit').notNull().default(1_000_000),
   },
   (table) => [
-    uniqueIndex('idx_imported_files_user_name').on(table.userId, table.normalizedName),
-    uniqueIndex('idx_imported_files_user_hash').on(table.userId, table.fileHash),
     uniqueIndex('idx_imported_files_batch').on(table.batchId),
     index('idx_imported_files_user_uploaded').on(table.userId, table.uploadedAt),
+  ],
+);
+
+export const jsonImportRuns = sqliteTable(
+  'json_import_runs',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    qbankId: text('qbank_id').notNull(),
+    fileName: text('file_name').notNull(),
+    normalizedName: text('normalized_name').notNull(),
+    fileHash: text('file_hash').notNull(),
+    sourceFile: text('source_file').notNull().default(''),
+    status: text('status').notNull().default('processing'),
+    chunkCount: integer('chunk_count').notNull().default(1),
+    completedChunks: integer('completed_chunks').notNull().default(0),
+    totalCount: integer('total_count').notNull().default(0),
+    successfulCount: integer('successful_count').notNull().default(0),
+    invalidCount: integer('invalid_count').notNull().default(0),
+    skippedDuplicateCount: integer('skipped_duplicate_count')
+      .notNull()
+      .default(0),
+    flaggedDuplicateCount: integer('flagged_duplicate_count')
+      .notNull()
+      .default(0),
+    repaired: integer('repaired', { mode: 'boolean' }).notNull().default(false),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    startedAt: text('started_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    completedAt: text('completed_at'),
+    deletedAt: text('deleted_at'),
+    deletedBy: text('deleted_by'),
+    legacy: integer('legacy', { mode: 'boolean' }).notNull().default(false),
+  },
+  (table) => [
+    index('idx_json_import_runs_started').on(table.startedAt),
+    index('idx_json_import_runs_status_started').on(
+      table.status,
+      table.startedAt,
+    ),
+    index('idx_json_import_runs_user_started').on(
+      table.userId,
+      table.startedAt,
+    ),
+    index('idx_json_import_runs_qbank_started').on(
+      table.qbankId,
+      table.startedAt,
+    ),
+    index('idx_json_import_runs_hash').on(table.fileHash, table.startedAt),
+  ],
+);
+
+export const jsonImportAttempts = sqliteTable(
+  'json_import_attempts',
+  {
+    requestId: text('request_id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => jsonImportRuns.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => profiles.uid, { onDelete: 'cascade' }),
+    chunkIndex: integer('chunk_index').notNull().default(0),
+    chunkHash: text('chunk_hash').notNull(),
+    status: text('status').notNull(),
+    totalCount: integer('total_count').notNull().default(0),
+    successfulCount: integer('successful_count').notNull().default(0),
+    invalidCount: integer('invalid_count').notNull().default(0),
+    skippedDuplicateCount: integer('skipped_duplicate_count')
+      .notNull()
+      .default(0),
+    flaggedDuplicateCount: integer('flagged_duplicate_count')
+      .notNull()
+      .default(0),
+    reportJson: text('report_json').notNull().default('[]'),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    startedAt: text('started_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('idx_json_import_attempts_run_chunk').on(
+      table.runId,
+      table.chunkIndex,
+    ),
+    index('idx_json_import_attempts_user_started').on(
+      table.userId,
+      table.startedAt,
+    ),
   ],
 );
 
@@ -591,6 +681,66 @@ export const duplicateAttempts = sqliteTable(
       table.createdAt,
     ),
   ],
+);
+
+export const duplicatePairDecisions = sqliteTable(
+  'duplicate_pair_decisions',
+  {
+    id: text('id').primaryKey(),
+    qbankId: text('qbank_id').notNull(),
+    proposalId: text('proposal_id').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    candidateEntityType: text('candidate_entity_type').notNull(),
+    candidateEntityId: text('candidate_entity_id').notNull(),
+    candidateFingerprint: text('candidate_fingerprint').notNull(),
+    classification: text('classification').notNull(),
+    similarity: integer('similarity').notNull(),
+    detectorVersion: text('detector_version').notNull(),
+    decision: text('decision').notNull(),
+    reviewerId: text('reviewer_id').notNull(),
+    reviewNote: text('review_note'),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_duplicate_pair_decisions_unchanged_pair').on(
+      table.qbankId,
+      table.proposalId,
+      table.sourceFingerprint,
+      table.candidateEntityType,
+      table.candidateEntityId,
+      table.candidateFingerprint,
+    ),
+    index('idx_duplicate_pair_decisions_proposal').on(table.proposalId, table.createdAt),
+    index('idx_duplicate_pair_decisions_quality').on(table.qbankId, table.decision, table.createdAt),
+  ],
+);
+
+export const duplicateScanRuns = sqliteTable(
+  'duplicate_scan_runs',
+  {
+    id: text('id').primaryKey(),
+    qbankId: text('qbank_id').notNull(),
+    startedBy: text('started_by').notNull(),
+    cursor: integer('cursor').notNull().default(0),
+    scannedCount: integer('scanned_count').notNull().default(0),
+    flaggedCount: integer('flagged_count').notNull().default(0),
+    status: text('status').notNull(),
+    detectorVersion: text('detector_version').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('idx_duplicate_scan_runs_bank').on(table.qbankId, table.createdAt)],
+);
+
+export const duplicateResolutionClaims = sqliteTable(
+  'duplicate_resolution_claims',
+  {
+    proposalId: text('proposal_id').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    reviewerId: text('reviewer_id').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.proposalId, table.sourceFingerprint] })],
 );
 
 export const contributionReviews = sqliteTable(

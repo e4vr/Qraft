@@ -70,6 +70,7 @@ function mutationTags(path: string, body: BodyInit | null | undefined) {
     if (input.operation === 'activate') { tags.add('account'); tags.add('subscriptions'); }
   }
   if (path.startsWith('/platform/economy-admin')) { tags.add('contributions'); tags.add('economy'); tags.add('import-status'); }
+  if (path.startsWith('/platform/import') || path.startsWith('/platform/json-imports')) tags.add('json-import-monitor');
   if (path.startsWith('/preformed/')) tags.add('preformed-tests');
   if (path.startsWith('/auth/')) { tags.add('account'); tags.add('collaboration'); }
   if (path.startsWith('/contact')) tags.add('contact');

@@ -42,6 +42,7 @@ export {
   deleteClassificationDraft,
   loadClassificationDraft,
   loadLocalCollaboration,
+  loadCollaborationSyncOutbox,
   loadLocalState,
   saveClassificationDraft,
   saveLocalCollaboration,
