@@ -299,6 +299,7 @@ export const preformedLeaderboard = sqliteTable(
   table => [
     index('idx_preformed_leaderboard_rank').on(table.testId, table.version, table.score, table.durationSeconds, table.submittedAt),
     index('idx_preformed_leaderboard_participant').on(table.testId, table.version, table.participantKey),
+    index('idx_preformed_leaderboard_user').on(table.participantUserId),
   ],
 );
 
@@ -333,16 +334,30 @@ export const preformedAttemptTokens = sqliteTable('preformed_attempt_tokens', {
   userId: text('user_id'),
   issuedAt: text('issued_at').notNull(),
   expiresAt: text('expires_at').notNull(),
-});
+  submittedAt: text('submitted_at'),
+}, table => [index('idx_preformed_attempt_tokens_user').on(table.userId)]);
 
 export const preformedSubmissionReceipts = sqliteTable('preformed_submission_receipts', {
   submissionId: text('submission_id').primaryKey(),
   testId: text('test_id').notNull().references(() => preformedTests.id, { onDelete: 'cascade' }),
   attemptTokenHash: text('attempt_token_hash'),
+  userId: text('user_id').references(() => profiles.uid, { onDelete: 'cascade' }),
   leaderboard: integer('leaderboard', { mode: 'boolean' }).notNull().default(false),
   resultJson: text('result_json'),
   createdAt: text('created_at').notNull(),
-}, table => [uniqueIndex('idx_preformed_submission_receipts_attempt_token').on(table.attemptTokenHash)]);
+}, table => [
+  uniqueIndex('idx_preformed_submission_receipts_attempt_token').on(table.attemptTokenHash),
+  index('idx_preformed_receipts_user').on(table.userId),
+]);
+
+export const preformedParticipantQuestionStats = sqliteTable('preformed_participant_question_stats', {
+  userId: text('user_id').notNull().references(() => profiles.uid, { onDelete: 'cascade' }),
+  testId: text('test_id').notNull().references(() => preformedTests.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  questionId: text('question_id').notNull(),
+  submissions: integer('submissions').notNull().default(0),
+  correct: integer('correct').notNull().default(0),
+}, table => [primaryKey({ columns: [table.userId, table.testId, table.version, table.questionId] })]);
 
 export const preformedReports = sqliteTable(
   'preformed_reports',

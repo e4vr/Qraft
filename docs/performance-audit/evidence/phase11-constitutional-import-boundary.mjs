@@ -77,7 +77,7 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
       sourceFile: 'fixture.pdf', sourcePage: index + 1,
     })),
   };
-  const forPlan = (plan, count) => ({
+  const _forPlan = (plan, count) => ({
     ...request,
     requestId: randomUUID(),
     fileName: `${plan}-${count}-${marker}.json`,

@@ -9,6 +9,7 @@ import {
 } from '@/lib/local-db';
 import { normalizeAppState, type AppState } from '@/lib/medguard-types';
 import { mergeAppStates } from '@/lib/merge-app-state';
+import { stateBudgetError } from '@/features/state/domain/state-budget';
 import {
   publishStateSync,
   subscribeStateSync,
@@ -125,7 +126,7 @@ async function sendStateOperation(
       payload = {
         ...operationPayload(operation.kind, remote),
         ...(operation.kind === 'exam'
-          ? { answerSelections: operation.payload.answerSelections }
+          ? { answerSelections: [] }
           : {}),
       };
     }
@@ -213,6 +214,8 @@ async function queueStateOperation(
   extra?: Record<string, unknown>,
 ): Promise<StateSyncResponse | undefined> {
   const payload = operationPayload(kind, state, dailyGoal, extra);
+  const capacityError = stateBudgetError(state);
+  if (capacityError) throw new Error(capacityError);
   if (operationMatchesSaved(uid, kind, payload)) return undefined;
   const operation: StateSyncOperation = {
     id: crypto.randomUUID(),
@@ -272,6 +275,7 @@ export function saveBestEffortStateCheckpoint(
   kind: Exclude<StateSyncKind, 'daily-goal'>,
   extra?: Record<string, unknown>,
 ): void {
+  if (stateBudgetError(state)) return;
   const operation: StateSyncOperation = {
     id: crypto.randomUUID(),
     uid,

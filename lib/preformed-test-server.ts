@@ -146,6 +146,14 @@ function document(row: TestRow): PreformedTestDocument {
   };
 }
 
+function participantDocument(test: PreformedTestDocument, token: string, startedAt: string): PreformedTestDocument {
+  const hidden = test.settings.mode === 'exam';
+  return {
+    ...test, attemptToken: token, attemptStartedAt: startedAt, answersHidden: hidden,
+    questions: hidden ? test.questions.map(question => ({ ...question, answer: -1, explanation: '', sourceReference: '' })) : test.questions,
+  };
+}
+
 function authorizePrivateMedia(
   test: PreformedTestDocument,
   attemptToken: string,
@@ -365,6 +373,19 @@ export async function preformedTestApi(request: Request, action: string) {
         );
       const nowMs = Date.now();
       const testSettings = settings(row.settings_json);
+      const resumeToken = request.headers.get('x-qraft-attempt-token');
+      if (resumeToken && /^[a-f0-9]{64}$/i.test(resumeToken)) {
+        const previous = await env.DB.prepare(
+          'SELECT user_id,issued_at,expires_at FROM preformed_attempt_tokens WHERE token_hash=? AND test_id=? AND version=?',
+        ).bind(await digest(resumeToken), row.id, row.version)
+          .first<{ user_id: string | null; issued_at: string; expires_at: string }>();
+        const participant = approved(user) ? user.uid : null;
+        if (previous && previous.user_id === participant && Date.parse(previous.expires_at) > nowMs) {
+          const opened = row.visibility === 'private' ? authorizePrivateMedia(document(row), resumeToken) : document(row);
+          return json({ test: participantDocument(opened, resumeToken, previous.issued_at) });
+        }
+        return json({ error: 'This saved attempt is no longer available. Start a new attempt.' }, 409);
+      }
       if (
         !ownerPreview &&
         testSettings.opensAt &&
@@ -430,7 +451,7 @@ export async function preformedTestApi(request: Request, action: string) {
       const authorizedDocument = row.visibility === 'private'
         ? authorizePrivateMedia(opened, rawToken)
         : opened;
-      return json({ test: { ...authorizedDocument, attemptToken: rawToken } }, 200, {
+      return json({ test: participantDocument(authorizedDocument, rawToken, issuedAt) }, 200, {
         'cache-control': 'no-store',
       });
     }
@@ -540,6 +561,7 @@ export async function preformedTestApi(request: Request, action: string) {
           env.DB.prepare(
             'DELETE FROM preformed_question_stats WHERE test_id=?',
           ).bind(id),
+          env.DB.prepare('DELETE FROM preformed_participant_question_stats WHERE test_id=?').bind(id),
           env.DB.prepare(
             'DELETE FROM preformed_participation WHERE test_id=?',
           ).bind(id),
@@ -650,13 +672,24 @@ export async function preformedTestApi(request: Request, action: string) {
           user_id: string | null;
           issued_at: string;
           expires_at: string;
+          submitted_at: string | null;
         }>();
+      if (!token || Date.parse(token.expires_at) < Date.now())
+        return json({ error: 'This attempt has expired. Open the test again.' }, 409);
+      const signedIn = approved(user);
+      if (token.user_id !== (signedIn ? user.uid : null))
+        return json({ error: 'This attempt belongs to another participant.' }, 403);
+      const row = await rowById(token.test_id);
+      if (!row || row.version !== token.version || row.status !== 'published')
+        return json({ error: 'The test questions changed. This attempt can no longer be submitted.' }, 409);
       const receipt = await env.DB.prepare(
-        'SELECT leaderboard,result_json FROM preformed_submission_receipts WHERE submission_id=?',
+        'SELECT leaderboard,result_json,attempt_token_hash FROM preformed_submission_receipts WHERE submission_id=?',
       )
         .bind(submissionId)
-        .first<{ leaderboard: number; result_json: string | null }>();
+        .first<{ leaderboard: number; result_json: string | null; attempt_token_hash: string | null }>();
       if (receipt) {
+        if (receipt.attempt_token_hash !== tokenHash)
+          return json({ error: 'This submission belongs to another attempt.' }, 403);
         if (!receipt.result_json)
           return json(
             { error: 'This submission is still being finalized. Try again.' },
@@ -665,29 +698,12 @@ export async function preformedTestApi(request: Request, action: string) {
         return json({
           ...(JSON.parse(receipt.result_json) as Record<string, unknown>),
           duplicate: true,
+          questions: document(row).questions,
         });
       }
-      if (!token || Date.parse(token.expires_at) < Date.now())
-        return json(
-          { error: 'This attempt has expired. Open the test again.' },
-          409,
-        );
-      const signedIn = approved(user);
-      if (token.user_id && (!signedIn || token.user_id !== user.uid))
-        return json(
-          { error: 'This attempt belongs to another participant.' },
-          403,
-        );
-      const row = await rowById(token.test_id);
-      if (!row || row.version !== token.version || row.status !== 'published')
-        return json(
-          {
-            error:
-              'The test questions changed. This attempt can no longer be submitted.',
-          },
-          409,
-        );
       const questions = JSON.parse(row.questions_json) as PreformedQuestion[];
+      if (token.submitted_at)
+        return json({ error: 'This attempt has already been submitted.' }, 409);
       const answers =
         input.answers &&
         typeof input.answers === 'object' &&
@@ -695,33 +711,22 @@ export async function preformedTestApi(request: Request, action: string) {
           ? input.answers
           : {};
       if (
-        signedIn &&
         Object.entries(answers).some(
           ([id, answer]) =>
             !questions.some((question) => question.id === id) ||
-            !Number.isInteger(answer),
+            !Number.isInteger(answer) || answer < 0 ||
+            answer >= (questions.find(question => question.id === id)?.options.length ?? 0),
         )
       )
         return json({ error: 'One or more answers are invalid.' }, 400);
-      const guestScore = Number(input.guestScore);
-      if (
-        !signedIn &&
-        (!Number.isInteger(guestScore) ||
-          guestScore < 0 ||
-          guestScore > questions.length)
-      )
-        return json({ error: 'The local guest result is invalid.' }, 400);
-      const score = signedIn
-        ? questions.reduce(
+      if (!input.answers || typeof input.answers !== 'object' || Array.isArray(input.answers))
+        return json({ error: 'Update Qraft and submit your answers; client-calculated scores are not accepted.' }, 400);
+      const score = questions.reduce(
             (total, question) =>
               total + (answers[question.id] === question.answer ? 1 : 0),
             0,
-          )
-        : guestScore;
-      const durationSeconds = Math.max(
-        0,
-        Math.min(7 * 86_400, Math.floor(Number(input.durationSeconds) || 0)),
-      );
+          );
+      const durationSeconds = Math.max(1, Math.floor((Date.now() - Date.parse(token.issued_at)) / 1000));
       const participantName = signedIn
         ? user.displayName
         : (input.participantName?.trim() ?? '').slice(0, 60);
@@ -766,13 +771,14 @@ export async function preformedTestApi(request: Request, action: string) {
       };
       const statements: D1PreparedStatement[] = [
         env.DB.prepare(
-          'INSERT INTO preformed_submission_receipts(submission_id,test_id,attempt_token_hash,leaderboard,result_json,created_at) VALUES(?,?,?,0,?,?)',
+          'INSERT INTO preformed_submission_receipts(submission_id,test_id,attempt_token_hash,leaderboard,result_json,created_at,user_id) VALUES(?,?,?,0,?,?,?)',
         ).bind(
           submissionId,
           row.id,
           tokenHash,
           JSON.stringify(preliminaryResult),
           now,
+          signedIn ? user.uid : null,
         ),
       ];
       if (signedIn)
@@ -791,6 +797,10 @@ export async function preformedTestApi(request: Request, action: string) {
           correct: answers[question.id] === question.answer ? 1 : 0,
         }));
         statements.push(
+          env.DB.prepare(`INSERT INTO preformed_participant_question_stats(user_id,test_id,version,question_id,submissions,correct)
+          SELECT ?,?,?,json_extract(value,'$.questionId'),1,json_extract(value,'$.correct') FROM json_each(?) WHERE 1
+          ON CONFLICT(user_id,test_id,version,question_id) DO UPDATE SET submissions=preformed_participant_question_stats.submissions+1,correct=preformed_participant_question_stats.correct+excluded.correct`)
+            .bind(user.uid, row.id, row.version, JSON.stringify(statValues)),
           env.DB.prepare(`INSERT INTO preformed_question_stats(test_id,version,question_id,submissions,correct)
           SELECT ?,?,json_extract(value,'$.questionId'),1,json_extract(value,'$.correct') FROM json_each(?) WHERE 1
           ON CONFLICT(test_id,version,question_id) DO UPDATE SET submissions=preformed_question_stats.submissions+1,correct=preformed_question_stats.correct+excluded.correct`).bind(
@@ -801,6 +811,7 @@ export async function preformedTestApi(request: Request, action: string) {
         );
       }
       statements.push(
+        env.DB.prepare('UPDATE preformed_attempt_tokens SET submitted_at=? WHERE token_hash=?').bind(now, tokenHash),
         env.DB.prepare(`INSERT INTO preformed_leaderboard(id,test_id,version,participant_user_id,participant_key,participant_name,guest,score,question_count,duration_seconds,attempt_number,submitted_at)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
           submissionId,
@@ -845,9 +856,6 @@ export async function preformedTestApi(request: Request, action: string) {
         env.DB.prepare(`UPDATE preformed_submission_receipts SET leaderboard=EXISTS(
           SELECT 1 FROM preformed_leaderboard WHERE id=?
         ) WHERE submission_id=?`).bind(submissionId, submissionId),
-        env.DB.prepare(
-          'DELETE FROM preformed_attempt_tokens WHERE token_hash=?',
-        ).bind(tokenHash),
       );
       try {
         await env.DB.batch(statements);
@@ -872,6 +880,7 @@ export async function preformedTestApi(request: Request, action: string) {
           return json({
             ...(JSON.parse(claimed.result_json) as Record<string, unknown>),
             duplicate: true,
+            questions,
           });
         return json(
           { error: 'This submission is still being finalized. Try again.' },
@@ -887,7 +896,7 @@ export async function preformedTestApi(request: Request, action: string) {
       )
         .bind(rank !== null ? 1 : 0, JSON.stringify(result), submissionId)
         .run();
-      return json(result);
+      return json({ ...result, questions });
     }
 
     if (action === 'report' && request.method === 'POST') {

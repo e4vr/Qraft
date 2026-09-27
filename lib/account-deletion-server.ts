@@ -4,6 +4,7 @@ import { assertSameOrigin, readJson } from '@/server/http/request';
 import { json } from '@/server/http/response';
 import type { AppUser, QBank } from './medguard-types';
 import { r2StorageService } from './storage-service';
+import { publishChanges } from './realtime-server';
 
 export async function cleanDeletedAccountMedia() {
   const rows = await env.DB.prepare("SELECT key,storage_key,provider,size FROM media WHERE status='account_deleted' LIMIT 50").all<{ key: string; storage_key: string | null; provider: string; size: number }>();
@@ -61,6 +62,9 @@ export async function deleteOwnAccount(request: Request) {
   const rows = (await env.DB.prepare(`SELECT type,id,qbank_id,owner_id,email,payload FROM records WHERE ${predicate}`).bind(...bindings).all<Row>()).results;
   const banks = rows.filter(row => row.type === 'qbanks').map(row => JSON.parse(row.payload) as QBank);
   const deletedBanks = new Set<string>();
+  const ownedTests = await env.DB.prepare('SELECT id FROM preformed_tests WHERE owner_id=?')
+    .bind(user.uid).all<{ id: string }>();
+  const deletedMediaScopes = ownedTests.results.map(test => `preformed-${test.id}`);
   const transferredBanks = new Set<string>();
   for (const bank of banks) {
     if (bank.ownerId !== user.uid && bank.createdById !== user.uid) continue;
@@ -121,6 +125,22 @@ export async function deleteOwnAccount(request: Request) {
     .bind(JSON.stringify(updates), now));
   const bindUser = (sql: string) => env.DB.prepare(sql).bind(user.uid);
   statements.push(
+    // Legacy participation has no attributable per-question counts. Reset only
+    // those affected aggregates; new participation can be subtracted exactly.
+    bindUser(`DELETE FROM preformed_question_stats WHERE test_id IN (
+      SELECT p.test_id FROM preformed_participation p WHERE p.user_id=? AND
+        p.attempts > coalesce((SELECT max(s.submissions) FROM preformed_participant_question_stats s
+          WHERE s.user_id=p.user_id AND s.test_id=p.test_id AND s.version=p.version),0)
+    )`),
+    bindUser(`WITH removed AS (
+      SELECT test_id,version,question_id,submissions,correct
+      FROM preformed_participant_question_stats WHERE user_id=?
+    ) UPDATE preformed_question_stats AS s SET
+      submissions=max(0,s.submissions-r.submissions),correct=max(0,s.correct-r.correct)
+      FROM removed r WHERE s.test_id=r.test_id AND s.version=r.version AND s.question_id=r.question_id`),
+    bindUser('DELETE FROM preformed_leaderboard WHERE participant_user_id=?'),
+    bindUser('DELETE FROM preformed_submission_receipts WHERE user_id=?'),
+    bindUser('DELETE FROM preformed_attempt_tokens WHERE user_id=?'),
     bindUser('DELETE FROM ticket_messages WHERE ticket_id IN (SELECT id FROM tickets WHERE user_id=?)'),
     bindUser('DELETE FROM tickets WHERE user_id=?'),
     env.DB.prepare('UPDATE ticket_messages SET user_id=? WHERE user_id=?').bind(anonymousId, user.uid),
@@ -136,7 +156,7 @@ export async function deleteOwnAccount(request: Request) {
     env.DB.prepare('UPDATE question_ids SET created_by_id=? WHERE created_by_id=?').bind(anonymousId, user.uid),
     // Durable cleanup markers survive object storage failures after D1 commits.
     env.DB.prepare("UPDATE media SET status=CASE WHEN purpose IN ('note','notes') OR qbank_id IN (SELECT value FROM json_each(?)) THEN 'account_deleted' ELSE status END,expires_at=CASE WHEN purpose IN ('note','notes') OR qbank_id IN (SELECT value FROM json_each(?)) THEN ? ELSE expires_at END,owner_id=?,original_name=NULL WHERE owner_id=?")
-      .bind(JSON.stringify([...deletedBanks]), JSON.stringify([...deletedBanks]), now, anonymousId, user.uid),
+      .bind(JSON.stringify([...deletedBanks, ...deletedMediaScopes]), JSON.stringify([...deletedBanks, ...deletedMediaScopes]), now, anonymousId, user.uid),
     bindUser('DELETE FROM profiles WHERE uid=?'),
   );
   try { await env.DB.batch(statements); }
@@ -144,5 +164,6 @@ export async function deleteOwnAccount(request: Request) {
     if (String(error).includes('snapshot_valid')) return json({ error: 'Your shared data changed. Nothing was deleted. Please try again.' }, 409);
     throw error;
   }
+  await publishChanges(['catalog', 'admin'], ['preformed-tests', 'collaboration'], request.headers.get('x-qraft-client-id') ?? '');
   return json({ ok: true }, 200, { 'set-cookie': '__Host-qraft_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0' });
 }

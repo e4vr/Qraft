@@ -1,5 +1,6 @@
 import { normalizeCollaborationState, type AppState, type CollaborationState, type QBankSpecialty, type QBankTopic } from './medguard-types';
 import type { PreformedLocalAttempt } from './preformed-test-types';
+import { preformedAttemptKey, preformedCodeKey } from '@/features/exams/domain/preformed-attempt-scope';
 import {
   coalesceCollaborationSync,
   type CollaborationSyncSnapshot,
@@ -53,12 +54,12 @@ async function readValue<T>(key: string): Promise<T | undefined> {
   });
 }
 
-async function writeValue<T>(key: string, value: T): Promise<void> {
+async function writeValue<T>(key: string, value: T, ownerUid?: string): Promise<void> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE, 'readwrite');
     const store = transaction.objectStore(STORE);
-    const uid = key.slice(key.indexOf(':') + 1);
+    const uid = ownerUid ?? key.slice(key.indexOf(':') + 1);
     const marker = store.get(`deleted:${uid}`);
     marker.onsuccess = () => { if (!marker.result) store.put(value, key); };
     transaction.oncomplete = () => { db.close(); resolve(); };
@@ -121,25 +122,26 @@ export async function deleteClassificationDraft(uid: string, qbankId: string): P
   });
 }
 
-export async function loadPreformedAttempt(testId: string, version: number) {
-  return readValue<PreformedLocalAttempt>(`preformed-attempt:${testId}:${version}`);
+export async function loadPreformedAttempt(scope: string, testId: string, version: number) {
+  return readValue<PreformedLocalAttempt>(preformedAttemptKey(scope, testId, version));
 }
 
-export async function loadPreformedAttemptByCode(code: string) {
-  const reference = await readValue<{ testId: string; version: number }>(`preformed-code:${code}`);
-  return reference ? loadPreformedAttempt(reference.testId, reference.version) : undefined;
+export async function loadPreformedAttemptByCode(scope: string, code: string) {
+  const reference = await readValue<{ testId: string; version: number }>(preformedCodeKey(scope, code));
+  return reference ? loadPreformedAttempt(scope, reference.testId, reference.version) : undefined;
 }
 
-export async function savePreformedAttempt(attempt: PreformedLocalAttempt): Promise<void> {
-  await writeValue(`preformed-attempt:${attempt.test.id}:${attempt.test.version}`, attempt);
-  await writeValue(`preformed-code:${attempt.test.code}`, { testId: attempt.test.id, version: attempt.test.version });
+export async function savePreformedAttempt(scope: string, attempt: PreformedLocalAttempt): Promise<void> {
+  const uid = scope.startsWith('user:') ? scope.slice(5) : undefined;
+  await writeValue(preformedAttemptKey(scope, attempt.test.id, attempt.test.version), attempt, uid);
+  await writeValue(preformedCodeKey(scope, attempt.test.code), { testId: attempt.test.id, version: attempt.test.version }, uid);
 }
 
-export async function deletePreformedAttempt(testId: string, version: number): Promise<void> {
+export async function deletePreformedAttempt(scope: string, testId: string, version: number): Promise<void> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE, 'readwrite');
-    transaction.objectStore(STORE).delete(`preformed-attempt:${testId}:${version}`);
+    transaction.objectStore(STORE).delete(preformedAttemptKey(scope, testId, version));
     transaction.oncomplete = () => { db.close(); resolve(); };
     transaction.onerror = () => { db.close(); reject(transaction.error); };
   });
@@ -233,6 +235,12 @@ export async function noteCollaborationSyncAttempt(
 }
 
 export async function forgetLocalUser(uid: string): Promise<void> {
+  try {
+    const keys = Object.keys(localStorage).filter(key =>
+      key.startsWith(`qraft-preformed-count:user:${uid}:`) ||
+      key.startsWith(`qraft-preformed-participant:user:${uid}:`));
+    for (const key of keys) localStorage.removeItem(key);
+  } catch { /* Browser storage may be disabled; IndexedDB cleanup must still run. */ }
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE, 'readwrite');
@@ -246,7 +254,7 @@ export async function forgetLocalUser(uid: string): Promise<void> {
     cursor.onsuccess = () => {
       const current = cursor.result;
       if (!current) return;
-      if (typeof current.key === 'string' && current.key.startsWith(`classification-draft:${uid}:`)) current.delete();
+      if (typeof current.key === 'string' && (current.key.startsWith(`classification-draft:${uid}:`) || current.key.startsWith(`preformed:user:${uid}:`))) current.delete();
       current.continue();
     };
     transaction.oncomplete = () => { db.close(); resolve(); };

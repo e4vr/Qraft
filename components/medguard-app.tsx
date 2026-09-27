@@ -1,5 +1,6 @@
 'use client';
 import { DeleteAccount } from '@/components/delete-account';
+import { stateBytes, STATE_WARNING_BYTES, STATE_BUDGET_BYTES } from '@/features/state/domain/state-budget';
 
 /* oxlint-disable next/no-img-element, jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions, jsx-a11y/control-has-associated-label */
 
@@ -4710,6 +4711,7 @@ function SettingsView({
   const [personalBackupMessage, setPersonalBackupMessage] = useState('');
   const [dailyGoalOverride, setDailyGoalDraft] = useState<number>();
   const dailyGoalDraft = dailyGoalOverride ?? state.settings.dailyGoal;
+  const dataSize = useMemo(() => stateBytes(state), [state]);
   const [dailyGoalBusy, setDailyGoalBusy] = useState(false);
   const [dailyGoalMessage, setDailyGoalMessage] = useState('');
   useEffect(() => {
@@ -4778,6 +4780,18 @@ function SettingsView({
         openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
       />
       <div className="mx-auto max-w-4xl space-y-5 p-4 sm:p-7">
+        {dataSize >= STATE_WARNING_BYTES && (
+          <output className="block rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm text-amber-950 dark:bg-amber-950 dark:text-amber-100">
+            {dataSize > STATE_BUDGET_BYTES ? 'Cloud sync capacity reached.' : 'Your study data is approaching the current cloud sync capacity.'}
+            {' '}Your work remains on this device. Download a local copy before removing old study data.
+            <button className="ml-2 underline" onClick={() => {
+              const url = URL.createObjectURL(new Blob([JSON.stringify(state)], { type: 'application/json' }));
+              const anchor = document.createElement('a'); anchor.href = url;
+              anchor.download = `qraft-local-study-${new Date().toISOString().slice(0, 10)}.json`;
+              anchor.click(); URL.revokeObjectURL(url);
+            }}>Download local study data</button>
+          </output>
+        )}
         <DeleteAccount uid={user.uid} onDeleted={onAccountDeleted} />
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
           <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
@@ -7184,7 +7198,7 @@ export default function MedGuardApp({
       user?.status === 'approved' && !user.suspended ? user : null;
     return (
       <PreformedTestRunner
-        key={directTestCode}
+        key={`${participant?.uid ?? 'guest'}:${directTestCode}`}
         user={participant}
         code={directTestCode}
         onTestEntered={participant ? recordStudyVisit : undefined}

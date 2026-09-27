@@ -45,6 +45,8 @@ export interface PreformedTestDocument extends PreformedTestSummary {
   questions: PreformedQuestion[];
   hasPasscode: boolean;
   attemptToken?: string;
+  attemptStartedAt?: string;
+  answersHidden?: boolean;
 }
 
 export interface PreformedLeaderboardEntry {

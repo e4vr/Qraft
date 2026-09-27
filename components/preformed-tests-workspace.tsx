@@ -14,6 +14,8 @@ import {
   loadPreformedAttemptByCode,
   savePreformedAttempt,
 } from '@/lib/local-db';
+import { preformedAccountScope } from '@/features/exams/domain/preformed-attempt-scope';
+import { preformedGuestScope } from '@/features/exams/client/guest-scope';
 import type { AppUser } from '@/lib/medguard-types';
 import {
   buildQuestionPrompt,
@@ -1221,6 +1223,8 @@ export function PreformedTestRunner({
   onTestEntered?: () => void;
 }) {
   const [name, setName] = useState(user?.displayName ?? '');
+  const [scope, setScope] = useState('');
+  const accountUid = user?.uid;
   const [passcode, setPasscode] = useState('');
   const [needsPasscode, setNeedsPasscode] = useState(false);
   const [attempt, setAttempt] = useState<PreformedLocalAttempt>();
@@ -1253,17 +1257,26 @@ export function PreformedTestRunner({
 
   useEffect(() => {
     let active = true;
-    void loadPreformedAttemptByCode(code)
-      .then((saved) => {
-        if (active && saved && !saved.submittedAt) {
-          setAttempt(saved);
+    const nextScope = accountUid ? preformedAccountScope(accountUid) : preformedGuestScope();
+    void loadPreformedAttemptByCode(nextScope, code)
+      .then(async (saved) => {
+        if (!active) return;
+        setScope(nextScope);
+        if (saved && !saved.submittedAt) {
+          const payload = await api<{ test: PreformedTestDocument }>(
+            `/preformed/open?code=${encodeURIComponent(code)}`,
+            { forceRefresh: true, requestReason: 'reconnect-reconciliation',
+              headers: { 'x-qraft-attempt-token': saved.test.attemptToken ?? '' } },
+          );
+          if (!active) return;
+          setAttempt({ ...saved, test: payload.test });
           setName(saved.participantName);
-          setElapsed(saved.elapsedSeconds);
+          setElapsed(Math.max(saved.elapsedSeconds, Math.floor((Date.now() - Date.parse(payload.test.attemptStartedAt ?? saved.startedAt)) / 1000)));
           setIndex(Math.max(0, Math.min(saved.currentIndex ?? 0, saved.questionOrder.length - 1)));
         }
       })
-      .catch(() => {
-        if (active) setError('Could not read a saved attempt on this device.');
+      .catch((caught) => {
+        if (active) setError(caught instanceof Error ? caught.message : 'Could not restore this attempt.');
       })
       .finally(() => {
         if (active) setRestoring(false);
@@ -1271,7 +1284,7 @@ export function PreformedTestRunner({
     return () => {
       active = false;
     };
-  }, [code]);
+  }, [code, accountUid]);
 
   const begin = async () => {
     if (!user && !name.trim()) return setError('Enter your name to begin.');
@@ -1289,7 +1302,7 @@ export function PreformedTestRunner({
       if (!user && payload.test.settings.maxAttempts !== null) {
         const attempts = Number(
           localStorage.getItem(
-            `qraft-preformed-count:${payload.test.id}:${payload.test.version}`,
+            `qraft-preformed-count:${scope}:${payload.test.id}:${payload.test.version}`,
           ) ?? 0,
         );
         if (attempts >= payload.test.settings.maxAttempts)
@@ -1298,13 +1311,14 @@ export function PreformedTestRunner({
           );
       }
       const saved = await loadPreformedAttempt(
+        scope,
         payload.test.id,
         payload.test.version,
       );
-      if (saved && !saved.submittedAt) {
+      if (saved && !saved.submittedAt && saved.test.attemptToken === payload.test.attemptToken) {
         setAttempt({
           ...saved,
-          test: { ...saved.test, attemptToken: payload.test.attemptToken },
+          test: payload.test,
         });
         setElapsed(saved.elapsedSeconds);
         setIndex(Math.max(0, Math.min(saved.currentIndex ?? 0, saved.questionOrder.length - 1)));
@@ -1322,7 +1336,7 @@ export function PreformedTestRunner({
               : question.options.map((_, optionIndex) => optionIndex),
           ]),
         );
-        const participantKeyName = `qraft-preformed-participant:${payload.test.id}`;
+        const participantKeyName = `qraft-preformed-participant:${scope}:${payload.test.id}`;
         const existingParticipantKey = localStorage.getItem(participantKeyName);
         const participantKey = existingParticipantKey ?? crypto.randomUUID();
         if (!existingParticipantKey)
@@ -1339,7 +1353,7 @@ export function PreformedTestRunner({
           startedAt: new Date().toISOString(),
           elapsedSeconds: 0,
         };
-        await savePreformedAttempt(next);
+        await savePreformedAttempt(scope, next);
         setAttempt(next);
         setIndex(0);
       }
@@ -1371,14 +1385,9 @@ export function PreformedTestRunner({
       const localAttemptNumber =
         Number(
           localStorage.getItem(
-            `qraft-preformed-count:${attempt.test.id}:${attempt.test.version}`,
+            `qraft-preformed-count:${scope}:${attempt.test.id}:${attempt.test.version}`,
           ) ?? 0,
         ) + 1;
-      const guestScore = attempt.test.questions.reduce(
-        (total, question) =>
-          total + (attempt.answers[question.id] === question.answer ? 1 : 0),
-        0,
-      );
       const payload = await api<{
         accepted: boolean;
         score: number;
@@ -1386,6 +1395,7 @@ export function PreformedTestRunner({
         percentage: number;
         rank: number | null;
         leaderboard: boolean;
+        questions: PreformedQuestion[];
       }>('/preformed/submit', {
         method: 'POST',
         body: JSON.stringify({
@@ -1394,21 +1404,21 @@ export function PreformedTestRunner({
           participantName: attempt.participantName,
           participantKey: attempt.participantKey,
           attemptNumber: localAttemptNumber,
-          ...(user ? { answers: attempt.answers } : { guestScore }),
-          durationSeconds: elapsed,
+          answers: attempt.answers,
         }),
       });
       const completed = {
         ...attempt,
+        test: { ...attempt.test, questions: payload.questions, answersHidden: false },
         elapsedSeconds: elapsed,
         submittedAt: new Date().toISOString(),
         score: payload.score,
       };
-      await savePreformedAttempt(completed);
+      await savePreformedAttempt(scope, completed);
       setAttempt(completed);
       setResult(payload);
       if (!user) {
-        const countKey = `qraft-preformed-count:${attempt.test.id}:${attempt.test.version}`;
+        const countKey = `qraft-preformed-count:${scope}:${attempt.test.id}:${attempt.test.version}`;
         localStorage.setItem(
           countKey,
           String(Number(localStorage.getItem(countKey) ?? 0) + 1),
@@ -1424,7 +1434,7 @@ export function PreformedTestRunner({
       setBusy(false);
       submitLock.current = false;
     }
-  }, [attempt, elapsed, result, user]);
+  }, [attempt, elapsed, result, user, scope]);
 
   useEffect(() => {
     if (!attempt || result) return;
@@ -1437,10 +1447,10 @@ export function PreformedTestRunner({
   useEffect(() => {
     if (!attempt || result) return;
     if (elapsed % 5 !== 0) return;
-    void savePreformedAttempt({ ...attempt, elapsedSeconds: elapsed }).catch(
+    void savePreformedAttempt(scope, { ...attempt, elapsedSeconds: elapsed }).catch(
       () => setError('Could not save this attempt on your device. Please try again.'),
     );
-  }, [attempt, elapsed, result]);
+  }, [attempt, elapsed, result, scope]);
   const limit = attempt?.test.settings.durationMinutes
     ? attempt.test.settings.durationMinutes * 60
     : null;
@@ -1456,7 +1466,7 @@ export function PreformedTestRunner({
     setBusy(true);
     setError('');
     try {
-      await savePreformedAttempt({ ...attempt, elapsedSeconds: elapsed });
+      await savePreformedAttempt(scope, { ...attempt, elapsedSeconds: elapsed });
       onClose();
     } catch {
       setError('Could not save this attempt on your device. Please try again.');
@@ -1465,7 +1475,7 @@ export function PreformedTestRunner({
     }
   };
 
-  if (restoring)
+  if (restoring || !scope || (user ? scope !== preformedAccountScope(user.uid) : !scope.startsWith('guest:')))
     return (
       <main className="q-test-screen grid h-full place-items-center bg-background p-5 text-sm font-semibold text-muted-foreground">
         <output>Opening saved test…</output>
@@ -1548,7 +1558,7 @@ export function PreformedTestRunner({
     const next = { ...attempt, currentIndex: nextIndex, elapsedSeconds: elapsed };
     setIndex(nextIndex);
     setAttempt(next);
-    void savePreformedAttempt(next).catch(() =>
+    void savePreformedAttempt(scope, next).catch(() =>
       setError('Could not save your place on this device. Please try again.'),
     );
   };
@@ -1747,7 +1757,7 @@ export function PreformedTestRunner({
                           };
                           setAttempt(next);
                           setError('');
-                          void savePreformedAttempt(next).catch(() =>
+                          void savePreformedAttempt(scope, next).catch(() =>
                             setError('Could not save your answer on this device. Please try again.'),
                           );
                         }}

@@ -1,5 +1,9 @@
 # Qraft Collaborative QBank
 
+The canonical checkout is `app`; previous release worktrees have been consolidated.
+All changes follow [QRAFT_ENGINEERING_CONSTITUTION.md](QRAFT_ENGINEERING_CONSTITUTION.md).
+See [the current foundation decisions](docs/QRAFT_FOUNDATION_2026-09-27.ar.md) for synchronization, participant privacy, server grading, and the transitional data capacity policy.
+
 Qraft 1.0.0 is a private, installable medical QBank PWA. It supports collaborative question authoring and review, personal study progress, subscriptions, account administration, support tickets, and live invalidation across active sessions.
 
 ## Main capabilities

@@ -489,8 +489,13 @@ export async function improvementsApiTests(t, db, call, runtime) {
       );
       assert.equal(stale.status, 409);
       assert.equal(stale.data.state.settings.dailyGoal, 35);
+      const superseded = await call(uid, '/state', { state: initialState,
+        baseRevision: goal.data.revision, operationId: randomUUID() }, 'PUT');
+      assert.equal(superseded.status, 200);
+      assert.equal(superseded.data.superseded, true);
+      assert.equal(superseded.data.state.settings.dailyGoal, 35);
 
-      const examTime = '2026-09-12T09:00:00.000Z';
+      const examTime = new Date(Date.parse(goal.data.state.clientUpdatedAt) + 1000).toISOString();
       const exam = await call(
         uid,
         '/state/exam',
@@ -863,6 +868,12 @@ export async function improvementsApiTests(t, db, call, runtime) {
 
       const opened = await call('free', `/preformed/open?code=${test.code}`);
       assert.equal(opened.status, 200, JSON.stringify(opened));
+      assert.equal(opened.data.test.questions[0].answer, -1);
+      assert.equal(opened.data.test.questions[0].explanation, '');
+      const tokenIssued = await db.prepare('SELECT issued_at FROM preformed_attempt_tokens WHERE token_hash=?')
+        .bind(createHash('sha256').update(opened.data.test.attemptToken).digest('hex')).first();
+      await db.prepare('UPDATE preformed_attempt_tokens SET issued_at=? WHERE token_hash=?')
+        .bind(new Date(Date.now() - 60_000).toISOString(), createHash('sha256').update(opened.data.test.attemptToken).digest('hex')).run();
       const submissionId = randomUUID();
       const submitted = await call('free', '/preformed/submit', {
         submissionId,
@@ -872,6 +883,33 @@ export async function improvementsApiTests(t, db, call, runtime) {
       });
       assert.equal(submitted.status, 200, JSON.stringify(submitted));
       assert.equal(submitted.data.score, 1);
+      assert.equal(submitted.data.questions[0].answer, 0);
+      const persistedDuration = await db.prepare('SELECT duration_seconds FROM preformed_leaderboard WHERE id=?').bind(submissionId).first();
+      assert.ok(persistedDuration.duration_seconds >= 60, JSON.stringify(persistedDuration));
+      assert.ok(tokenIssued.issued_at);
+      const otherOpened = await call('preformed-owner', `/preformed/open?code=${test.code}`);
+      assert.equal((await call('preformed-owner', '/preformed/submit', {
+        submissionId, attemptToken: otherOpened.data.test.attemptToken, answers: {},
+      })).status, 403);
+      assert.equal((await call('preformed-owner', '/preformed/submit', {
+        submissionId: randomUUID(), attemptToken: opened.data.test.attemptToken, answers: {},
+      })).status, 403);
+      const guestOpened = await call('unknown-guest', `/preformed/open?code=${test.code}`);
+      assert.equal(guestOpened.status, 200);
+      assert.equal((await call('unknown-guest', '/preformed/submit', {
+        submissionId: randomUUID(), attemptToken: guestOpened.data.test.attemptToken,
+        participantName: 'Guest', participantKey: randomUUID(), guestScore: 1,
+      })).status, 400);
+      const guestResult = await call('unknown-guest', '/preformed/submit', {
+        submissionId: randomUUID(), attemptToken: guestOpened.data.test.attemptToken,
+        participantName: 'Guest', participantKey: randomUUID(), guestScore: 1,
+        answers: { [questionId]: 1 }, durationSeconds: 0,
+      });
+      assert.equal(guestResult.status, 200, JSON.stringify(guestResult));
+      assert.equal(guestResult.data.score, 0);
+      // Remove only this guest fixture before the existing count assertions.
+      await db.prepare("DELETE FROM preformed_leaderboard WHERE test_id=? AND guest=1").bind(test.id).run();
+      await db.prepare('DELETE FROM preformed_submission_receipts WHERE test_id=? AND user_id IS NULL').bind(test.id).run();
       const duplicate = await call('free', '/preformed/submit', {
         submissionId,
         attemptToken: opened.data.test.attemptToken,
@@ -1015,6 +1053,56 @@ export async function improvementsApiTests(t, db, call, runtime) {
       );
     },
   );
+
+  await t.test('deleting a participant removes identifying results and updates other participants ranks and aggregates', async () => {
+    await account('privacy-participant');
+    await account('privacy-other');
+    const created = await call('preformed-owner', '/preformed/create', {});
+    const base = created.data.test;
+    const questions = [{ id: randomUUID(), stem: 'Participant privacy fixture?', options: ['Yes', 'No'], answer: 0, explanation: 'Yes.', sourceReference: '', images: [] }];
+    const published = await call('preformed-owner', '/preformed/save', { test: {
+      ...base, title: 'Privacy test', status: 'published', visibility: 'public', questions,
+      settings: { ...base.settings, maxAttempts: null, attemptResultPolicy: 'all' },
+    } }, 'PUT');
+    assert.equal(published.status, 200, JSON.stringify(published));
+    const test = published.data.test;
+    let participantToken;
+    for (const uid of ['privacy-participant', 'privacy-other']) {
+      const opened = await call(uid, `/preformed/open?code=${test.code}`);
+      const token = opened.data.test.attemptToken;
+      if (uid === 'privacy-participant') participantToken = token;
+      const resumed = await runtime.fetch(`https://qraft.test/api/cloudflare/preformed/open?code=${test.code}`, {
+        headers: { cookie: `__Host-qraft_session=fixture-${uid}`, 'x-qraft-attempt-token': token },
+      });
+      assert.equal(resumed.status, 200);
+      const resumedBody = await resumed.json();
+      assert.equal(resumedBody.test.attemptToken, token);
+      assert.equal(resumedBody.test.attemptStartedAt, opened.data.test.attemptStartedAt);
+      const result = await call(uid, '/preformed/submit', { submissionId: randomUUID(), attemptToken: token,
+        answers: { [questions[0].id]: uid === 'privacy-participant' ? 0 : 1 }, durationSeconds: 0 });
+      assert.equal(result.status, 200, JSON.stringify(result));
+    }
+    const before = await call('preformed-owner', `/preformed/leaderboard?id=${test.id}`);
+    assert.equal(before.data.leaderboard.length, 2);
+    assert.equal(before.data.leaderboard.find(row => row.participantUserId === 'privacy-other').rank, 2);
+    // Simulate receipt retention expiring: a consumed token stays single-use,
+    // and deleting the account must still remove its exact aggregate counts.
+    await db.prepare('DELETE FROM preformed_submission_receipts WHERE user_id=?').bind('privacy-participant').run();
+    assert.equal((await call('privacy-participant', '/preformed/submit', {
+      submissionId: randomUUID(), attemptToken: participantToken, answers: {},
+    })).status, 409);
+    const removed = await call('privacy-participant', '/auth/account', { confirmation: 'DELETE' }, 'DELETE');
+    assert.equal(removed.status, 200, JSON.stringify(removed));
+    const after = await call('preformed-owner', `/preformed/leaderboard?id=${test.id}`);
+    assert.equal(after.data.leaderboard.length, 1);
+    assert.equal(after.data.leaderboard[0].participantUserId, 'privacy-other');
+    assert.equal(after.data.leaderboard[0].rank, 1);
+    for (const [table, column] of [['preformed_leaderboard', 'participant_user_id'], ['preformed_submission_receipts', 'user_id'], ['preformed_attempt_tokens', 'user_id']])
+      assert.equal((await db.prepare(`SELECT count(*) n FROM ${table} WHERE ${column}=?`).bind('privacy-participant').first()).n, 0);
+    const stats = await db.prepare('SELECT submissions,correct FROM preformed_question_stats WHERE test_id=?').bind(test.id).first();
+    assert.equal(stats.submissions, 1);
+    assert.equal(stats.correct, 0);
+  });
 
   await t.test(
     'Account deletion is atomic, preserves shared/public content and anonymizes reviewer history',

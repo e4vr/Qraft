@@ -2,6 +2,8 @@ import { auditStatement } from './platform-server';
 import { bankAccessState, bankAccessStates } from './qbank-access-repository';
 import { allocateQuestionIds } from './question-id-repository';
 import { env } from 'cloudflare:workers';
+import { appStateFreshness } from './merge-app-state';
+import { stateBudgetError, stateBytes, STATE_BUDGET_BYTES } from '@/features/state/domain/state-budget';
 import {
   hasR2Storage,
   R2QuotaExceededError,
@@ -836,6 +838,8 @@ export async function saveState(request: Request) {
       updatedAt: storedStateRow?.updated_at ?? new Date().toISOString(),
       duplicate: true,
     });
+  if (stateBytes(input.state) > Math.max(STATE_BUDGET_BYTES, storedState ? stateBytes(storedState) : 0))
+    return json({ error: stateBudgetError(input.state), code: 'STATE_CAPACITY_EXCEEDED' }, 413);
   if (
     input.baseRevision !== undefined &&
     input.baseRevision !== currentRevision
@@ -850,6 +854,9 @@ export async function saveState(request: Request) {
       409,
     );
   input.state.settings.theme = 'system';
+  if (storedState && appStateFreshness(storedState) > appStateFreshness(input.state))
+    return json({ ok: true, state: storedState, revision: currentRevision,
+      updatedAt: storedStateRow?.updated_at, unchanged: true, superseded: true });
   if (
     !Array.isArray(input.state.tests) ||
     input.state.tests.some(
@@ -1244,6 +1251,8 @@ export async function saveStatePatch(
   const stateResponse = await saveState(forwarded);
   if (!stateResponse.ok || kind !== 'exam' || !Array.isArray(answerSelections))
     return stateResponse;
+  const savedResult = await stateResponse.clone().json() as { superseded?: boolean };
+  if (savedResult.superseded) return stateResponse;
   const selections = answerSelections.filter(isRecord).map((item) => ({
     qbankId: typeof item.qbankId === 'string' ? item.qbankId : '',
     questionId: typeof item.questionId === 'string' ? item.questionId : '',

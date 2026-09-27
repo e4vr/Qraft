@@ -248,12 +248,12 @@ void test('Preformed tests open outside the app shell and resume at the saved qu
   const preformed = await readFile(new URL('components/preformed-tests-workspace.tsx', root), 'utf8');
   const attempt = await readFile(new URL('lib/preformed-test-types.ts', root), 'utf8');
   assert.ok(app.indexOf('if (directTestCode) {') < app.indexOf('<QraftAppShell'));
-  assert.match(app, /<PreformedTestRunner\s+key=\{directTestCode\}/);
+  assert.match(app, /<PreformedTestRunner\s+key=\{`\$\{participant\?\.uid \?\? 'guest'\}:\$\{directTestCode\}`\}/);
   assert.match(app, /onRunTest=\{\(code\) => \{[\s\S]*setDirectTestCode\(code\)/);
   assert.match(app, /const onPopState = \(\) => \{[\s\S]*setDirectTestCode\(/);
   assert.doesNotMatch(preformed, /runningCode|setRunningCode/);
   assert.match(preformed, /q-test-screen q-preformed-runner/);
-  assert.match(preformed, /if \(restoring\)[\s\S]*Opening saved test/);
+  assert.match(preformed, /if \(restoring \|\|[\s\S]*Opening saved test/);
   assert.match(preformed, /saved\.currentIndex \?\? 0/);
   assert.match(preformed, /const goToQuestion = \(target: number\) => \{[\s\S]*currentIndex: nextIndex/);
   assert.match(attempt, /currentIndex\?: number/);

@@ -142,4 +142,25 @@ class ReleaseUpgradeTests(unittest.TestCase):
         self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(), [])
 
 
+class ParticipantPrivacyUpgradeTests(unittest.TestCase):
+    def test_upgrade_removes_deleted_identities_and_preserves_active_results(self):
+        db = sqlite3.connect(':memory:')
+        db.execute('PRAGMA foreign_keys=ON')
+        for path in sorted((ROOT / 'drizzle').glob('*.sql')):
+            if int(path.name[:4]) < 24:
+                db.executescript(path.read_text(encoding='utf-8'))
+        db.execute("INSERT INTO profiles(uid,email,password_hash,password_salt,profile_json,created_at,updated_at) VALUES('owner','owner@test','unused','unused','{}','now','now')")
+        db.execute("INSERT INTO preformed_tests(id,code,owner_id,owner_name,title,description,visibility,status,version,questions_json,settings_json,created_at,updated_at) VALUES('test','QF-TEST00','owner','Owner','Fixture','','public','published',1,'[]','{}','now','now')")
+        for uid in ['owner', 'already-deleted']:
+            db.execute('INSERT INTO preformed_attempt_tokens(token_hash,test_id,version,user_id,issued_at,expires_at) VALUES(?,?,1,?,?,?)', (uid, 'test', uid, 'now', 'later'))
+            db.execute('INSERT INTO preformed_leaderboard(id,test_id,version,participant_user_id,participant_key,participant_name,guest,score,question_count,duration_seconds,attempt_number,submitted_at) VALUES(?,?,1,?,?,?,0,1,1,10,1,?)', (uid, 'test', uid if uid == 'owner' else None, 'user:'+uid, uid, 'now'))
+            db.execute('INSERT INTO preformed_submission_receipts(submission_id,test_id,attempt_token_hash,leaderboard,result_json,created_at) VALUES(?,?,?,1,?,?)', (uid, 'test', uid, '{}', 'now'))
+        db.executescript((ROOT / 'drizzle' / '0024_preformed_participant_privacy.sql').read_text(encoding='utf-8'))
+        self.assertEqual(db.execute('SELECT participant_key FROM preformed_leaderboard').fetchall(), [('user:owner',)])
+        self.assertEqual(db.execute('SELECT user_id,submitted_at FROM preformed_attempt_tokens').fetchall(), [('owner', 'now')])
+        self.assertEqual(db.execute("SELECT user_id FROM preformed_submission_receipts WHERE submission_id='owner'").fetchone(), ('owner',))
+        self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(), [])
+        db.close()
+
+
 if __name__ == '__main__': unittest.main()
