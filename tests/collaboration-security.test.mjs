@@ -569,7 +569,7 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
   assert.match(importReview, /One question per slide/);
   assert.match(manager, /QuestionImportReview/);
   assert.match(preformed, /onClick=\{openImport\}/);
-  assert.match(preformed, /Import JSON \/ Use AI/);
+  assert.match(preformed, /Import<\/h2>/);
   assert.match(preformed, /ارفع الملف هنا/);
   assert.match(preformed, /Questions to generate/);
   assert.match(preformed, /Questions to extract/);

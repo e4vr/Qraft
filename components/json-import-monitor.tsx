@@ -16,6 +16,7 @@ import { subscribeLive } from '@/lib/realtime-client';
 import type { CollaborationState } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import { ImportControls } from '@/components/import-controls';
 import { cn } from '@/lib/utils';
 
 type ImportRunStatus =
@@ -136,8 +137,10 @@ function reportText(value: unknown, fallback = '') {
 
 export function JsonImportMonitor({
   qbanks,
+  members,
 }: {
   qbanks: CollaborationState['qbanks'];
+  members:CollaborationState['members'];
 }) {
   const [data, setData] = useState<MonitorResponse>();
   const [busy, setBusy] = useState(true);
@@ -179,7 +182,7 @@ export function JsonImportMonitor({
         setError(
           loadError instanceof Error
             ? loadError.message
-            : 'Unable to load JSON import activity.',
+            : 'Unable to load Import activity.',
         );
       } finally {
         setBusy(false);
@@ -268,6 +271,7 @@ export function JsonImportMonitor({
   return (
     <>
       <div className="grid gap-4">
+        <ImportControls members={members} />
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           {[
             ['Runs', summary.runs],
@@ -296,7 +300,7 @@ export function JsonImportMonitor({
             <label className="relative">
               <Search className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground" />
               <input
-                aria-label="Search JSON imports"
+                aria-label="Search Imports"
                 value={search}
                 onChange={(event) => {
                   setSearch(event.target.value);
@@ -495,7 +499,7 @@ export function JsonImportMonitor({
 
       <Dialog open={Boolean(selected)} onOpenChange={(open) => !open && setSelected(undefined)}>
         <DialogContent className="max-h-[90dvh] max-w-4xl overflow-y-auto">
-          <DialogTitle>JSON import details</DialogTitle>
+          <DialogTitle>Import details</DialogTitle>
           {selected && (
             <div className="space-y-5">
               <section className="grid gap-3 rounded-2xl border bg-muted/20 p-4 sm:grid-cols-2">

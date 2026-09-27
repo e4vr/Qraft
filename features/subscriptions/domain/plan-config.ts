@@ -196,12 +196,6 @@ export const CONTRIBUTION_BADGES = [
   { score: 50, name: 'Contributor' },
 ] as const;
 
-export const ABUSE_LIMITS = {
-  confirmedDuplicateAttempts: 10,
-  rollingWindowDays: 30,
-  jsonImportSuspensionDays: 7,
-} as const;
-
 export function isPlanId(value: unknown): value is PlanId {
   return typeof value === 'string' && PLAN_ORDER.includes(value as PlanId);
 }

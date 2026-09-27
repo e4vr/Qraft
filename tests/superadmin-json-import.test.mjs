@@ -107,8 +107,9 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
     fileName: `renamed-${marker}.json`,
   });
   assert.equal(repeat.status, 200, JSON.stringify(repeat.data));
-  assert.equal(repeat.data.successful, 0);
-  assert.equal(repeat.data.skippedDuplicates, 201);
+  assert.equal(repeat.data.successful, 201);
+  assert.equal(repeat.data.skippedDuplicates, 0);
+  assert.equal(repeat.data.flaggedDuplicates,201);
   const newQuestion = { ...request.questions[0], stem: `A distinct clinical question ${marker}` };
   const sameName = await call('admin', '/platform/import', {
     ...request,
@@ -117,9 +118,9 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
     questions: [request.questions[0], newQuestion],
   });
   assert.equal(sameName.status, 200, JSON.stringify(sameName.data));
-  assert.equal(sameName.data.successful, 1);
-  assert.equal(sameName.data.skippedDuplicates, 1);
-  assert.equal((await db.prepare("SELECT count(*) AS count FROM duplicate_attempts WHERE user_id='admin' AND kind='file'").first()).count, 0);
+  assert.equal(sameName.data.successful, 2);
+  assert.equal(sameName.data.skippedDuplicates, 0);
+  assert.equal((await db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type='table' AND name='duplicate_attempts'").first()).count, 0);
 
   const now = new Date().toISOString();
   let recreatedBank = {
@@ -230,4 +231,54 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
   assert.equal(interrupted.status, 200, JSON.stringify(interrupted.data));
   assert.equal(interrupted.data.run.stale, 1);
   assert.equal((await call('admin', '/platform/json-imports', { runId: interruptedRunId }, 'DELETE')).status, 200);
+  await t.test('Import controls, duplication review, deletion rights and chunk quotas', async()=>{
+    await build({stdin:{contents:"export {duplicateFingerprint} from './features/duplicates/domain/duplicate-detection'; export {buildQuestionPrompt,parseQuestionImportReport} from './lib/question-import';",resolveDir:process.cwd()},bundle:true,format:'esm',platform:'node',outfile:'.ui-review/import-domain.mjs'});
+    const {duplicateFingerprint,buildQuestionPrompt,parseQuestionImportReport}=await import('../.ui-review/import-domain.mjs');
+    const guide=buildQuestionPrompt({source:'qbank',kind:'clinical',length:'medium',countMode:'fixed',count:12,optionCount:4});
+    assert.match(guide,/electronic question platform/);assert.match(guide,/OCR/);assert.match(guide,/outside the bank only for this explanation/);assert.match(guide,/four close, logical and plausible options/);
+    const lecture=buildQuestionPrompt({source:'lecture',kind:'direct',length:'short',countMode:'fixed',count:8,optionCount:4});
+    assert.match(lecture,/Build 8 questions/);assert.match(lecture,/exactly 4 distinct/);assert.match(lecture,/Do not use any external sources/);
+    const sourceReport=parseQuestionImportReport({sourceFile:'Bank.pdf',questions:[{...reusableQuestion,originalQuestionNumber:'37'}]});
+    assert.match(sourceReport.questions[0].sourceReference,/Q.37/);
+    assert.equal((await call('pro','/platform/import-defaults')).status,403);
+    assert.equal((await call('pro','/platform/import-controls?userId=pro')).status,403);
+    assert.equal((await call('pro','/platform/economy-admin',{operation:'import-limits',userId:'pro',reason:'test',questionsPerImport:5000,importsPerDay:100})).status,403);
+    assert.equal((await call('admin','/platform/import-defaults',{questionsPerImport:27,importsPerDay:10,reason:'Import QA defaults'})).status,200);
+    assert.equal((await call('pro','/platform/json-import-status')).data.questionsPerImport,27);
+    assert.equal((await call('admin','/platform/economy-admin',{operation:'import-limits',userId:'pro',reason:'Import QA override',questionsPerImport:28,importsPerDay:12})).status,200);
+    assert.equal((await call('pro','/platform/json-import-status')).data.questionsPerImport,28);
+    assert.equal((await call('admin','/platform/import-controls?userId=pro')).data.importLimits.questionsPerImport,28);
+    assert.equal((await call('pro','/platform/plan-status')).data.limits.jsonQuestionsPerImport,28);
+    assert.equal((await call('admin','/platform/economy-admin',{operation:'import-limits',userId:'pro',reason:'invalid cap',questionsPerImport:5001,importsPerDay:12})).status,400);
+    const logicalId=randomUUID(),hash=createHash('sha256').update(logicalId).digest('hex');
+    const metadata={qbankId:'smle-gs',uploadSessionId:logicalId,originalFileName:'same-name.json',originalFileHash:hash,fileName:'same-name.json',fileHash:hash,chunkCount:3,rightsConfirmed:true};
+    const makeQuestions=(start,count)=>Array.from({length:count},(_,i)=>({...reusableQuestion,stem:`Quota clinical patient ${marker} with measurement ${start+i}`,sourcePage:start+i+1}));
+    const firstChunk={...metadata,requestId:randomUUID(),chunkIndex:0,questions:makeQuestions(0,25)};
+    assert.equal((await call('pro','/platform/import',firstChunk)).status,200);
+    assert.equal((await call('pro','/platform/import',{...metadata,requestId:randomUUID(),chunkIndex:1,questions:makeQuestions(25,3)})).status,200);
+    assert.equal((await call('pro','/platform/import',{...metadata,requestId:randomUUID(),chunkIndex:2,questions:makeQuestions(28,1)})).status,403);
+    const before=await db.prepare("SELECT count(*) AS value FROM records WHERE type='questionProposals' AND owner_id='pro'").first();
+    assert.equal((await call('pro','/platform/import',firstChunk)).status,200);
+    assert.equal((await db.prepare("SELECT count(*) AS value FROM records WHERE type='questionProposals' AND owner_id='pro'").first()).value,before.value);
+    assert.equal((await db.prepare("SELECT count(DISTINCT run_id) AS value FROM imported_files WHERE user_id='pro' AND run_id=?").bind(logicalId).first()).value,1);
+    const duplicate={...firstChunk.questions[0],options:['Different correct choice','Different distractor'],answer:1};
+    const preview=await call('pro','/platform/import-preview',{qbankId:'smle-gs',questions:[duplicate]});
+    assert.equal(preview.status,200,JSON.stringify(preview));assert.ok(preview.data.matches[0].length);
+    const match=preview.data.matches[0][0];assert.equal(match.payload.stem,duplicate.stem);
+    assert.equal((await call('unlimited','/platform/import-delete-duplicate',{qbankId:'smle-gs',...match})).status,403);
+    assert.equal((await call('pro','/platform/import-delete-duplicate',{qbankId:'smle-gs',...match,candidateFingerprint:'changed'})).status,409);
+    const keep=await call('pro','/platform/import',{...metadata,uploadSessionId:randomUUID(),chunkCount:1,chunkIndex:0,requestId:randomUUID(),questions:[duplicate],duplicateChoices:[{sourceFingerprint:duplicateFingerprint(duplicate),candidateFingerprints:preview.data.matches[0].map(m=>m.candidateFingerprint)}]});
+    assert.equal(keep.status,200,JSON.stringify(keep));assert.equal(keep.data.successful,1);assert.equal(keep.data.skippedDuplicates,0);assert.equal(keep.data.proposals[0].duplicateReview.status,'resolved');
+    assert.equal((await call('pro','/platform/import-delete-duplicate',{qbankId:'smle-gs',...match})).status,200);
+    assert.equal((await db.prepare("SELECT count(*) AS value FROM records WHERE type='questionProposals' AND id=?").bind(match.entityId).first()).value,0);
+    assert.equal((await db.prepare('SELECT count(*) AS value FROM import_question_search WHERE entity_id=?').bind(match.entityId).first()).value,0);
+    const normalizedPreview=await call('pro','/platform/import-preview',{qbankId:'smle-gs',questions:[{...duplicate,stem:`37. ${duplicate.stem.replaceAll(' ','  ')}`} ]});
+    assert.equal(normalizedPreview.status,200);assert.ok(normalizedPreview.data.matches[0].length);
+    assert.equal((await call('admin','/platform/economy-admin',{operation:'suspend-json',userId:'pro',reason:'Manual suspension QA',days:9})).status,200);
+    const status=(await call('pro','/platform/json-import-status')).data;assert.equal(status.suspended,true);assert.ok(Math.abs(Date.parse(status.endsAt)-Date.now()-9*86400000)<5000);
+    assert.equal((await call('admin','/platform/economy-admin',{operation:'remove-json-suspension',userId:'pro',reason:'End QA suspension'})).status,200);
+    assert.equal((await call('pro','/platform/json-import-status')).data.suspended,false);
+    assert.equal((await db.prepare("SELECT count(*) AS value FROM json_import_suspensions WHERE created_by='system' AND removed_at IS NULL").first()).value,0);
+  });
+
 });

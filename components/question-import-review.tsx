@@ -2,6 +2,8 @@
 /* oxlint-disable next/no-img-element */
 import { useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronDown, Copy, FileJson, GraduationCap, Upload, LoaderCircle } from 'lucide-react';
+import { duplicateFingerprint, normalizeDuplicateText } from '@/features/duplicates/domain/duplicate-detection';
+import { subscribeLive } from '@/lib/realtime-client';
 import { api } from '@/lib/api-client';
 import {
   parseQuestionImportReport,
@@ -11,6 +13,7 @@ import {
 } from '@/lib/question-import';
 import {
   optionLabel,
+  type DuplicateCandidate,
   type QuestionProposal,
   type QuestionProposalPayload,
   type QBankSpecialty,
@@ -19,6 +22,8 @@ import {
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 
+type ImportMatch = DuplicateCandidate & {payload:QuestionProposalPayload;canDelete:boolean;draftIndex?:number};
+type ImportChoice = {sourceFingerprint:string;candidateFingerprints:string[]};
 const MAX_CHUNK_BYTES = 900_000;
 const MAX_CHUNK_QUESTIONS = 25;
 
@@ -42,7 +47,7 @@ function splitImport(
   let nextChunk = 0;
   for (const item of skipped) {
     const bytes = encoder.encode(JSON.stringify(item)).byteLength + 1;
-    while (nextChunk < chunks.length && chunks[nextChunk].bytes + bytes > MAX_CHUNK_BYTES) nextChunk += 1;
+    while (nextChunk < chunks.length && (chunks[nextChunk].bytes + bytes > MAX_CHUNK_BYTES || chunks[nextChunk].questions.length + chunks[nextChunk].skipped.length >= 200)) nextChunk += 1;
     if (nextChunk >= chunks.length) break;
     chunks[nextChunk].skipped.push(item);
     chunks[nextChunk].bytes += bytes;
@@ -69,6 +74,15 @@ export function QuestionImportReview({
     [uploadSessionId, setUploadSessionId] = useState(() =>
       crypto.randomUUID(),
     );
+  const [matches,setMatches]=useState<ImportMatch[][]>([]);
+  const [choices,setChoices]=useState<Record<number,ImportChoice>>({});
+  const [excluded,setExcluded]=useState<number[]>([]);
+  const [dirty,setDirty]=useState<number[]>([]);
+  const [comparison,setComparison]=useState(false);
+  const [comparisonIndex,setComparisonIndex]=useState(0);
+  const [checking,setChecking]=useState(false);
+  const [limits,setLimits]=useState({questionsPerImport:150,importsPerDay:5});
+  const chunkChoices=useRef<ImportChoice[][]>([]);
   const [reading, setReading] = useState(false);
   const [fileName, setFileName] = useState('');
   const [fileHash, setFileHash] = useState('');
@@ -104,13 +118,14 @@ export function QuestionImportReview({
   const [confirmAction, confirmationDialog] = useConfirmationDialog();
   useEffect(() => {
     let active = true;
-    void api<{ suspended: boolean; endsAt: string | null }>(
+    const refresh=()=>api<{ suspended: boolean; endsAt: string | null; questionsPerImport:number;importsPerDay:number }>(
       '/platform/json-import-status',
     )
       .then((result) => {
         if (!active) return;
+        setLimits({questionsPerImport:result.questionsPerImport,importsPerDay:result.importsPerDay});
         setAccess(
-          result.suspended
+          result.suspended && (!result.endsAt || Date.parse(result.endsAt)>Date.now())
             ? { status: 'suspended', endsAt: result.endsAt }
             : { status: 'allowed' },
         );
@@ -122,13 +137,22 @@ export function QuestionImportReview({
           message:
             error instanceof Error
               ? error.message
-              : 'Unable to verify JSON Import access.',
+              : 'Unable to verify Import access.',
         });
       });
+    void refresh();
+    const unsubscribe=subscribeLive(topic=>{if(topic==='import-status'||topic==='connected')void refresh();},['import-status','connected']);
     return () => {
-      active = false;
+      active = false;unsubscribe();
     };
   }, []);
+  useEffect(()=>{
+    if(access.status!=='suspended'||!access.endsAt)return;
+    const timer=window.setTimeout(()=>{
+      void api<{suspended:boolean;endsAt:string|null}>('/platform/json-import-status',{forceRefresh:true,requestReason:'eligibility-parameters-changed'}).then(result=>setAccess(result.suspended?{status:'suspended',endsAt:result.endsAt}:{status:'allowed'})).catch(()=>setAccess({status:'error',message:'Unable to verify Import access.'}));
+    },Math.max(0,Math.min(2_000_000_000,Date.parse(access.endsAt)-Date.now()+100)));
+    return ()=>window.clearTimeout(timer);
+  },[access]);
   const lecture = settings.source === 'lecture';
   const countValid = (lecture && settings.countMode === 'per_slide') ||
     (countText.trim() !== '' && Number.isInteger(Number(countText)) && Number(countText) >= 1 && Number(countText) <= 200);
@@ -137,6 +161,56 @@ export function QuestionImportReview({
     ...settings, count: lecture && settings.countMode === 'per_slide' ? 20 : Number(countText), optionCount: Number(optionsText),
   }) : '';
   const draft = drafts[index];
+  async function preview(questions:QuestionProposalPayload[]) {
+    const results:ImportMatch[][]=[];
+    for(let offset=0;offset<questions.length;offset+=25) {
+      const batch=await api<{matches:ImportMatch[][]}>('/platform/import-preview',{method:'POST',body:JSON.stringify({qbankId:bankId,sourceFile,questions:questions.slice(offset,offset+25)})});
+      results.push(...batch.matches);
+    }
+    const seen=new Map<string,number>();
+    questions.forEach((payload,i)=>{
+      const key=normalizeDuplicateText(payload.stem), previous=seen.get(key);
+      if(previous!==undefined) results[i].push({entityId:`draft:${previous}`,entityType:'pending_proposal',candidateFingerprint:duplicateFingerprint(questions[previous]),payload:questions[previous],canDelete:true,draftIndex:previous,classification:'exact',similarity:100,detectedAt:new Date().toISOString(),signals:{stem:100,optionsSet:0,optionsOrdered:0,correctAnswer:0,specialty:0,topic:0}});
+      seen.set(key,i);
+    });
+    return results;
+  }
+  async function recheck(i:number) {
+    if(!dirty.includes(i)) return matches[i]??[];
+    setChecking(true);
+    try {
+      const result=await preview([drafts[i]]);
+      const local=drafts.flatMap((payload,n)=>n!==i&&!excluded.includes(n)&&normalizeDuplicateText(payload.stem)===normalizeDuplicateText(drafts[i].stem)?[{entityId:`draft:${n}`,entityType:'pending_proposal' as const,candidateFingerprint:duplicateFingerprint(payload),payload,canDelete:true,draftIndex:n,classification:'exact' as const,similarity:100,detectedAt:new Date().toISOString(),signals:{stem:100,optionsSet:0,optionsOrdered:0,correctAnswer:0,specialty:0,topic:0}}]:[]);
+      const found=[...result[0],...local];
+      setMatches(current=>current.map((value,n)=>n===i?found:value));
+      setDirty(current=>current.filter(n=>n!==i));
+      return found;
+    } finally {setChecking(false);}
+  }
+  function advance() {setComparison(false);setComparisonIndex(0);if(index<drafts.length-1)setIndex(index+1);}
+  function keepBoth(found=matches[index]??[]) {
+    setChoices(current=>({...current,[index]:{sourceFingerprint:duplicateFingerprint(drafts[index]),candidateFingerprints:found.map(m=>m.candidateFingerprint)}}));
+    advance();
+  }
+  async function next() {
+    try {const wasDirty=dirty.includes(index),found=await recheck(index);if(wasDirty&&found.length)return;if(found.length)keepBoth(found);else advance();} catch(e){setError(e instanceof Error?e.message:'Unable to check duplication.');}
+  }
+  function excludeQuestion(n:number) {
+    setExcluded(current=>[...new Set([...current,n])]);
+    setMatches(current=>current.map(list=>list.filter(m=>m.draftIndex!==n)));
+    if(n===index)advance();
+  }
+  async function deleteOld(match:ImportMatch) {
+    setChecking(true);setError('');
+    try {
+      if(match.draftIndex!==undefined) excludeQuestion(match.draftIndex);
+      else {
+        await api('/platform/import-delete-duplicate',{method:'POST',body:JSON.stringify({qbankId:bankId,entityId:match.entityId,entityType:match.entityType,candidateFingerprint:match.candidateFingerprint})});
+        setMatches(current=>current.map(list=>list.filter(m=>m.entityId!==match.entityId)));
+      }
+      setComparison(false);setComparisonIndex(0);
+    } catch(e){setError(e instanceof Error?e.message:'Unable to delete the old question.');} finally {setChecking(false);}
+  }
   async function read(file?: File) {
     if (!file || operation.current) return;
     if (drafts.length && !(await confirmAction({
@@ -158,11 +232,13 @@ export function QuestionImportReview({
       const content = new TextDecoder().decode(bytes).replace(/^\uFEFF/, '').trim();
       const digest = await crypto.subtle.digest('SHA-256', bytes);
       const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
-      const report = parseQuestionImportReport(content, '', unlimited ? Number.POSITIVE_INFINITY : 200);
+      const report = parseQuestionImportReport(content, '', unlimited ? Number.POSITIVE_INFINITY : limits.questionsPerImport);
       if (!report.questions.length) {
         if (!drafts.length) setSkipped(report.skipped);
         throw new Error('لم يتم العثور على أي سؤال مكتمل وصالح. راجع تقرير الأسئلة المتخطاة أدناه.');
       }
+      const findings=await preview(report.questions);
+      setMatches(findings);setChoices({});setExcluded([]);setDirty([]);setComparison(false);
       setSkipped(report.skipped);
       setDrafts(report.questions);
       setFileName(file.name);
@@ -193,6 +269,8 @@ export function QuestionImportReview({
   }
   function edit(patch: Partial<QuestionProposalPayload>) {
     if (uploadedChunks.current) return;
+    setDirty(current=>[...new Set([...current,index])]);
+    setChoices(current=>{const next={...current};delete next[index];return next;});
     setDrafts((current) =>
       current.map((d, i) => (i === index ? { ...d, ...patch } : d)),
     );
@@ -203,11 +281,19 @@ export function QuestionImportReview({
     setBusy(true);
     setError('');
     try {
-      const validated = parseQuestionImportReport({ sourceFile, questions: drafts, skipped }, '', unlimited ? Number.POSITIVE_INFINITY : 200);
+      const checkedMatches=[...matches];
+      for(const i of dirty.filter(n=>!excluded.includes(n))) {
+        const found=await recheck(i);checkedMatches[i]=found;
+        if(found.length){setIndex(i);throw new Error('Review the duplication before saving.');}
+      }
+      const unresolved=checkedMatches.findIndex((list,i)=>!excluded.includes(i)&&list.length&&!choices[i]);
+      if(unresolved>=0){setIndex(unresolved);throw new Error('Choose Save as duplication or View the duplication for this question.');}
+      const selected=drafts.filter((_,i)=>!excluded.includes(i));
+      const selectedChoices=drafts.flatMap((_,i)=>excluded.includes(i)?[]:[choices[i]]);
+      const validated = parseQuestionImportReport({ sourceFile, questions: selected, skipped }, '', unlimited ? Number.POSITIVE_INFINITY : limits.questionsPerImport);
       if (!validated.questions.length) throw new Error('لا يوجد سؤال صالح للإرسال.');
-      const chunks = uploadChunks.current ?? (unlimited
-        ? splitImport(validated.questions, validated.skipped)
-        : [{ questions: validated.questions, skipped: validated.skipped, bytes: 0 }]);
+      const chunks = uploadChunks.current ?? splitImport(validated.questions, validated.skipped);
+      if(!uploadChunks.current){let offset=0;chunkChoices.current=chunks.map(chunk=>{const list=selectedChoices.slice(offset,offset+chunk.questions.length);offset+=chunk.questions.length;return list;});}
       uploadChunks.current = chunks;
       setUploadTotal(chunks.length);
       if (!batchIds.current.length) batchIds.current = chunks.map((_, chunkIndex) => chunkIndex === 0 ? requestId : crypto.randomUUID());
@@ -228,6 +314,7 @@ export function QuestionImportReview({
           method: 'POST',
           body: JSON.stringify({
             questions: chunk.questions,
+            duplicateChoices:chunkChoices.current[chunkIndex],
             skipped: chunk.skipped,
             sourceFile: validated.sourceFile,
             repaired: repaired || validated.repaired,
@@ -253,7 +340,7 @@ export function QuestionImportReview({
       }
       setLastImportCount(importedCount.current);
       setMessage(
-        `Imported: ${importedCount.current} · Exact duplicates skipped: ${skippedDuplicateCount.current} · Possible duplicates sent for reviewer confirmation: ${flaggedCount.current} · Invalid: ${validated.skipped.length} · Pending review: ${importedCount.current}`,
+        'تم إرسال الأسئلة للمراجعة.',
       );
       setOpen(false);
       setDrafts([]);
@@ -284,7 +371,7 @@ export function QuestionImportReview({
       <section className="rounded-2xl border bg-muted/30 p-6 text-center">
         <LoaderCircle className="mx-auto size-6 animate-spin text-primary" />
         <p className="mt-3 text-sm text-muted-foreground">
-          Checking JSON Import access…
+          Checking Import access…
         </p>
       </section>
     );
@@ -293,7 +380,7 @@ export function QuestionImportReview({
       <section className="rounded-2xl border border-destructive/30 bg-destructive/10 p-6 text-center">
         <h3 className="text-lg font-bold text-destructive">You are suspended</h3>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          JSON Import is temporarily unavailable for this account.
+          Import is temporarily unavailable for this account.
           {access.endsAt
             ? ` Access may return after ${new Date(access.endsAt).toLocaleString()}.`
             : ''}
@@ -320,7 +407,7 @@ export function QuestionImportReview({
             className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
             onChange={e => { void read(e.target.files?.[0]); e.target.value = ''; }} />
         </label>
-        <p className="text-xs text-muted-foreground" dir="auto">{unlimited ? 'JSON أو ملف نصي يحتوي على JSON · عدد الأسئلة غير محدود. راجع الأسئلة قبل إرسالها.' : 'JSON أو ملف نصي يحتوي على JSON · من 1 إلى 200 سؤال · حتى 1.5 MB. راجع الأسئلة قبل إرسالها.'}</p>
+        <p className="text-xs text-muted-foreground" dir="auto">{unlimited ? 'JSON أو ملف نصي يحتوي على JSON · الاستيراد الإداري يرفع الأسئلة على دفعات. راجع الأسئلة قبل إرسالها.' : `JSON أو ملف نصي يحتوي على JSON · حتى ${limits.questionsPerImport} سؤال لكل استيراد · ${limits.importsPerDay} مرات يوميًا · حتى 1.5 MB.`}</p>
         {busy && uploadTotal > 0 && <output className="block text-sm">Uploading batch {uploadProgress + 1} of {uploadTotal}…</output>}
         {reading && <output className="block text-sm">Validating file… · جارٍ التحقق من الملف</output>}
         {drafts.length > 0 && <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg bg-muted p-3">
@@ -360,7 +447,7 @@ export function QuestionImportReview({
           <p className="mt-1 text-sm text-muted-foreground" dir="auto">اختر الإعدادات، وانسخ Prompt إلى أداة الذكاء الاصطناعي مع ملفك، ثم ارفع ملف JSON الناتج هنا لمراجعته. لا يتم إرسال ملفك إلى الذكاء الاصطناعي من داخل الموقع.</p>
           <p className="mt-2 text-sm text-muted-foreground" dir="auto">يتضمن Prompt تصنيف كل سؤال إلى تخصص (specialty) وموضوع (topic). يقرأهما الموقع مباشرة من JSON، ويمكنك مراجعتهما وتعديلهما قبل الرفع.</p>
         </div>
-        {!lecture && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">سيطلب Prompt نقل الأسئلة والخيارات بالترتيب الأصلي دون تخمين. أي سؤال ناقص أو غير مقروء سيُتجاوز وحده مع تسجيل السبب، بينما تستمر معالجة بقية الملف. يدعم اختلاف ترقيم الأسئلة وصفحات PDF الممسوحة والمحتوى المختلط قدر الإمكان.</p>}
+        {!lecture && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">سيطلب Prompt تحويل البنك بدقة، وقراءة النص أو استخدام OCR، وتصحيح الأخطاء الإملائية وفق السياق، وإكمال أربعة خيارات منطقية، وإضافة رقم السؤال والصفحة وشرح الحل.</p>}
         {lecture && <div className="grid min-w-0 gap-4 sm:grid-cols-2">
           <label className="min-w-0 text-sm font-semibold">Question type · نوع السؤال
             <select className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" value={settings.kind} onChange={e => setSettings(s => ({ ...s, kind: e.target.value as QuestionPromptSettings['kind'] }))}>
@@ -417,11 +504,13 @@ export function QuestionImportReview({
       >
         <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-3xl">
           <DialogTitle>Import Review</DialogTitle>
+          {matches[index]?.length>0&&!excluded.includes(index)&&<span className="w-fit rounded-full bg-amber-500/15 px-3 py-1 text-sm font-semibold text-amber-700 dark:text-amber-300">duplication</span>}
           <p>
             تم اكتشاف {drafts.length} سؤالًا · Question {index + 1} of{' '}
             {drafts.length}
           </p>
           <progress aria-label="Question review progress" max={drafts.length || 1} value={index + 1} className="h-2 w-full accent-primary" />
+          {excluded.includes(index)&&<p className="text-sm text-muted-foreground">New question deleted from this import.</p>}
           {draft && (
             <fieldset disabled={busy || uploadProgress > 0} className="min-w-0 space-y-3">
               <legend className="sr-only">Review and edit question</legend>
@@ -499,10 +588,6 @@ export function QuestionImportReview({
               {error}
             </p>
           )}
-          <p className="text-xs text-muted-foreground">
-            Skip Review يتجاوز المراجعة فقط. سيتم رفع جميع الأسئلة دون تجاهل أي
-            سؤال.
-          </p>
           <label className="flex items-start gap-3 rounded-xl border bg-muted/30 p-3 text-sm">
             <input
               type="checkbox"
@@ -514,28 +599,39 @@ export function QuestionImportReview({
           </label>
           <div className="grid grid-cols-2 gap-2 border-t pt-3">
             <button
-              disabled={busy || index === 0}
+              disabled={busy || checking || index === 0}
               className="q-button min-h-11 border"
               onClick={() => setIndex(index - 1)}
             >
               Previous
             </button>
-            {index < drafts.length - 1 ? (
-              <button
-                disabled={busy}
-                className="q-button min-h-11 border"
-                onClick={() => setIndex(index + 1)}
-              >
-                Next
-              </button>
-            ) : <span className="self-center text-center text-sm text-muted-foreground">Last question</span>}
+            <button disabled={busy||checking} className="q-button min-h-11 border" onClick={()=>void next()}>
+              {checking?'Checking…':matches[index]?.length&&!excluded.includes(index)?'Save as duplication':'Next'}
+            </button>
+            {matches[index]?.length>0&&!excluded.includes(index)&&<button disabled={busy||checking} className="q-button col-span-2 min-h-11 border" onClick={()=>{setComparisonIndex(0);setComparison(true);}}>View the duplication</button>}
             <button
-              disabled={busy || !rightsConfirmed}
+              disabled={busy || checking || !rightsConfirmed}
               className="q-button col-span-2 min-h-11 whitespace-normal bg-primary text-primary-foreground"
               onClick={() => void submit()}
             >
-              {busy ? 'Uploading…' : uploadProgress > 0 ? 'Retry remaining batches' : index < drafts.length - 1 ? `Skip Review & submit all ${drafts.length} questions` : `Submit all ${drafts.length} questions for review`}
+              {busy ? 'Uploading…' : uploadProgress > 0 ? 'Retry remaining batches' : index < drafts.length - 1 ? 'Save import' : 'Save import'}
             </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={comparison} onOpenChange={setComparison}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
+          <DialogTitle>View the duplication</DialogTitle>
+          {matches[index]?.length>1&&<select aria-label="Existing question" className="min-h-11 w-full rounded-xl border bg-background px-3" value={comparisonIndex} onChange={e=>setComparisonIndex(Number(e.target.value))}>{matches[index].map((m,n)=><option key={m.entityId} value={n}>Existing question {n+1}</option>)}</select>}
+          <div className="grid min-w-0 gap-4 md:grid-cols-2">
+            {[{title:'Existing question',payload:matches[index]?.[comparisonIndex]?.payload},{title:'New question',payload:draft}].map(item=><article key={item.title} className="min-w-0 space-y-3 rounded-xl border p-4"><h3 className="font-bold">{item.title}</h3><p dir="auto" className="whitespace-pre-wrap break-words">{item.payload?.stem}</p><ol className="space-y-2">{item.payload?.options.map((option,n)=><li key={n} dir="auto" className={`break-words rounded-lg p-2 ${item.payload?.answer===n?'bg-emerald-500/15':'bg-muted'}`}>{optionLabel(n)}. {option}{item.payload?.answer===n?' ✓':''}</li>)}</ol><p dir="auto" className="whitespace-pre-wrap break-words text-sm">{item.payload?.explanation}</p><p dir="auto" className="break-words text-xs text-muted-foreground">{item.payload?.sourceReference}</p></article>)}
+          </div>
+          {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button disabled={checking||busy} className="q-button min-h-11 bg-primary text-primary-foreground" onClick={()=>keepBoth()}>Keep both</button>
+            <button disabled={checking||busy} className="q-button min-h-11 border" onClick={()=>excludeQuestion(index)}>Delete new</button>
+            <button disabled={checking||busy||!matches[index]?.[comparisonIndex]?.canDelete} className="q-button min-h-11 border text-destructive" onClick={()=>void deleteOld(matches[index][comparisonIndex])}>Delete old</button>
+            <button disabled={checking||busy} className="q-button min-h-11 border" onClick={()=>{setComparison(false);setDirty(current=>[...new Set([...current,index])]);}}>Edit new</button>
           </div>
         </DialogContent>
       </Dialog>

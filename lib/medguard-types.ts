@@ -385,6 +385,7 @@ export interface AdminInvite {
 }
 
 export interface QuestionProposalPayload {
+  originalQuestionNumber?: string;
   stem: string;
   options: string[];
   answer: number;

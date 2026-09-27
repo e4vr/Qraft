@@ -846,7 +846,7 @@ function TestEditor({
               onClick={openImport}
             >
               <FileJson className="size-4" />
-              Import JSON
+              Import
             </button>
             <button
               onClick={() => void addQuestion()}
@@ -1084,7 +1084,7 @@ function TestEditor({
         >
           <section className="my-4 max-h-[85dvh] w-full max-w-3xl overflow-y-auto rounded-3xl border bg-card p-4 text-card-foreground shadow-2xl sm:p-6">
             <div className="flex items-start justify-between gap-4">
-              <h2 id="preformed-import-title" className="text-lg font-bold">Import JSON / Use AI</h2>
+              <h2 id="preformed-import-title" className="text-lg font-bold">Import</h2>
               <button
                 type="button"
                 aria-label="Close import options"

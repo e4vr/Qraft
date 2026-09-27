@@ -45,6 +45,7 @@ export class ApiError extends Error {
 }
 
 function mutationTags(path: string, body: BodyInit | null | undefined) {
+  if(path === '/platform/import-preview') return [];
   const tags = new Set(policyFor(path).tags);
   let input: Record<string, unknown> = {};
   if (typeof body === 'string') {
@@ -74,6 +75,8 @@ function mutationTags(path: string, body: BodyInit | null | undefined) {
   }
   if (path.startsWith('/platform/economy-admin')) { tags.add('contributions'); tags.add('economy'); tags.add('import-status'); }
   if (path.startsWith('/platform/import') || path.startsWith('/platform/json-imports')) tags.add('json-import-monitor');
+  if(path === '/platform/import-delete-duplicate') { tags.add('question-catalog');tags.add('collaboration');tags.add('review-queue'); }
+  if(path === '/platform/import-defaults' || (path === '/platform/economy-admin' && ['import-limits','reset-import-limits'].includes(String(input.operation)))) tags.add('subscriptions');
   if (path.startsWith('/preformed/')) tags.add('preformed-tests');
   if (path.startsWith('/auth/')) { tags.add('account'); tags.add('collaboration'); }
   if (path.startsWith('/contact')) tags.add('contact');

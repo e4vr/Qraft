@@ -716,7 +716,7 @@ export function QBankManagement({
 
         {section === 'import' && (
           <section className="min-w-0 rounded-2xl bg-card p-3 ring-1 ring-border sm:p-6">
-            <h2 className="mb-4 text-lg font-bold">Import JSON / Use AI</h2>
+            <h2 className="mb-4 text-lg font-bold">Import</h2>
             <QuestionImportReview bankId={bankId} unlimited={user.role === 'super_admin'} onImported={result=>confirmUpdate(current=>({
               ...current,
               proposals:[...result.proposals,...current.proposals.filter(p=>!result.proposals.some(n=>n.id===p.id))],

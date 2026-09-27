@@ -714,7 +714,7 @@ export function ReviewWorkspace({
                 >
                   <option value="">Choose a method…</option>
                   <option value="json">
-                    JSON import ·{' '}
+                    Import ·{' '}
                     {
                       bulkEligible.filter(
                         (proposal) => proposalMethod(proposal) === 'json',

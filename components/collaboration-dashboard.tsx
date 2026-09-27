@@ -174,7 +174,7 @@ const adminSections: Record<
   'json-imports': {
     icon: Upload,
     description:
-      'Monitor server-side JSON imports, duplicate handling and rejected files.',
+      'Monitor server-side Imports, duplicate handling and rejected files.',
   },
   'ready-tests': {
     icon: Flag,
@@ -693,7 +693,7 @@ export function AdminDashboard({
             ['contact', 'Contact tickets'],
             ['qbanks', 'All QBanks'],
             ['proposals', 'Review queue'],
-            ['json-imports', 'JSON imports'],
+            ['json-imports', 'Imports'],
             ['ready-tests', 'Reported tests'],
             ['question-preview', 'Question preview'],
             ['announcement', 'Announcement bar'],
@@ -1814,6 +1814,7 @@ export function AdminDashboard({
               <JsonImportMonitor
                 key={refreshRevision}
                 qbanks={collaboration.qbanks}
+                members={collaboration.members}
               />
             )}
             {isRoot && tab === 'question-preview' && <QuestionPreview />}

@@ -5477,10 +5477,7 @@ function QuestionManager({
               {user.role !== 'super_admin' && !hasFeature(user.effectivePlan ?? user.tier, 'jsonImport', user.planLimits) && (
                 <LockKeyhole className="size-4" />
               )}
-              Import JSON{' '}
-              {user.role === 'super_admin' || hasFeature(user.effectivePlan ?? user.tier, 'jsonImport', user.planLimits)
-                ? '/ Use AI'
-                : '· Pro'}
+              Import
             </SecondaryButton>
             <PrimaryButton
               tone="contribute"
@@ -5505,7 +5502,7 @@ function QuestionManager({
       />
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
         <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-3xl">
-          <DialogTitle>Import JSON / Use AI</DialogTitle>
+          <DialogTitle>Import</DialogTitle>
           <QuestionImportReview
             bankId={activeQBankId}
             unlimited={user.role === 'super_admin'}

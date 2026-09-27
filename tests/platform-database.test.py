@@ -135,7 +135,8 @@ class ReleaseUpgradeTests(unittest.TestCase):
         for path in migrations:
             if int(path.name[:4]) > 20:
                 db.executescript(path.read_text(encoding='utf-8'))
-        self.assertEqual(db.execute("SELECT * FROM imported_files WHERE id='old-import'").fetchone(), before)
+        original_columns = 'id,user_id,file_name,normalized_name,file_hash,batch_id,source_file,successful_count,skipped_count,report_json,uploaded_at,daily_limit,pending_limit'
+        self.assertEqual(db.execute(f"SELECT {original_columns} FROM imported_files WHERE id='old-import'").fetchone(), before)
         self.assertEqual(db.execute("SELECT status,total_count,successful_count,invalid_count,legacy FROM json_import_runs WHERE id='legacy-old-import'").fetchone(), ('partial',3,2,1,1))
         db.execute(insert, ('repeat-import', 'new-batch'))
         self.assertEqual(db.execute('SELECT count(*) FROM imported_files').fetchone()[0], 2)

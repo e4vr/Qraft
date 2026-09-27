@@ -6,6 +6,7 @@ import type { MemberProfile } from '@/lib/medguard-types';
 import type { PlanId } from '@/features/subscriptions/domain/plan-config';
 
 type EconomyData = {
+  importLimits:{questionsPerImport:number;importsPerDay:number}|null;
   account: { credits_balance: number; lifetime_score: number; trust_score: number } | null;
   ledger: Array<{ id: string; amount: number; reason: string; created_at: string; created_by: string }>;
   rewardHistory: Array<{ id: string; plan: string; status: string; created_at: string; expires_at: string | null }>;
@@ -22,6 +23,8 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
   const [reason, setReason] = useState('');
   const [plan, setPlan] = useState<Exclude<PlanId, 'free'>>('pro');
   const [giftDays, setGiftDays] = useState('30');
+  const [importQuestions,setImportQuestions]=useState('150');
+  const [importTimes,setImportTimes]=useState('5');
   const [blockDays, setBlockDays] = useState('7');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -30,7 +33,8 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
   async function load(target = userId) {
     if (!target) return;
     try {
-      setData(await api<EconomyData>(`/platform/economy-admin?userId=${encodeURIComponent(target)}`));
+      const result=await api<EconomyData>(`/platform/economy-admin?userId=${encodeURIComponent(target)}`);
+      setData(result);setImportQuestions(String(result.importLimits?.questionsPerImport??150));setImportTimes(String(result.importLimits?.importsPerDay??5));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to load account economy.');
     }
@@ -51,6 +55,7 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
     setMessage('');
     try {
       const result = await api<{
+        importLimits?:EconomyData['importLimits'];
         accountDelta?: number;
         transaction?: EconomyData['ledger'][number];
         pass?: EconomyData['rewardHistory'][number];
@@ -67,6 +72,7 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
         if (!current) return current;
         const next: EconomyData = {
           ...current,
+          importLimits:result.importLimits??current.importLimits,
           account: result.accountDelta === undefined
             ? current.account
             : { credits_balance: (current.account?.credits_balance ?? 0) + result.accountDelta, lifetime_score: current.account?.lifetime_score ?? 0, trust_score: current.account?.trust_score ?? 100 },
@@ -92,7 +98,7 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
     <section className="space-y-5">
       <div>
         <h2 className="text-xl font-bold">Contribution economy</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Credits, reward passes, JSON suspensions, reviewer activity and trust status.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Credits, reward passes, Import suspensions, reviewer activity and trust status.</p>
       </div>
       <label className="block text-sm font-semibold">
         Account
@@ -126,7 +132,10 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
           <button disabled={busy || !Number.isInteger(Number(giftDays)) || Number(giftDays)<1 || Number(giftDays)>730} onClick={() => void mutate('grant-reward', { plan, days:Number(giftDays) })} className="q-button mt-3 w-full border">Grant {giftDays || '…'} days</button>
         </article>
         <article className="rounded-2xl border bg-card p-4">
-          <h3 className="font-bold">JSON Import access</h3>
+          <h3 className="font-bold">Import limits & access</h3>
+          <label className="q-ops-field">Total questions per import<input type="number" min="1" max="5000" value={importQuestions} onChange={e=>setImportQuestions(e.target.value)} /></label>
+          <label className="q-ops-field">Imports per user / day (UTC)<input type="number" min="1" max="100" value={importTimes} onChange={e=>setImportTimes(e.target.value)} /></label>
+          <button disabled={busy} className="q-button mt-3 w-full border" onClick={()=>void mutate('import-limits',{questionsPerImport:Number(importQuestions),importsPerDay:Number(importTimes)})}>Save import limits</button>
           <label className="q-ops-field">Suspension days<input type="number" min="1" max="365" value={blockDays} onChange={event => setBlockDays(event.target.value)} /></label>
           <button disabled={busy || !Number.isInteger(Number(blockDays)) || Number(blockDays)<1 || Number(blockDays)>365} onClick={() => void mutate('suspend-json', { days:Number(blockDays) })} className="q-button mt-3 w-full border text-destructive">Suspend for {blockDays || '…'} days</button>
           <button disabled={busy} onClick={() => void mutate('remove-json-suspension')} className="q-button mt-2 w-full border">Remove suspension</button>
@@ -136,7 +145,7 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
         <div className="grid gap-5 lg:grid-cols-2">
           <section className="rounded-2xl border bg-card p-4"><h3 className="font-bold">Credit ledger</h3><div className="mt-3 divide-y text-sm">{data.ledger.slice(0, 20).map((item) => <div key={item.id} className="flex gap-3 py-2"><span className="min-w-0 flex-1">{item.reason}</span><strong>{item.amount > 0 ? '+' : ''}{item.amount}</strong></div>)}</div></section>
           <section className="rounded-2xl border bg-card p-4"><h3 className="font-bold">Reward history</h3><div className="mt-3 divide-y text-sm">{data.rewardHistory.slice(0, 20).map((item) => <div key={item.id} className="flex gap-3 py-2"><span className="min-w-0 flex-1 capitalize">{item.plan}</span><strong className="uppercase">{item.status}</strong></div>)}</div></section>
-          <section className="rounded-2xl border bg-card p-4"><h3 className="font-bold">Duplicate abuse / suspensions</h3><div className="mt-3 divide-y text-sm">{data.duplicateAbuse.slice(0, 20).map((item) => <div key={item.id} className="py-2"><strong>{item.removed_at ? 'Removed' : 'Active/expired'}</strong><p className="text-muted-foreground">{item.reason}</p></div>)}</div></section>
+          <section className="rounded-2xl border bg-card p-4"><h3 className="font-bold">Manual import suspensions</h3><div className="mt-3 divide-y text-sm">{data.duplicateAbuse.slice(0, 20).map((item) => <div key={item.id} className="py-2"><strong>{item.removed_at ? 'Removed' : 'Active/expired'}</strong><p className="text-muted-foreground">{item.reason}</p></div>)}</div></section>
           <section className="rounded-2xl border bg-card p-4"><h3 className="font-bold">Reviewer activity</h3><div className="mt-3 divide-y text-sm">{data.reviewerActivity.slice(0, 20).map((item) => <div key={item.id} className="flex gap-3 py-2"><span className="min-w-0 flex-1">{item.proposal_id}</span><strong className="uppercase">{item.decision}</strong></div>)}</div></section>
           <section className="rounded-2xl border bg-card p-4"><h3 className="font-bold">Contribution history</h3><div className="mt-3 divide-y text-sm">{data.contributionHistory.slice(0, 20).map((item) => <div key={item.id} className="flex gap-3 py-2"><span className="min-w-0 flex-1 capitalize">{item.type.replace('_', ' ')}</span><strong className="uppercase">{item.status}</strong></div>)}</div></section>
           {data.collusionFlags.length > 0 && <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:bg-amber-500/10 lg:col-span-2"><h3 className="font-bold text-amber-900 dark:text-amber-100">Approval pattern flags</h3><div className="mt-3 divide-y text-sm">{data.collusionFlags.map((flag) => <div key={`${flag.reviewer_id}:${flag.author_id}`} className="py-2">Reviewer {flag.reviewer_id} approved author {flag.author_id} {flag.approvals} times ({flag.percentage}%). Manual review recommended.</div>)}</div></section>}

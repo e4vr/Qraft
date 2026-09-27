@@ -21,7 +21,7 @@ export const POLICY_FEATURES = {
   canCreateQBank: 'Create QBanks',
   canCreatePrivateQBank: 'Private QBanks',
   canAddQuestions: 'Add questions',
-  canUseJsonImport: 'JSON imports',
+  canUseJsonImport: 'Imports',
   canUsePrivateNotes: 'Private notes',
   canUseFlashcards: 'Flashcards',
   canContribute: 'Contributions',

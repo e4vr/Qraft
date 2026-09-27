@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-void test('v4.6.0 service worker replaces only Qraft shell caches and avoids mixed static assets', async () => {
+void test('v4.6.1 service worker replaces only Qraft shell caches and avoids mixed static assets', async () => {
   const source = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
   const listeners = new Map();
   const buckets = new Map();
@@ -48,7 +48,7 @@ void test('v4.6.0 service worker replaces only Qraft shell caches and avoids mix
   listeners.get('install')(install);
   await install.promise;
   assert.equal(skipped, 1);
-  assert.ok(buckets.get('qraft-shell-v4.6.0').has('/qraft-mark.svg'));
+  assert.ok(buckets.get('qraft-shell-v4.6.1').has('/qraft-mark.svg'));
 
   const activate = lifecycleEvent();
   listeners.get('activate')(activate);

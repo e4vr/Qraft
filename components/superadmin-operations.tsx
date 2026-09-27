@@ -1065,7 +1065,7 @@ export function PricingAdmin() {
                 <dd>{format(plan.maxFlashcards)}</dd>
               </div>
               <div>
-                <dt>JSON imports / day</dt>
+                <dt>Imports / day</dt>
                 <dd>{plan.jsonImportDailyLimit}</dd>
               </div>
             </dl>

@@ -115,8 +115,10 @@ export async function notifyMutation(request: Request) {
     topics.add('legal-links'); channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'monitoring') {
     topics.add('monitoring');
-  } else if (path[0] === 'platform' && path[1] === 'economy-admin') {
+  } else if (path[0] === 'platform' && (path[1] === 'economy-admin' || path[1] === 'import-defaults')) {
     topics.add('economy');
+    topics.add('import-status');
+    if(path[1] === 'import-defaults') channels.add('catalog');
     topics.add(input.operation === 'grant-reward' ? 'reward-gift' : 'reward');
   } else if (path[0] === 'platform' && path[1] === 'classification') {
     addBank(input.qbankId);
@@ -140,7 +142,7 @@ export async function notifyMutation(request: Request) {
   } else if (path[0] === 'auth') {
     topics.add('account');
     channels.add('access');
-  } else if (path[0] === 'qbanks' || path[1] === 'question') {
+  } else if (path[0] === 'qbanks' || (path[1] === 'question' || path[1] === 'import-delete-duplicate')) {
     topics.add('collaboration'); topics.add('question-catalog');
     channels.add('catalog');
   }

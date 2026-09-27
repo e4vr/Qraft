@@ -2313,27 +2313,28 @@ print(json.dumps(out))`,
         partial.data.proposals[0].payload.sourceReference,
         'Scan.pdf - p.4',
       );
+      await db.prepare("INSERT INTO import_policies VALUES('pro',75,5,?)").bind(new Date().toISOString()).run();
       const duplicateName = await call('pro', '/platform/import', {
         ...request,
         requestId: randomUUID(),
         fileHash: createHash('sha256').update('different').digest('hex'),
       });
       assert.equal(duplicateName.status, 200, JSON.stringify(duplicateName));
-      assert.equal(duplicateName.data.successful, 0);
-      assert.equal(duplicateName.data.skippedDuplicates, 1);
+      assert.equal(duplicateName.data.successful, 1);
+      assert.equal(duplicateName.data.skippedDuplicates, 0);
       const duplicateHash = await call('pro', '/platform/import', {
         ...request,
         requestId: randomUUID(),
         fileName: 'renamed.json',
       });
       assert.equal(duplicateHash.status, 200, JSON.stringify(duplicateHash));
-      assert.equal(duplicateHash.data.successful, 0);
-      assert.equal(duplicateHash.data.skippedDuplicates, 1);
+      assert.equal(duplicateHash.data.successful, 1);
+      assert.equal(duplicateHash.data.skippedDuplicates, 0);
       assert.equal(
         (
           await db
             .prepare(
-              "SELECT count(*) AS value FROM duplicate_attempts WHERE user_id='pro' AND kind='file'",
+              "SELECT count(*) AS value FROM sqlite_master WHERE name='duplicate_attempts'",
             )
             .first()
         ).value,
@@ -2360,7 +2361,7 @@ print(json.dumps(out))`,
         questions: [dailyPayload(4)],
       });
       assert.equal(fourth.status, 403);
-      assert.match(fourth.data.error, /daily JSON import limit/i);
+      assert.match(fourth.data.error, /daily import limit/i);
     },
   );
   await t.test(
@@ -2730,7 +2731,7 @@ print(json.dumps(out))`,
         duplicate.duplicateReview.candidates[0].entityType,
         'pending_proposal',
       );
-      assert.notEqual(
+      assert.equal(
         duplicate.duplicateReview.candidates[0].classification,
         'exact',
       );
@@ -2777,7 +2778,7 @@ print(json.dumps(out))`,
         (
           await db
             .prepare(
-              "SELECT count(*) AS value FROM duplicate_attempts WHERE kind='question' AND reference_id=?",
+              "SELECT count(*) AS value FROM json_import_suspensions WHERE created_by='system' AND user_id=?",
             )
             .bind(first.id)
             .first()
@@ -2848,11 +2849,11 @@ print(json.dumps(out))`,
         (
           await db
             .prepare(
-              "SELECT count(*) AS value FROM duplicate_attempts WHERE user_id='unlimited' AND kind='question' AND confirmed=1",
+              "SELECT count(*) AS value FROM json_import_suspensions WHERE user_id='unlimited' AND created_by='system'",
             )
             .first()
         ).value,
-        1,
+        0,
       );
       assert.equal(
         (

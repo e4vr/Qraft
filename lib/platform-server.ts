@@ -1,3 +1,4 @@
+import { detectImportDuplication, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
 import { env } from 'cloudflare:workers';
 import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { listAdminSubscribers } from './admin-subscribers';
@@ -29,7 +30,6 @@ import { bankAccessState } from './qbank-access-repository';
 import { allocateQuestionIds } from './question-id-repository';
 import { applyEffectiveEntitlement, getEffectiveEntitlement } from './entitlement-server';
 import {
-  ABUSE_LIMITS,
   CONTRIBUTION_CREDITS,
   REWARD_CATALOG,
   contributionBadge,
@@ -316,54 +316,6 @@ function proposalRequiresTwoReviewers(proposal: QuestionProposal) {
         (proposal.editKinds.includes('question_text') ||
           proposal.editKinds.includes('options'))))
   );
-}
-
-async function recordConfirmedDuplicateAttempt(
-  user: Pick<AppUser, 'uid' | 'displayName'>,
-  kind: 'question',
-  contentHash: string,
-  referenceId?: string,
-) {
-  const now = new Date().toISOString();
-  await env.DB.prepare(
-    "INSERT INTO duplicate_attempts(id,user_id,kind,content_hash,reference_id,confirmed,created_at,metadata) VALUES(?,?,?,?,?,1,?,'{}')",
-  ).bind(crypto.randomUUID(), user.uid, kind, contentHash, referenceId ?? null, now).run();
-  const windowStart = new Date(
-    Date.now() - ABUSE_LIMITS.rollingWindowDays * 86_400_000,
-  ).toISOString();
-  const count = await env.DB.prepare(
-    "SELECT count(*) AS value FROM duplicate_attempts WHERE user_id=? AND kind='question' AND confirmed=1 AND created_at>=?",
-  ).bind(user.uid, windowStart).first<{ value: number }>();
-  if ((count?.value ?? 0) < ABUSE_LIMITS.confirmedDuplicateAttempts) return null;
-  const active = await env.DB.prepare(
-    'SELECT ends_at FROM json_import_suspensions WHERE user_id=? AND removed_at IS NULL AND ends_at>? LIMIT 1',
-  ).bind(user.uid, now).first<{ ends_at: string }>();
-  if (active) return active.ends_at;
-  const endsAt = new Date(
-    Date.now() + ABUSE_LIMITS.jsonImportSuspensionDays * 86_400_000,
-  ).toISOString();
-  const id = crypto.randomUUID();
-  await env.DB.batch([
-    env.DB.prepare(`INSERT INTO contribution_accounts(user_id,credits_balance,lifetime_score,trust_score,updated_at)
-      VALUES(?,0,0,90,?)
-      ON CONFLICT(user_id) DO UPDATE SET trust_score=max(0,contribution_accounts.trust_score-10),updated_at=excluded.updated_at`)
-      .bind(user.uid, now),
-    env.DB.prepare(
-      'INSERT INTO json_import_suspensions(id,user_id,reason,starts_at,ends_at,created_by) VALUES(?,?,?,?,?,?)',
-    ).bind(
-      id,
-      user.uid,
-      `${ABUSE_LIMITS.confirmedDuplicateAttempts} confirmed duplicate attempts within ${ABUSE_LIMITS.rollingWindowDays} days`,
-      now,
-      endsAt,
-      'system',
-    ),
-    auditStatement(user, 'json_import_auto_suspended', user.uid, null, {
-      reason: 'confirmed_duplicate_abuse',
-      endsAt,
-    }),
-  ]);
-  return endsAt;
 }
 
 type ImportAttemptStatus =
@@ -775,6 +727,12 @@ export async function platformApi(request: Request, action: string) {
       }
       return json({ ok: true, revision: nextRevision, specialties: stampedSpecialties, topics: stampedTopics, assignments: assignmentValues });
     }
+    if (action === 'import-preview' && request.method === 'POST') {
+      const report=parseQuestionImportReport({sourceFile:text('sourceFile'),questions:input.questions},'',25);
+      if(report.skipped.length) return json({error:'Correct the invalid question before checking duplication.'},400);
+      return importPreview(user,report.questions,text('qbankId'));
+    }
+    if (action === 'import-delete-duplicate' && request.method === 'POST') return deleteImportDuplicate(user,input);
     if (action === 'json-import-status' && request.method === 'GET') {
       const now = new Date().toISOString();
       const suspension = await env.DB.prepare(
@@ -785,6 +743,7 @@ export async function platformApi(request: Request, action: string) {
       return json({
         suspended: Boolean(suspension),
         endsAt: suspension?.ends_at ?? null,
+        ...(await importLimits(user)),
       });
     }
     if (action === 'json-imports') {
@@ -1233,12 +1192,13 @@ export async function platformApi(request: Request, action: string) {
     if (action === 'plan-status' && request.method === 'GET') {
       const plan = user.effectivePlan ?? user.tier;
       const limits = user.planLimits ?? getPlanLimits(plan);
+      const controlledImports=await importLimits(user);
       const monthStart = utcMonthStart();
       const dayStart = utcDayStart();
       const [lifetime, monthly, imports, pending, media] = await env.DB.batch([
         env.DB.prepare('SELECT count(*) AS value FROM test_registry WHERE user_id=?').bind(user.uid),
         env.DB.prepare('SELECT count(*) AS value FROM test_registry WHERE user_id=? AND started_at>=?').bind(user.uid, monthStart),
-        env.DB.prepare('SELECT count(*) AS value FROM imported_files WHERE user_id=? AND uploaded_at>=?').bind(user.uid, dayStart),
+        env.DB.prepare('SELECT count(DISTINCT coalesce(run_id,id)) AS value FROM imported_files WHERE user_id=? AND uploaded_at>=?').bind(user.uid, dayStart),
         env.DB.prepare("SELECT count(*) AS value FROM records WHERE type='questionProposals' AND owner_id=? AND json_extract(payload,'$.status')='pending'").bind(user.uid),
         env.DB.prepare("SELECT coalesce(sum(size),0) AS value FROM media WHERE owner_id=? AND status='ready'").bind(user.uid),
       ]);
@@ -1247,7 +1207,7 @@ export async function platformApi(request: Request, action: string) {
         plan,
         limits: root
           ? { ...limits, canUseJsonImport: true, jsonImportDailyLimit: Number.MAX_SAFE_INTEGER, jsonQuestionsPerImport: Number.MAX_SAFE_INTEGER, maxPendingReviewQuestions: Number.MAX_SAFE_INTEGER }
-          : limits,
+          : {...limits,jsonQuestionsPerImport:controlledImports.questionsPerImport,jsonImportDailyLimit:controlledImports.importsPerDay},
         usage: {
           lifetimeStartedExams: value(lifetime),
           monthlyStartedExams: value(monthly),
@@ -1410,6 +1370,24 @@ export async function platformApi(request: Request, action: string) {
       }
       return json({ error: 'Invalid reward operation.' }, 400);
     }
+    if (action === 'import-controls' && request.method === 'GET') {
+      if(!root) return json({error:'Superadmin MFA required.'},403);
+      const targetId=url.searchParams.get('userId')??'';
+      const target=await profileById(targetId);
+      if(!target)return json({error:'Account not found.'},404);
+      const effective=await applyEffectiveEntitlement(JSON.parse(target.profile_json));
+      const suspension=await env.DB.prepare('SELECT ends_at FROM json_import_suspensions WHERE user_id=? AND removed_at IS NULL AND starts_at<=? AND ends_at>? ORDER BY ends_at DESC LIMIT 1').bind(targetId,new Date().toISOString(),new Date().toISOString()).first<{ends_at:string}>();
+      return json({importLimits:await importLimits(effective),endsAt:suspension?.ends_at??null});
+    }
+    if (action === 'import-defaults') {
+      if(!root) return json({error:'Superadmin MFA required.'},403);
+      if(request.method==='GET') return json(await env.DB.prepare('SELECT questions_per_import AS questionsPerImport,imports_per_day AS importsPerDay FROM import_defaults WHERE id=1').first());
+      if(request.method!=='POST') return json({error:'Method not allowed.'},405);
+      const q=input.questionsPerImport,t=input.importsPerDay;
+      if((q!==null&&(!Number.isInteger(q)||Number(q)<1||Number(q)>5000))||(t!==null&&(!Number.isInteger(t)||Number(t)<1||Number(t)>100))||text('reason').length<3) return json({error:'Choose 1–5000 questions, 1–100 imports per day, and an audit reason.'},400);
+      await env.DB.batch([env.DB.prepare('UPDATE import_defaults SET questions_per_import=?,imports_per_day=? WHERE id=1').bind(q,t),auditStatement(user,'import_defaults_updated','all-users',null,{questionsPerImport:q,importsPerDay:t,reason:text('reason')})]);
+      return json({questionsPerImport:q,importsPerDay:t});
+    }
     if (action === 'economy-admin') {
       if (!root) return json({ error: 'Superadmin MFA required.' }, 403);
       const targetUserId = url.searchParams.get('userId') || text('userId');
@@ -1428,13 +1406,29 @@ export async function platformApi(request: Request, action: string) {
             HAVING count(*)>=5 AND percentage>=80`).bind(targetUserId, targetUserId),
           env.DB.prepare("SELECT id,json_extract(payload,'$.status') AS status,json_extract(payload,'$.type') AS type,updated_at FROM records WHERE type='questionProposals' AND owner_id=? ORDER BY updated_at DESC LIMIT 100").bind(targetUserId),
         ]);
-        return json({ account: account.results[0] ?? null, ledger: ledger.results, rewardHistory: passes.results, duplicateAbuse: suspensions.results, reviewerActivity: reviews.results, collusionFlags: collusionFlags.results, contributionHistory: contributionHistory.results });
+        const target=await profileById(targetUserId);
+        const policy=target ? await importLimits(await applyEffectiveEntitlement(JSON.parse(target.profile_json))) : null;
+        return json({ importLimits:policy, account: account.results[0] ?? null, ledger: ledger.results, rewardHistory: passes.results, duplicateAbuse: suspensions.results, reviewerActivity: reviews.results, collusionFlags: collusionFlags.results, contributionHistory: contributionHistory.results });
       }
       if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
       const operation = text('operation');
       const reason = text('reason');
       if (!reason) return json({ error: 'A reason is required.' }, 400);
       const now = new Date().toISOString();
+      if (operation === 'reset-import-limits') {
+        await env.DB.batch([env.DB.prepare('DELETE FROM import_policies WHERE user_id=?').bind(targetUserId),auditStatement(user,'import_limits_reset',targetUserId,null,{reason})]);
+        return json({ok:true});
+      }
+      if (operation === 'import-limits') {
+        const questions=Number(input.questionsPerImport), times=Number(input.importsPerDay);
+        if(!Number.isInteger(questions)||questions<1||questions>5000||!Number.isInteger(times)||times<1||times>100) return json({error:'Choose 1–5000 questions and 1–100 imports per day.'},400);
+        if(!(await profileById(targetUserId))) return json({error:'Account not found.'},404);
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO import_policies(user_id,questions_per_import,imports_per_day,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET questions_per_import=excluded.questions_per_import,imports_per_day=excluded.imports_per_day,updated_at=excluded.updated_at').bind(targetUserId,questions,times,now),
+          auditStatement(user,'import_limits_updated',targetUserId,null,{questionsPerImport:questions,importsPerDay:times,reason})
+        ]);
+        return json({ok:true,importLimits:{questionsPerImport:questions,importsPerDay:times}});
+      }
       if (operation === 'adjust-credits') {
         const amount = Number(input.amount);
         if (!Number.isInteger(amount) || amount === 0 || Math.abs(amount) > 1_000_000)
@@ -1471,7 +1465,7 @@ export async function platformApi(request: Request, action: string) {
         return json({ ok: true, pass: { id, plan, duration, duration_unit: durationUnit, duration_days:days, status: 'available', created_at: now, expires_at: null } });
       }
       if (operation === 'suspend-json') {
-        const days = Number(input.days ?? ABUSE_LIMITS.jsonImportSuspensionDays);
+        const days = Number(input.days ?? 7);
         if (!Number.isInteger(days) || days < 1 || days > 365)
           return json({ error: 'Invalid suspension duration.' }, 400);
         const endsAt = new Date(Date.now() + days * 86_400_000).toISOString();
@@ -1820,18 +1814,6 @@ export async function platformApi(request: Request, action: string) {
       const savedProposal = saved ? JSON.parse(saved.payload) as QuestionProposal : undefined;
       if (!savedProposal || savedProposal.duplicateReview?.sourceFingerprint !== sourceFingerprint || savedProposal.duplicateReview.status !== 'resolved')
         return json({ error: 'This duplicate finding became stale. Refresh before deciding.' }, 409);
-      if (decision === 'rejected_as_duplicate') {
-        const authorRow = await profileById(proposal.proposedById);
-        if (authorRow) {
-          const author = JSON.parse(authorRow.profile_json) as MemberProfile;
-          await recordConfirmedDuplicateAttempt(
-            { uid: proposal.proposedById, displayName: author.displayName },
-            'question',
-            sourceFingerprint,
-            selectedCurrentFinding.entityId,
-          );
-        }
-      }
       return json({
         ok: true,
         decision,
@@ -2607,7 +2589,7 @@ export async function platformApi(request: Request, action: string) {
         return rejectImport(
           context,
           'PLAN_ACCESS_DENIED',
-          'JSON Import is available with Pro.',
+          'Import is available with Pro.',
           403,
         );
       if (input.rightsConfirmed === false)
@@ -2624,7 +2606,7 @@ export async function platformApi(request: Request, action: string) {
         return rejectImport(
           context,
           'IMPORT_SUSPENDED',
-          `JSON Import is suspended until ${suspension.ends_at}.`,
+          `Import is suspended until ${suspension.ends_at}.`,
           403,
         );
       const state = await bankAccessState(text('qbankId'));
@@ -2642,7 +2624,7 @@ export async function platformApi(request: Request, action: string) {
       const rawImport = typeof input.questions === 'string'
         ? input.questions
         : { sourceFile: text('sourceFile'), questions: input.questions, skipped: input.skipped };
-      const report = parseQuestionImportReport(rawImport, '', root ? Number.POSITIVE_INFINITY : 200);
+      const report = parseQuestionImportReport(rawImport, '', root ? 500 : 200);
       context.sourceFile = report.sourceFile;
       if (!report.questions.length)
         return rejectImport(
@@ -2657,44 +2639,18 @@ export async function platformApi(request: Request, action: string) {
             report: report.skipped,
           },
         );
-      if (!root && report.questions.length > limits.jsonQuestionsPerImport)
+      const controlledLimits=await importLimits(user);
+      if(root && report.questions.length>250) return rejectImport(context,'ADMIN_BATCH_LIMIT','Administrative batches allow at most 250 questions; split the file into smaller batches.',400);
+      if (!root && report.questions.length > Math.min(150,controlledLimits.questionsPerImport))
         return rejectImport(
           context,
           'QUESTION_LIMIT_REACHED',
-          `${limits.name} allows at most ${limits.jsonQuestionsPerImport} questions per JSON import.`,
+          `This account allows at most ${controlledLimits.questionsPerImport} questions per import; upload in batches of at most 150.`,
           403,
         );
-      const candidateRows = await env.DB.prepare(
-        "SELECT id,type,payload FROM records WHERE qbank_id=? AND type IN ('sharedQuestions','questionProposals') AND (type='sharedQuestions' OR json_extract(payload,'$.status')='pending')",
-      ).bind(bank.id).all<{ id: string; type: string; payload: string }>();
-      const candidates = candidateRows.results.map((row) => {
-        const parsed = JSON.parse(row.payload) as Question | QuestionProposal;
-        const payload = row.type === 'questionProposals'
-          ? (parsed as QuestionProposal).payload
-          : (parsed as Question);
-        return prepareDuplicateCandidate({
-          entityId: row.id,
-          entityType: row.type === 'questionProposals' ? 'pending_proposal' : 'approved_question',
-          qbankId: bank.id,
-          questionId: row.type === 'sharedQuestions' ? (parsed as Question).questionId : undefined,
-          payload,
-        });
-      });
-      const preparedCandidates = [...candidates];
-      const exactFingerprints = new Set(candidates.map((candidate) => candidate.prepared.fingerprint));
-      let skippedDuplicates = 0;
-      const decisionRows = await env.DB.prepare(
-        'SELECT proposal_id,source_fingerprint,candidate_entity_type,candidate_entity_id,candidate_fingerprint FROM duplicate_pair_decisions WHERE qbank_id=?',
-      ).bind(bank.id).all<{
-        proposal_id: string;
-        source_fingerprint: string;
-        candidate_entity_type: string;
-        candidate_entity_id: string;
-        candidate_fingerprint: string;
-      }>();
-      const suppressedPairs = new Set(decisionRows.results.map((decision) =>
-        `${decision.proposal_id}|${decision.source_fingerprint}|${decision.candidate_entity_type}|${decision.candidate_entity_id}|${decision.candidate_fingerprint}`,
-      ));
+      const candidates = await importCandidates(bank.id,report.questions);
+      const preparedCandidates: ReturnType<typeof prepareDuplicateCandidate>[] = [...candidates];
+      const skippedDuplicates = 0;
       const accepted: Array<{
         id: string;
         payload: QuestionProposal['payload'];
@@ -2708,35 +2664,27 @@ export async function platformApi(request: Request, action: string) {
           qbankId: bank.id,
           payload,
         });
-        if (exactFingerprints.has(prepared.prepared.fingerprint)) {
-          skippedDuplicates += 1;
-          continue;
+        let duplicateReview: QuestionProposal['duplicateReview'] = detectImportDuplication(payload,bank.id,preparedCandidates,proposalId);
+        const choice=Array.isArray(input.duplicateChoices)?input.duplicateChoices[index]:undefined;
+        if(duplicateReview && choice?.sourceFingerprint===duplicateFingerprint(payload) && Array.isArray(choice.candidateFingerprints) && duplicateReview.candidates.every(candidate=>choice.candidateFingerprints.includes(candidate.candidateFingerprint))) {
+          duplicateReview={...duplicateReview,status:'resolved',resolutions:duplicateReview.candidates.map(candidate=>({decision:'kept_both',candidateEntityId:candidate.entityId,reviewerId:user.uid,reviewerName:user.displayName,reviewedAt:now,note:'Author explicitly selected Save as duplication during import review.'}))};
         }
-        const duplicateReview = detectDuplicateReview({
-          incoming: payload,
-          qbankId: bank.id,
-          sourceEntityId: proposalId,
-          now,
-          suppressedPairs,
-          candidates: preparedCandidates,
-        });
         accepted.push({
           id: proposalId,
           payload,
           duplicateReview,
         });
-        exactFingerprints.add(prepared.prepared.fingerprint);
         preparedCandidates.push(prepared);
       }
       if (!root && accepted.length) {
         const dailyImports = await env.DB.prepare(
-          'SELECT count(*) AS value FROM imported_files WHERE user_id=? AND uploaded_at>=?',
-        ).bind(user.uid, utcDayStart()).first<{ value: number }>();
-        if ((dailyImports?.value ?? 0) >= limits.jsonImportDailyLimit)
+          'SELECT count(DISTINCT coalesce(run_id,id)) AS value FROM imported_files WHERE user_id=? AND uploaded_at>=? AND coalesce(run_id,id)<>?',
+        ).bind(user.uid, utcDayStart(),uploadSessionId).first<{ value: number }>();
+        if ((dailyImports?.value ?? 0) >= controlledLimits.importsPerDay)
           return rejectImport(
             context,
             'DAILY_LIMIT_REACHED',
-            `You've reached your daily JSON import limit (${limits.jsonImportDailyLimit}).`,
+            `You've reached your daily import limit (${controlledLimits.importsPerDay}).`,
             403,
           );
       }
@@ -2823,7 +2771,7 @@ export async function platformApi(request: Request, action: string) {
         requestId: context.requestId,
         chunkIndex: context.chunkIndex,
         chunkCount: context.chunkCount,
-        reuploadPolicy: 'question-level-deduplication' as const,
+        reuploadPolicy: 'question-text-review' as const,
         total: proposals.length + skippedDuplicates + report.skipped.length,
         successful: proposals.length,
         failed: report.skipped.length,
@@ -2865,8 +2813,8 @@ export async function platformApi(request: Request, action: string) {
             'INSERT INTO import_batches(id,user_id,result) VALUES(?,?,?)',
           ).bind(batchId, user.uid, JSON.stringify(result)),
           env.DB.prepare(
-            'INSERT INTO imported_files(id,user_id,file_name,normalized_name,file_hash,batch_id,source_file,successful_count,skipped_count,report_json,uploaded_at,daily_limit,pending_limit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
-          ).bind(crypto.randomUUID(), user.uid, uploadedFileName, normalizedName, fileHash, batchId, report.sourceFile, proposals.length, report.skipped.length, JSON.stringify(report.skipped), now, root ? Number.MAX_SAFE_INTEGER : limits.jsonImportDailyLimit, root ? Number.MAX_SAFE_INTEGER : limits.maxPendingReviewQuestions),
+            'INSERT INTO imported_files(id,user_id,file_name,normalized_name,file_hash,batch_id,source_file,successful_count,skipped_count,report_json,uploaded_at,daily_limit,pending_limit,run_id,question_limit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          ).bind(crypto.randomUUID(), user.uid, uploadedFileName, normalizedName, fileHash, batchId, report.sourceFile, proposals.length, report.skipped.length, JSON.stringify(report.skipped), now, root ? Number.MAX_SAFE_INTEGER : controlledLimits.importsPerDay, root ? Number.MAX_SAFE_INTEGER : limits.maxPendingReviewQuestions, uploadSessionId, root ? Number.MAX_SAFE_INTEGER : controlledLimits.questionsPerImport),
           env.DB.prepare(
             "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'questionProposals',json_extract(value,'$.id'),?,?,value,? FROM json_each(?)",
           ).bind(bank.id, user.uid, now, JSON.stringify(proposals)),
@@ -2896,11 +2844,12 @@ export async function platformApi(request: Request, action: string) {
           ...monitoringStatements,
         ]);
       } catch (error) {
+        if (String(error).includes('JSON_IMPORT_QUESTION_LIMIT')) return rejectImport(context,'QUESTION_LIMIT_REACHED',`This account allows ${controlledLimits.questionsPerImport} questions per import.`,403);
         if (String(error).includes('JSON_IMPORT_DAILY_LIMIT'))
           return rejectImport(
             context,
             'DAILY_LIMIT_REACHED',
-            `You've reached your daily JSON import limit (${limits.jsonImportDailyLimit}).`,
+            `You've reached your daily import limit (${controlledLimits.importsPerDay}).`,
             403,
           );
         if (String(error).includes('JSON_IMPORT_PENDING_LIMIT'))
