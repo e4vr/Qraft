@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api-client';
 import type { QBankMembership } from '@/lib/medguard-types';
 export function ReviewerSearch({
@@ -15,9 +15,12 @@ export function ReviewerSearch({
       { uid: string; email: string; name: string }[]
     >([]),
     [busy, setBusy] = useState(false),
+    [adding, setAdding] = useState(false),
+    [error, setError] = useState(''),
     [message, setMessage] = useState('');
+  const addingRef = useRef(false);
   useEffect(() => {
-    if (!open || !bankId) return;
+    if (!open || !bankId || adding) return;
     let live = true;
     const timer = setTimeout(() => {
       setBusy(true);
@@ -28,7 +31,7 @@ export function ReviewerSearch({
           if (live) setUsers(r.users);
         })
         .catch((e) => {
-          if (live) setMessage(e.message);
+          if (live) setError(e instanceof Error ? e.message : 'Unable to find reviewers. Please try again.');
         })
         .finally(() => {
           if (live) setBusy(false);
@@ -38,9 +41,11 @@ export function ReviewerSearch({
       live = false;
       clearTimeout(timer);
     };
-  }, [bankId, search, open]);
+  }, [bankId, search, open, adding]);
   async function add(uid: string) {
-    setBusy(true);
+    if (addingRef.current || busy) return;
+    addingRef.current = true;
+    setAdding(true); setError(''); setMessage('');
     try {
       const r = await api<{ membership: QBankMembership }>(
         '/platform/reviewers',
@@ -51,9 +56,10 @@ export function ReviewerSearch({
       setOpen(false);
       setSearch('');
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Unable to add reviewer.');
+      setError(e instanceof Error ? e.message : 'Unable to add reviewer.');
     } finally {
-      setBusy(false);
+      addingRef.current = false;
+      setAdding(false);
     }
   }
   return (
@@ -63,15 +69,16 @@ export function ReviewerSearch({
       </label>
       <input
         id={`reviewer-${bankId}`}
-        disabled={!bankId}
+        disabled={!bankId || adding}
         className="w-full rounded-xl border bg-background px-3 py-3"
         placeholder="Search reviewer name or email"
         value={search}
-        onFocus={() => setOpen(true)}
+        onFocus={() => { if (!open) { setBusy(true); setError(''); setOpen(true); } }}
         onKeyDown={(e) => {
           if (e.key === 'Escape') setOpen(false);
         }}
         onChange={(e) => {
+          setBusy(true); setUsers([]); setError(''); setMessage('');
           setSearch(e.target.value);
           setOpen(true);
         }}
@@ -83,7 +90,8 @@ export function ReviewerSearch({
           </p>
           {users.map((u) => (
             <button
-              disabled={busy}
+              type="button"
+              disabled={busy || adding}
               key={u.uid}
               onClick={() => void add(u.uid)}
               className="block w-full rounded-lg px-3 py-3 text-start hover:bg-muted"
@@ -94,16 +102,17 @@ export function ReviewerSearch({
               </span>
             </button>
           ))}
-          {!users.length && !busy && (
+          {!users.length && !busy && !error && (
             <p className="p-3 text-sm">No users found.</p>
           )}
-          {busy && <output className="p-3">Loading…</output>}
-          <button className="q-button border" onClick={() => setOpen(false)}>
+          {(busy || adding) && <output className="p-3">{adding ? 'Adding reviewer…' : 'Loading…'}</output>}
+          <button type="button" className="q-button border" disabled={adding} onClick={() => setOpen(false)}>
             Close suggestions
           </button>
         </div>
       )}
-      {message && <output className="mt-2 text-xs">{message}</output>}
+      {error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}
+      {message && !error && <output className="mt-2 text-xs">{message}</output>}
     </div>
   );
 }

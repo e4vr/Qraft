@@ -1,4 +1,4 @@
-const CACHE_NAME = 'qraft-shell-v4.6.1';
+const CACHE_NAME = 'qraft-shell-v4.6.3';
 const APP_SHELL = [
   '/offline',
   '/manifest.webmanifest',
@@ -47,6 +47,13 @@ self.addEventListener('message', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.pathname.startsWith('/api/')) return;
+  // An existing worker can still control a development tab after a restart.
+  // Vite modules change at stable URLs and must never use the shell cache.
+  if (
+    url.pathname.startsWith('/@') ||
+    url.pathname.startsWith('/node_modules/') ||
+    /\.(?:tsx?|jsx)$/.test(url.pathname)
+  ) return;
   if (event.request.method !== 'GET' || url.origin !== self.location.origin)
     return;
   const staticAsset = ['script', 'style', 'font', 'image'].includes(

@@ -92,6 +92,7 @@ export function canEditBank(
   bank: QBank,
   memberships: QBankMembership[],
 ): boolean {
+  if (user.role === 'super_admin') return true;
   if (canManageBank(user, bank)) return true;
   if (bank.essential || bank.id === 'smle-gs') return false;
   return bankRoleFor(user, bank, memberships) === 'editor';

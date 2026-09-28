@@ -436,7 +436,7 @@ export function QBankFolderManager({
               </select>
             ) : (
               <label className="mt-4 block text-sm font-semibold">
-                Type حذف to confirm
+                Type DELETE to confirm
                 <input
                   value={confirmation}
                   onChange={(e) => setConfirmation(e.target.value)}
@@ -456,7 +456,7 @@ export function QBankFolderManager({
                 disabled={
                   busy ||
                   (deleteMode === 'cascade' &&
-                    (confirmation !== 'حذف' || deletingHasEssential))
+                    (confirmation !== 'DELETE' || deletingHasEssential))
                 }
                 onClick={() => void removeFolder()}
                 className="q-button w-full bg-red-600 text-white hover:bg-red-700"

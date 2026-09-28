@@ -88,11 +88,14 @@ function operationMatchesSaved(
 
 async function sendStateOperation(
   operation: StateSyncOperation,
+  keepalive = false,
 ): Promise<StateSyncResponse> {
   const path = operationPath(operation.kind);
   const request = (baseRevision: number, payload: Record<string, unknown>) =>
     api<StateSyncResponse>(path, {
       method: 'PUT',
+      keepalive,
+      expectedUserId: operation.uid,
       body: JSON.stringify({
         ...payload,
         baseRevision,
@@ -101,7 +104,7 @@ async function sendStateOperation(
     });
 
   try {
-    return await request(operation.baseRevision, operation.payload);
+    return await request(stateRevision.get(operation.uid) ?? operation.baseRevision, operation.payload);
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 409) throw error;
     const remote = error.payload.state as AppState | undefined;
@@ -136,11 +139,19 @@ async function sendStateOperation(
 
 async function flushOutboxUnlocked(
   uid: string,
+  keepalive = false,
 ): Promise<StateSyncResponse | undefined> {
   let latest: StateSyncResponse | undefined;
-  for (const operation of await loadStateSyncOutbox(uid)) {
-    await noteStateSyncAttempt(uid, operation.id);
-    const result = await sendStateOperation(operation);
+  for (let count = 0; count < (keepalive ? 1 : 50); count++) {
+    const next = (await loadStateSyncOutbox(uid))[0];
+    if (!next) break;
+    if (keepalive && new TextEncoder().encode(JSON.stringify(next.payload)).byteLength > 60_000) break;
+    const operation = await noteStateSyncAttempt(uid, next.id);
+    if (!operation) continue; // A newer unsent checkpoint replaced this one.
+    const result = await sendStateOperation(operation, keepalive);
+    if (result.ok !== true || !result.state || result.state.version !== 1 ||
+        !Number.isSafeInteger(result.revision) || result.revision < 0)
+      throw new ApiError('The server did not confirm your changes. They remain saved locally.', 502, {});
     stateRevision.set(uid, result.revision);
     lastSavedState.set(uid, JSON.stringify(cloudState(result.state)));
     setApiCache(
@@ -171,7 +182,7 @@ export async function loadCloudState(
     state: AppState | null;
     revision: number;
     updatedAt?: string;
-  }>('/state', { cacheScope: uid });
+  }>('/state', { cacheScope: uid, expectedUserId: uid });
   const state = result.state ?? undefined;
   stateRevision.set(uid, result.revision ?? 0);
   if (state) lastSavedState.set(uid, JSON.stringify(cloudState(state)));
@@ -227,6 +238,7 @@ async function queueStateOperation(
     attempts: 0,
   };
   await enqueueStateSync(operation);
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return undefined;
   return withStateSyncLock(uid, () => flushOutboxUnlocked(uid));
 }
 
@@ -285,17 +297,10 @@ export function saveBestEffortStateCheckpoint(
     createdAt: new Date().toISOString(),
     attempts: 0,
   };
-  void enqueueStateSync(operation);
-  const body = JSON.stringify({
-    ...operation.payload,
-    baseRevision: operation.baseRevision,
-    operationId: operation.id,
-  });
-  void fetch(`/api/cloudflare${operationPath(kind)}`, {
-    method: 'PUT',
-    credentials: 'same-origin',
-    keepalive: true,
-    headers: { 'content-type': 'application/json' },
-    body,
+  // Persist first. Large payloads exceed the browser's shared keepalive budget;
+  // leave them queued for the next online session instead of issuing doomed PUTs.
+  void enqueueStateSync(operation).then(() => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    return withStateSyncLock(uid, () => flushOutboxUnlocked(uid, true));
   }).catch(() => undefined);
 }

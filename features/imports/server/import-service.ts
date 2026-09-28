@@ -20,6 +20,8 @@ import { bankAccessState } from '@/lib/qbank-access-repository';
 import { json } from '@/server/http/response';
 import { getPlanLimits } from '@/features/subscriptions/domain/plan-config';
 import { compactSourceReference } from '@/lib/question-import';
+import { ImportDuplicateIndex } from '@/features/imports/domain/import-duplicate-index';
+export { ImportDuplicateIndex };
 
 export async function importLimits(user: AppUser) {
   const policy = await env.DB.prepare(
@@ -51,17 +53,16 @@ export function detectImportDuplication(
   bankId: string,
   candidates: PreparedDuplicateCandidate[],
   sourceEntityId = '',
+  index = new ImportDuplicateIndex(candidates),
 ) {
   const normalized = normalizeDuplicateText(incoming.stem);
-  const sameText = candidates.filter(
-    (c) => c.qbankId === bankId && c.prepared.stem === normalized,
-  );
+  const sameText = index.exact(bankId, normalized);
   if (!sameText.length)
     return detectDuplicateReview({
       incoming,
       qbankId: bankId,
       sourceEntityId,
-      candidates: candidates.filter((c) => c.qbankId === bankId).slice(0, 40),
+      candidates: index.near(bankId, normalized),
     });
   const matches = sameText.map((c) => ({
     entityId: c.entityId,
@@ -88,6 +89,7 @@ export function detectImportDuplication(
     candidates: [...matches].slice(0, 3),
   };
 }
+
 export async function importCandidates(
   bankId: string,
   questions: QuestionProposalPayload[],
@@ -100,22 +102,25 @@ export async function importCandidates(
   const stems = [
     ...new Set(questions.map((q) => normalizeDuplicateText(q.stem))),
   ];
+  const searches: D1PreparedStatement[] = [];
   // One indexed full-text query per 25-question batch, with a bounded result.
   for (let offset = 0; offset < stems.length; offset += 25) {
     const phrases = stems.slice(offset, offset + 25).flatMap((stem) => {
       const words = stem.match(/[\p{L}\p{N}]+/gu) ?? [];
       return words.length
-        ? [quote(words.join(' ')), quote(words.slice(0, 6).join(' '))]
+        ? [quote(words.join(' ')), quote(words.slice(0, 6).join(' ')), quote(words.slice(-6).join(' '))]
         : [];
     });
     if (!phrases.length) continue;
     const query = `bank:${quote(bankId)} AND stem:(${[...new Set(phrases)].join(' OR ')})`;
-    const rows = await env.DB.prepare(
+    searches.push(env.DB.prepare(
       `SELECT r.id,r.type,r.payload FROM import_question_search s JOIN records r ON r.rowid=s.rowid WHERE import_question_search MATCH ? AND r.qbank_id=? AND (r.type='sharedQuestions' OR json_extract(r.payload,'$.status')='pending') ORDER BY bm25(import_question_search) LIMIT 1000`,
     )
-      .bind(query, bankId)
-      .all<{ id: string; type: string; payload: string }>();
-    for (const row of rows.results) unique.set(row.id, row);
+      .bind(query, bankId));
+  }
+  if (searches.length) {
+    const results = await env.DB.batch<{ id: string; type: string; payload: string }>(searches);
+    for (const result of results) for (const row of result.results) unique.set(`${row.type}:${row.id}`, row);
   }
   return [...unique.values()].map((row) => {
     const parsed = JSON.parse(row.payload) as Question & QuestionProposal;
@@ -145,17 +150,17 @@ export async function importPreview(
     bank = state.qbanks.find((b) => b.id === bankId);
   if (!bank || !canAccessBank(user, bank, state.memberships))
     return json({ error: 'QBank access required.' }, 403);
-  if (questions.length > 25)
-    return json({ error: 'Review at most 25 questions per request.' }, 400);
+  if (questions.length > 100)
+    return json({ error: 'Review at most 100 questions per request.' }, 400);
   const candidates = await importCandidates(bankId, questions);
+  const index = new ImportDuplicateIndex(candidates);
+  const byIdentity = new Map(candidates.map(candidate => [`${candidate.entityType}:${candidate.entityId}`, candidate]));
   return json(
     {
       matches: questions.map((payload) => {
-        const review = detectImportDuplication(payload, bankId, candidates);
+        const review = detectImportDuplication(payload, bankId, candidates, '', index);
         return (review?.candidates ?? []).map((finding) => {
-          const candidate = candidates.find(
-            (c) => c.entityId === finding.entityId,
-          )!;
+          const candidate = byIdentity.get(`${finding.entityType}:${finding.entityId}`)!;
           return {
             ...finding,
             payload: {

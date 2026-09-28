@@ -1,5 +1,8 @@
-import { detectImportDuplication, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
+import { detectImportDuplication, ImportDuplicateIndex, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
 import { env } from 'cloudflare:workers';
+import { directQuestionEdit } from '@/features/qbanks/server/direct-question-edit';
+import { importSettings } from '@/features/imports/server/import-settings';
+import { validImportSettings } from '@/features/imports/domain/import-settings';
 import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { listAdminSubscribers } from './admin-subscribers';
 import { reviewerPerformance } from './reviewer-performance-server';
@@ -10,6 +13,7 @@ import {
 } from '@/features/auth/server/auth-service';
 import { assertSameOrigin, readJson } from '@/server/http/request';
 import { json } from '@/server/http/response';
+import { ValidationError } from '@/server/http/errors';
 import {
   canAccessBank,
   canEditBank,
@@ -47,6 +51,11 @@ import {
   duplicateFingerprint,
   prepareDuplicateCandidate,
 } from '@/features/duplicates/domain/duplicate-detection';
+
+function validatedImportReport(...args: Parameters<typeof parseQuestionImportReport>) {
+  try { return parseQuestionImportReport(...args); }
+  catch (error) { throw new ValidationError(error instanceof Error ? error.message : 'Invalid question file.'); }
+}
 
 type FinalizedDuplicateCandidate = {
   status: 'approved' | 'rejected';
@@ -207,7 +216,7 @@ type Discount = {
   allowed_plans: string;
 };
 async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'pro') {
-  if (requestedPlan === 'free') throw new Error('Choose a paid plan.');
+  if (requestedPlan === 'free') throw new ValidationError('Choose a paid plan.');
   const configured = await env.DB.prepare(
     'SELECT coalesce(price_halalas,price_sar_year*100) AS price,policy_json FROM plan_prices WHERE plan=?',
   )
@@ -227,29 +236,29 @@ async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'pro')
         .first<Discount>()
     : null;
   if (code && !discount)
-    throw new Error('كود الخصم غير صحيح / Invalid discount code.');
+    throw new ValidationError('Invalid discount code.');
   if (discount) {
     const now = new Date().toISOString();
     if (!discount.enabled)
-      throw new Error('كود الخصم غير مفعّل / Code disabled.');
+      throw new ValidationError('This discount code is disabled.');
     if (discount.starts_at && Date.parse(discount.starts_at) > Date.parse(now))
-      throw new Error('لم يبدأ الكود بعد / Code not yet active.');
+      throw new ValidationError('This discount code is not active yet.');
     if (discount.expires_at && Date.parse(discount.expires_at) <= Date.parse(now))
-      throw new Error('انتهت صلاحية الكود / Code expired.');
+      throw new ValidationError('This discount code has expired.');
     if (discount.max_uses !== null && discount.uses >= discount.max_uses)
-      throw new Error(
-        'تم بلوغ الحد الأقصى لاستخدام الكود / Usage limit reached.',
+      throw new ValidationError(
+        'This discount code has reached its usage limit.',
       );
     const allowedPlans = JSON.parse(discount.allowed_plans || '[]') as unknown[];
     if (!allowedPlans.includes(requestedPlan))
-      throw new Error('This code is not valid for the selected plan.');
+      throw new ValidationError('This code is not valid for the selected plan.');
     const used = await env.DB.prepare(
       "SELECT count(*) AS n FROM subscription_events WHERE user_id=? AND code_id=? AND status='success' AND action='discount_redeemed'",
     )
       .bind(user.uid, discount.id)
       .first<{ n: number }>();
     if (discount.per_user !== null && (used?.n ?? 0) >= discount.per_user)
-      throw new Error('استخدمت هذا الكود مسبقًا / Your usage limit is reached.');
+      throw new ValidationError('You have reached the usage limit for this discount code.');
   }
   const saved = Math.min(
     original,
@@ -402,7 +411,7 @@ async function beginImportMonitoring(context: ImportMonitorContext) {
       existing.normalized_name !== context.normalizedName ||
       existing.file_hash !== context.fileHash)
   )
-    throw new Error('Invalid or reused upload session ID.');
+    throw new ValidationError('Invalid or reused upload session ID.');
   const write = await env.DB.prepare(`INSERT INTO json_import_runs(
     id,user_id,qbank_id,file_name,normalized_name,file_hash,source_file,status,
     chunk_count,started_at,updated_at
@@ -433,7 +442,7 @@ async function beginImportMonitoring(context: ImportMonitorContext) {
     )
     .run();
   if ((write.meta.changes ?? 0) === 0)
-    throw new Error('Invalid or reused upload session ID.');
+    throw new ValidationError('Invalid or reused upload session ID.');
 }
 
 function importMonitoringStatements(
@@ -537,6 +546,10 @@ export async function platformApi(request: Request, action: string) {
     user.role === 'super_admin' && user.mfaEnrolled && user.mfaVerified;
   let activeImportContext: ImportMonitorContext | undefined;
   try {
+    if (action === 'question-edit') {
+      if (request.method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
+      return directQuestionEdit(user, input);
+    }
     if (action === 'reviewer-performance' && request.method === 'GET') return reviewerPerformance(user, url);
     if (action === 'test-pool' && request.method === 'POST') return testPool(user, input);
     if (action === 'classification' && request.method === 'PUT') {
@@ -728,7 +741,17 @@ export async function platformApi(request: Request, action: string) {
       return json({ ok: true, revision: nextRevision, specialties: stampedSpecialties, topics: stampedTopics, assignments: assignmentValues });
     }
     if (action === 'import-preview' && request.method === 'POST') {
-      const report=parseQuestionImportReport({sourceFile:text('sourceFile'),questions:input.questions},'',25);
+      if (!root && !(user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier)).canUseJsonImport)
+        return json({ error: 'Import is available with Pro.' }, 403);
+      const settings = await importSettings();
+      if (!root && !settings.enabled) return json({ error: 'JSON import is temporarily paused by Superadmin.' }, 403);
+      const now = new Date().toISOString();
+      const suspension = await env.DB.prepare('SELECT ends_at FROM json_import_suspensions WHERE user_id=? AND removed_at IS NULL AND starts_at<=? AND ends_at>? LIMIT 1')
+        .bind(user.uid, now, now).first<{ ends_at: string }>();
+      if (suspension) return json({ error: `Import is suspended until ${suspension.ends_at}.` }, 403);
+      if (!Array.isArray(input.questions) || input.questions.length < 1 || input.questions.length > settings.previewBatchSize)
+        return json({ error: `Review between 1 and ${settings.previewBatchSize} questions per request.` }, 400);
+      const report=validatedImportReport({sourceFile:text('sourceFile'),questions:input.questions},'',settings.previewBatchSize);
       if(report.skipped.length) return json({error:'Correct the invalid question before checking duplication.'},400);
       return importPreview(user,report.questions,text('qbankId'));
     }
@@ -744,6 +767,8 @@ export async function platformApi(request: Request, action: string) {
         suspended: Boolean(suspension),
         endsAt: suspension?.ends_at ?? null,
         ...(await importLimits(user)),
+        settings: await importSettings(),
+        isSuperadmin: root,
       });
     }
     if (action === 'json-imports') {
@@ -1369,6 +1394,21 @@ export async function platformApi(request: Request, action: string) {
         });
       }
       return json({ error: 'Invalid reward operation.' }, 400);
+    }
+    if (action === 'import-settings') {
+      if (!root) return json({ error: 'Superadmin MFA required.' }, 403);
+      if (request.method === 'GET') return json(await importSettings());
+      if (request.method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
+      if (!validImportSettings(input.settings) || text('reason').length < 3)
+        return json({ error: 'Choose valid file and scan settings and provide an audit reason.' }, 400);
+      const previous = await importSettings();
+      const next = { enabled: input.settings.enabled, maxFileMegabytes: input.settings.maxFileMegabytes, previewBatchSize: input.settings.previewBatchSize };
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO records(type,id,payload,updated_at) VALUES('system','importSettings',?,?) ON CONFLICT(type,id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at")
+          .bind(JSON.stringify(next), new Date().toISOString()),
+        auditStatement(user, 'import_settings_updated', 'importSettings', previous, { ...next, reason: text('reason') }),
+      ]);
+      return json(next);
     }
     if (action === 'import-controls' && request.method === 'GET') {
       if(!root) return json({error:'Superadmin MFA required.'},403);
@@ -2171,7 +2211,7 @@ export async function platformApi(request: Request, action: string) {
           return json(
             {
               error:
-                'تعذر تطبيق الترقية؛ أعد تطبيق الكود للتحقق من صلاحيته / Reapply the code and try again.',
+                'Reapply the discount code to verify it, then try again.',
             },
             409,
           );
@@ -2183,7 +2223,7 @@ export async function platformApi(request: Request, action: string) {
           { error: 'A valid discount code is required for a free activation.' },
           400,
         );
-      const message = `أرغب بالاشتراك في Qraft ${price.planName} لمدة سنة.\nName: ${user.displayName}\nEmail: ${user.email}\nUser ID: ${user.uid}\nOriginal: ${price.original / 100} SAR\nCode: ${price.code || 'None'}\nDiscount: ${price.discount / 100} SAR\nFinal: ${price.final / 100} SAR`;
+      const message = `I would like a one-year Qraft ${price.planName} subscription.\nName: ${user.displayName}\nEmail: ${user.email}\nUser ID: ${user.uid}\nOriginal: ${price.original / 100} SAR\nCode: ${price.code || 'None'}\nDiscount: ${price.discount / 100} SAR\nFinal: ${price.final / 100} SAR`;
       return json({
         url: `https://wa.me/966537043984?text=${encodeURIComponent(message)}`,
       });
@@ -2260,7 +2300,7 @@ export async function platformApi(request: Request, action: string) {
         (starts && expires && Date.parse(starts) >= Date.parse(expires))
         || !allowedPlans.length
       )
-        throw new Error('Check code, discount amount, dates and usage limits.');
+        throw new ValidationError('Check code, discount amount, dates and usage limits.');
       const next = {
         code,
         kind,
@@ -2317,7 +2357,7 @@ export async function platformApi(request: Request, action: string) {
       if (request.method === 'GET') return json(await listAdminSubscribers(url));
       if (!['POST', 'PUT'].includes(request.method)) return json({ error: 'Method not allowed.' }, 405);
       const member = await profileById(text('userId'));
-      if (!member) throw new Error('User not found.');
+      if (!member) throw new ValidationError('User not found.');
       const old = await env.DB.prepare(
         'SELECT * FROM subscriptions WHERE user_id=?',
       )
@@ -2326,11 +2366,11 @@ export async function platformApi(request: Request, action: string) {
       const profile = JSON.parse(member.profile_json) as MemberProfile;
       if (text('operation') === 'override') {
         const plan = text('plan');
-        if (!isPlanId(plan)) throw new Error('Choose Free, Lite, Pro or Unlimited.');
+        if (!isPlanId(plan)) throw new ValidationError('Choose Free, Lite, Pro or Unlimited.');
         const now = new Date().toISOString();
         const requestedEnd = text('expires_at');
         if (requestedEnd && (!Number.isFinite(Date.parse(requestedEnd)) || Date.parse(requestedEnd) <= Date.parse(now)))
-          throw new Error('Select a future expiration date or no expiration.');
+          throw new ValidationError('Select a future expiration date or no expiration.');
         const expiresAt = requestedEnd ? new Date(requestedEnd).toISOString() : null;
         const reason = text('reason').slice(0, 500);
         const previous = await env.DB.prepare('SELECT * FROM account_plan_overrides WHERE user_id=?').bind(member.uid).first();
@@ -2354,10 +2394,10 @@ export async function platformApi(request: Request, action: string) {
           ? new Date(requestedEnd).toISOString()
           : requestedEnd;
       if (!cancel && (!Number.isFinite(Date.parse(end)) || Date.parse(end) <= Date.parse(now)))
-        throw new Error('Select a future expiration date.');
+        throw new ValidationError('Select a future expiration date.');
       const paid = Number(input.paid ?? 0);
       if (!Number.isInteger(paid) || paid < 0)
-        throw new Error('Invalid paid amount.');
+        throw new ValidationError('Invalid paid amount.');
       const status = cancel ? 'cancelled' : 'manually_activated';
       const previousSubscription = old as { status?: string; expires_at?: string | null; paid?: number; discount_code?: string | null; plan?: string } | null;
       if (cancel && previousSubscription?.status === 'cancelled')
@@ -2380,7 +2420,7 @@ export async function platformApi(request: Request, action: string) {
             )
           : null;
       if (discounted && paid !== discounted.final)
-        throw new Error(
+        throw new ValidationError(
           `Final amount must equal ${discounted.final / 100} SAR for this code.`,
         );
       await env.DB.batch([
@@ -2522,7 +2562,7 @@ export async function platformApi(request: Request, action: string) {
         return json({ error: 'Superadmin verification required.' }, 403);
       const batchId = text('requestId');
       if (!/^[a-zA-Z0-9-]{20,80}$/.test(batchId))
-        throw new Error('Invalid import ID.');
+        throw new ValidationError('Invalid import ID.');
       const previous = await env.DB.prepare(
         'SELECT user_id,result FROM import_batches WHERE id=?',
       )
@@ -2566,7 +2606,7 @@ export async function platformApi(request: Request, action: string) {
         chunkIndex >= chunkCount
       )
         return json(
-          { error: 'بيانات الملف أو عملية الرفع غير صالحة.', code: 'INVALID_IMPORT_METADATA' },
+          { error: 'The file or import metadata is invalid.', code: 'INVALID_IMPORT_METADATA' },
           400,
         );
       const context: ImportMonitorContext = {
@@ -2592,6 +2632,8 @@ export async function platformApi(request: Request, action: string) {
           'Import is available with Pro.',
           403,
         );
+      if (!root && !(await importSettings()).enabled)
+        return rejectImport(context, 'IMPORT_PAUSED', 'JSON import is temporarily paused by Superadmin.', 403);
       if (input.rightsConfirmed === false)
         return rejectImport(
           context,
@@ -2624,13 +2666,13 @@ export async function platformApi(request: Request, action: string) {
       const rawImport = typeof input.questions === 'string'
         ? input.questions
         : { sourceFile: text('sourceFile'), questions: input.questions, skipped: input.skipped };
-      const report = parseQuestionImportReport(rawImport, '', root ? 500 : 200);
+      const report = validatedImportReport(rawImport, '', root ? 500 : 200);
       context.sourceFile = report.sourceFile;
       if (!report.questions.length)
         return rejectImport(
           context,
           'NO_VALID_QUESTIONS',
-          'لم يتم العثور على أي سؤال مكتمل وصالح للاستيراد.',
+          'No complete, valid questions were found to import.',
           400,
           {
             total: report.skipped.length,
@@ -2650,6 +2692,7 @@ export async function platformApi(request: Request, action: string) {
         );
       const candidates = await importCandidates(bank.id,report.questions);
       const preparedCandidates: ReturnType<typeof prepareDuplicateCandidate>[] = [...candidates];
+      const duplicateIndex = new ImportDuplicateIndex(preparedCandidates);
       const skippedDuplicates = 0;
       const accepted: Array<{
         id: string;
@@ -2664,7 +2707,7 @@ export async function platformApi(request: Request, action: string) {
           qbankId: bank.id,
           payload,
         });
-        let duplicateReview: QuestionProposal['duplicateReview'] = detectImportDuplication(payload,bank.id,preparedCandidates,proposalId);
+        let duplicateReview: QuestionProposal['duplicateReview'] = detectImportDuplication(payload,bank.id,preparedCandidates,proposalId,duplicateIndex);
         const choice=Array.isArray(input.duplicateChoices)?input.duplicateChoices[index]:undefined;
         if(duplicateReview && choice?.sourceFingerprint===duplicateFingerprint(payload) && Array.isArray(choice.candidateFingerprints) && duplicateReview.candidates.every(candidate=>choice.candidateFingerprints.includes(candidate.candidateFingerprint))) {
           duplicateReview={...duplicateReview,status:'resolved',resolutions:duplicateReview.candidates.map(candidate=>({decision:'kept_both',candidateEntityId:candidate.entityId,reviewerId:user.uid,reviewerName:user.displayName,reviewedAt:now,note:'Author explicitly selected Save as duplication during import review.'}))};
@@ -2675,6 +2718,7 @@ export async function platformApi(request: Request, action: string) {
           duplicateReview,
         });
         preparedCandidates.push(prepared);
+        duplicateIndex.add(prepared);
       }
       if (!root && accepted.length) {
         const dailyImports = await env.DB.prepare(
@@ -2875,7 +2919,7 @@ export async function platformApi(request: Request, action: string) {
           return rejectImport(
             context,
             'DATABASE_CONFLICT',
-            'تعذر حفظ هذه الدفعة بسبب تعارض متزامن. أعد المحاولة بنفس المسودة.',
+            'This batch could not be saved because of a concurrent change. Retry using the same draft.',
             409,
           );
         throw error;
@@ -2915,10 +2959,10 @@ export async function platformApi(request: Request, action: string) {
         return json({ users: rows.results });
       }
       const target = await profileById(text('userId'));
-      if (!target) throw new Error('User not found.');
+      if (!target) throw new ValidationError('User not found.');
       const profile = JSON.parse(target.profile_json) as MemberProfile;
       if (profile.status !== 'approved' || profile.suspended)
-        throw new Error('User is not active.');
+        throw new ValidationError('User is not active.');
       if (
         bank.ownerId === profile.uid ||
         state.memberships.some(
@@ -2928,7 +2972,7 @@ export async function platformApi(request: Request, action: string) {
             x.role === 'reviewer',
         )
       )
-        throw new Error('This reviewer is already added.');
+        throw new ValidationError('This reviewer is already added.');
       const now = new Date().toISOString();
       const membership = {
         id: `reviewer-${bank.id}-${profile.uid}`,
@@ -2961,18 +3005,10 @@ export async function platformApi(request: Request, action: string) {
     }
     return json({ error: 'Not found.' }, 404);
   } catch (error) {
-    if (error instanceof Error && error.message.includes('D1_')) {
-      console.error(
-        JSON.stringify({
-          event: 'platform_database_error',
-          action,
-          error: error.message,
-        }),
-      );
-    }
+    if (error instanceof Response) return error;
     if (activeImportContext) {
       const message =
-        error instanceof Error && !error.message.includes('D1_')
+        error instanceof ValidationError
           ? error.message
           : 'The import could not be completed.';
       try {
@@ -2989,14 +3025,7 @@ export async function platformApi(request: Request, action: string) {
         );
       }
     }
-    return json(
-      {
-        error:
-          error instanceof Error && !error.message.includes('D1_')
-            ? error.message
-            : 'The change could not be saved. Check the values and try again.',
-      },
-      400,
-    );
+    if (error instanceof ValidationError) return json({ error: error.message }, 400);
+    throw error;
   }
 }

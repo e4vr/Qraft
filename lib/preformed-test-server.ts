@@ -39,6 +39,7 @@ type TestRow = {
   visibility: 'public' | 'private';
   status: 'draft' | 'published' | 'paused' | 'hidden';
   version: number;
+  edit_revision: number;
   questions_json: string;
   settings_json: string;
   passcode_hash: string | null;
@@ -130,6 +131,7 @@ function summary(row: TestRow): PreformedTestSummary {
     visibility: row.visibility,
     status: row.status,
     version: row.version,
+    editRevision: row.edit_revision,
     questionCount: (JSON.parse(row.questions_json) as unknown[]).length,
     settings: settings(row.settings_json),
     createdAt: row.created_at,
@@ -492,6 +494,8 @@ export async function preformedTestApi(request: Request, action: string) {
       const row = await rowById(id);
       if (!row || row.owner_id !== user.uid)
         return json({ error: 'Test owner access required.' }, 403);
+      if (!Number.isSafeInteger(input.test?.editRevision) || input.test?.editRevision !== row.edit_revision)
+        return json({ error: 'This test changed in another window. Reopen its latest version before saving. Your draft has been kept.' }, 409);
       const title = input.test?.title?.trim() ?? '';
       const description = input.test?.description?.trim() ?? '';
       const visibility = input.test?.visibility;
@@ -539,7 +543,7 @@ export async function preformedTestApi(request: Request, action: string) {
       const nextVersion = contentChanged ? row.version + 1 : row.version;
       const statements: D1PreparedStatement[] = [
         env.DB.prepare(
-          `UPDATE preformed_tests SET title=?,description=?,visibility=?,status=?,version=?,questions_json=?,settings_json=?,passcode_hash=?,passcode_salt=?,updated_at=? WHERE id=? AND owner_id=?`,
+          `UPDATE preformed_tests SET title=?,description=?,visibility=?,status=?,version=?,questions_json=?,settings_json=?,passcode_hash=?,passcode_salt=?,updated_at=?,edit_revision=? WHERE id=? AND owner_id=?`,
         ).bind(
           title,
           description,
@@ -551,6 +555,7 @@ export async function preformedTestApi(request: Request, action: string) {
           passcodeHash,
           passcodeSalt,
           now,
+          row.edit_revision + 1,
           id,
           user.uid,
         ),
@@ -589,7 +594,7 @@ export async function preformedTestApi(request: Request, action: string) {
         return json({ error: 'Test owner access required.' }, 403);
       const code = await uniqueCode();
       await env.DB.prepare(
-        'UPDATE preformed_tests SET code=?,updated_at=? WHERE id=?',
+        'UPDATE preformed_tests SET code=?,updated_at=?,edit_revision=edit_revision+1 WHERE id=?',
       )
         .bind(code, new Date().toISOString(), row.id)
         .run();
@@ -701,7 +706,7 @@ export async function preformedTestApi(request: Request, action: string) {
           ...(JSON.parse(receipt.result_json) as Record<string, unknown>),
           duplicate: true,
           questions: document(row).questions,
-        });
+        }, 200, { 'x-qraft-unchanged': '1' });
       }
       const questions = JSON.parse(row.questions_json) as PreformedQuestion[];
       if (token.submitted_at)
@@ -899,7 +904,7 @@ export async function preformedTestApi(request: Request, action: string) {
         .bind(rank !== null ? 1 : 0, JSON.stringify(result), submissionId)
         .run();
       if (user) await emitUsage(user.uid, { testsCompleted:1, questionsAnswered: Object.keys(input.answers ?? {}).length });
-      return json({ ...result, questions });
+      return json({ ...result, questions }, 200, { 'x-qraft-result-owner': row.owner_id });
     }
 
     if (action === 'report' && request.method === 'POST') {
@@ -949,7 +954,7 @@ export async function preformedTestApi(request: Request, action: string) {
       const row = await rowById(input.id ?? '');
       if (!row) return json({ error: 'Test not found.' }, 404);
       await env.DB.prepare(
-        'UPDATE preformed_tests SET status=?,updated_at=? WHERE id=?',
+        'UPDATE preformed_tests SET status=?,updated_at=?,edit_revision=edit_revision+1 WHERE id=?',
       )
         .bind(
           input.hidden === false ? 'published' : 'hidden',
@@ -966,31 +971,19 @@ export async function preformedTestApi(request: Request, action: string) {
       const row = await rowById(input.id ?? '');
       if (!row || row.owner_id !== user.uid)
         return json({ error: 'Test owner access required.' }, 403);
-      await env.DB.prepare('DELETE FROM preformed_tests WHERE id=?')
-        .bind(row.id)
-        .run();
-      return json({ ok: true });
+      await env.DB.batch([
+        env.DB.prepare("UPDATE media SET status='delete_pending',updated_at=? WHERE qbank_id=? AND status='ready'").bind(new Date().toISOString(), `preformed-${row.id}`),
+        env.DB.prepare('DELETE FROM preformed_tests WHERE id=?').bind(row.id),
+      ]);
+      return json({ ok: true }, 200, { 'x-qraft-media-cleanup': '1' });
     }
 
     return json({ error: 'Not found.' }, 404);
   } catch (error) {
     if (error instanceof Response) return error;
-    console.error(
-      JSON.stringify({
-        event: 'preformed_test_error',
-        action,
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    );
-    return json(
-      {
-        error:
-          error instanceof Error && !error.message.includes('D1_')
-            ? error.message
-            : 'The ready-made test request could not be completed.',
-      },
-      400,
-    );
+    if (String(error).includes('PREFORMED_EDIT_CONFLICT'))
+      return json({ error: 'This test changed while saving. Your draft has been kept; reopen the latest version before retrying.' }, 409);
+    throw error;
   }
 }
 

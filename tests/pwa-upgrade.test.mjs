@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-void test('v4.6.1 service worker replaces only Qraft shell caches and avoids mixed static assets', async () => {
+void test('v4.6.3 service worker replaces only Qraft shell caches and avoids mixed static assets', async () => {
   const source = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
   const listeners = new Map();
   const buckets = new Map();
@@ -48,7 +48,7 @@ void test('v4.6.1 service worker replaces only Qraft shell caches and avoids mix
   listeners.get('install')(install);
   await install.promise;
   assert.equal(skipped, 1);
-  assert.ok(buckets.get('qraft-shell-v4.6.1').has('/qraft-mark.svg'));
+  assert.ok(buckets.get('qraft-shell-v4.6.3').has('/qraft-mark.svg'));
 
   const activate = lifecycleEvent();
   listeners.get('activate')(activate);
@@ -70,4 +70,16 @@ void test('v4.6.1 service worker replaces only Qraft shell caches and avoids mix
 
   const api = { request: { ...request, url: 'https://staging.test/api/cloudflare/state' }, respondWith() { throw new Error('API must bypass SW'); } };
   listeners.get('fetch')(api);
+
+  for (const path of [
+    '/@vite/client', '/@react-refresh', '/@id/virtual:vinext-browser-entry',
+    '/@fs/C:/project/module.js', '/node_modules/.vite/deps/react.js?v=123',
+    '/components/medguard-app.tsx?t=123', '/lib/api-client.ts', '/src/view.jsx',
+  ]) {
+    listeners.get('fetch')({
+      request: { ...request, url: `https://staging.test${path}` },
+      respondWith() { throw new Error(`Development module must bypass SW: ${path}`); },
+    });
+  }
+  assert.equal(fetches, 1, 'development modules do not enter the cache strategy');
 });

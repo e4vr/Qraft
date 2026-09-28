@@ -79,9 +79,11 @@ export function validateProductionBuiltConfigs(appPath = 'dist/server/wrangler.j
   const app = readJson(appPath);
   const realtime = readJson(realtimePath);
   equal(app.name, releaseResources.production.app, 'built production app Worker');
+  equal(app.d1_databases?.[0]?.database_name, releaseResources.production.database, 'built production D1 name');
   equal(app.d1_databases?.[0]?.database_id, releaseResources.production.databaseId, 'built production D1 id');
   equal(app.r2_buckets?.[0]?.bucket_name, releaseResources.production.bucket, 'built production R2 bucket');
   equal(realtime.name, releaseResources.production.realtime, 'built production realtime Worker');
+  equal(app.services?.[0]?.service ?? app.durable_objects?.bindings?.[0]?.script_name, releaseResources.production.realtime, 'built production realtime service');
   equal(app.analytics_engine_datasets?.[0]?.dataset, 'qraft_usage', 'built production analytics dataset');
   return { app, realtime };
 }

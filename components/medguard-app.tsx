@@ -25,7 +25,9 @@ import {
   QuestionFlashcardDialog,
 } from '@/components/flashcards-workspace';
 import { openLiveChannels, subscribeLive } from '@/lib/realtime-client';
+import { createRefreshQueue } from '@/features/collaboration/client/refresh-queue';
 import { api, setApiCache } from '@/lib/api-client';
+import { saveDirectQuestionEdit } from '@/features/qbanks/client/direct-question-edit';
 import { mergeLiveState } from '@/lib/merge-live-state';
 import { appStateFreshness, mergeAppStates } from '@/lib/merge-app-state';
 import { recordStudyActivity } from '@/lib/study-streak';
@@ -902,7 +904,7 @@ function MfaEnrollmentGate({
                 </code>
                 <button
                   onClick={() =>
-                    void navigator.clipboard.writeText(setup.secretKey)
+                    void navigator.clipboard.writeText(setup.secretKey).catch(() => setError('Unable to copy the setup key. Select and copy it manually.'))
                   }
                   className="grid size-10 place-items-center rounded-lg border"
                   aria-label="Copy setup key"
@@ -2312,6 +2314,7 @@ function TestView({
   user,
   collaboration,
   updateCollaboration,
+  confirmUpdate,
 }: {
   test: TestSession;
   questions: Question[];
@@ -2323,6 +2326,7 @@ function TestView({
   updateCollaboration: (
     updater: (current: CollaborationState) => CollaborationState,
   ) => void;
+  confirmUpdate: (updater: (current: CollaborationState) => CollaborationState) => void;
 }) {
   const [seconds, setSeconds] = useState(() => testElapsedSeconds(test));
   const [navigatorOpen, setNavigatorOpen] = useState(false);
@@ -2334,6 +2338,8 @@ function TestView({
   const [explanationOpen, setExplanationOpen] = useState(false);
   const [zoomImage, setZoomImage] = useState('');
   const [reportOpen, setReportOpen] = useState(false);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState('');
   const [finishConfirmOpen, setFinishConfirmOpen] = useState(false);
   const [reportMessage, setReportMessage] = useState('');
   const [suggestedAnswer, setSuggestedAnswer] = useState<number | undefined>();
@@ -2913,6 +2919,7 @@ function TestView({
   }
 
   function openReport() {
+    setReportError('');
     setProposedStem(question.stem);
     setProposedOptions([...question.options]);
     setSuggestedAnswer(question.answer);
@@ -2931,10 +2938,10 @@ function TestView({
     );
   }
 
-  function submitReport() {
+  async function submitReport() {
     if (
       !reportMessage.trim() ||
-      !proposedExplanation.trim() ||
+      !proposedStem.trim() ||
       !proposedSource.trim() ||
       !editKinds.length ||
       proposedOptions.length < 2 ||
@@ -2955,6 +2962,24 @@ function TestView({
       sourceReference: question.sourceReference ?? question.sourceFile ?? '',
       images: question.images ?? [],
     };
+    if (user.role === 'super_admin') {
+      setReportBusy(true);
+      setReportError('');
+      try {
+        const saved = await saveDirectQuestionEdit(user.uid, qbankId, question, {
+          ...currentSnapshot,
+          stem: proposedStem.trim(), options: proposedOptions.map(item => item.trim()),
+          answer: suggestedAnswer, explanation: proposedExplanation.trim(), sourceReference: proposedSource.trim(),
+        });
+        confirmUpdate(current => ({ ...current, approvedQuestions: current.approvedQuestions.map(item => item.id === saved.id ? saved : item) }));
+        setReportOpen(false);
+      } catch (caught) {
+        setReportError(caught instanceof Error ? caught.message : 'Unable to save this question. Your draft has been kept.');
+      } finally {
+        setReportBusy(false);
+      }
+      return;
+    }
     updateCollaboration((current) => {
       const payload = {
         stem: proposedStem.trim(),
@@ -3607,7 +3632,7 @@ function TestView({
                 )}
                 <SecondaryButton onClick={openReport}>
                   <CircleAlert className="size-4" />
-                  Suggest edit
+                  {user.role === 'super_admin' ? 'Edit question' : 'Suggest edit'}
                 </SecondaryButton>
                 <PrimaryButton onClick={() => setNotesOpen(!notesOpen)}>
                   <FileText className="size-4" />
@@ -3929,10 +3954,9 @@ function TestView({
           <div className="mx-auto my-6 w-full max-w-4xl rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-bold">Suggest edit</h3>
+                <h3 className="font-bold">{user.role === 'super_admin' ? 'Edit question' : 'Suggest edit'}</h3>
                 <p className="text-xs text-muted-foreground">
-                  Question {question.number} · Suggest Edit → Review → Approve /
-                  Reject
+                  Question {question.number} · {user.role === 'super_admin' ? 'Changes apply immediately' : 'Suggest Edit → Review → Approve / Reject'}
                 </p>
               </div>
               <button onClick={() => setReportOpen(false)} aria-label="Close">
@@ -4077,34 +4101,32 @@ function TestView({
             <label className="mt-4 block">
               <span className="mb-1.5 block text-sm font-semibold">
                 Explanation{' '}
-                <strong className="text-red-600 dark:text-red-300">
-                  required
-                </strong>
+                <span className="text-orange-600 dark:text-orange-400">optional</span>
               </span>
               <textarea
-                required
                 value={proposedExplanation}
                 onChange={(event) => setProposedExplanation(event.target.value)}
                 className="min-h-28 w-full rounded-xl border bg-card p-3 text-sm"
                 placeholder="Explain the medically correct change."
               />
+              {!proposedExplanation.trim() && <p className="mt-2 text-sm text-orange-600 dark:text-orange-400">Adding an explanation helps learners. You can save without one; an empty field removes the existing explanation.</p>}
             </label>
             <label className="mt-4 block">
               <span className="mb-1.5 block text-sm font-semibold">
-                Why should this change be made?
+                {user.role === 'super_admin' ? 'Reason for the change' : 'Why should this change be made?'}
               </span>
               <textarea
                 required
                 value={reportMessage}
                 onChange={(event) => setReportMessage(event.target.value)}
                 className="min-h-20 w-full rounded-xl border bg-card p-3 text-sm"
-                placeholder="Give the reviewer enough context to decide."
+                placeholder={user.role === 'super_admin' ? 'Describe your correction.' : 'Give the reviewer enough context to decide.'}
               />
             </label>
             <div className="mt-4 rounded-xl bg-amber-50 p-3 text-sm leading-6 text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
-              Nothing changes immediately. An authorized reviewer will see a
-              field-by-field comparison before deciding.
+              {user.role === 'super_admin' ? 'Your changes apply immediately without review. Existing proposals stay pending and can replace these changes when accepted.' : 'An authorized reviewer will see a field-by-field comparison before deciding.'}
             </div>
+            {reportError && <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-300">{reportError}</p>}
             <div className="mt-5 flex justify-end gap-2">
               <SecondaryButton onClick={() => setReportOpen(false)}>
                 Cancel
@@ -4113,14 +4135,15 @@ function TestView({
                 tone="contribute"
                 onClick={submitReport}
                 disabled={
+                  reportBusy ||
                   !reportMessage.trim() ||
-                  !proposedExplanation.trim() ||
+                  !proposedStem.trim() ||
                   !proposedSource.trim() ||
                   !editKinds.length
                 }
               >
                 <Save className="size-4" />
-                Submit for review
+                {reportBusy ? 'Saving…' : user.role === 'super_admin' ? 'Save changes now' : 'Submit for review'}
               </PrimaryButton>
             </div>
           </div>
@@ -4975,7 +4998,7 @@ function SettingsView({
               )}
             >
               <FileText className="size-5 text-primary" />
-              شروط الاستخدام
+              Terms of use
               <ArrowRight className="ml-auto size-4 text-muted-foreground" />
             </a>
             <a
@@ -4989,7 +5012,7 @@ function SettingsView({
               )}
             >
               <ShieldCheck className="size-5 text-primary" />
-              سياسة الخصوصية
+              Privacy policy
               <ArrowRight className="ml-auto size-4 text-muted-foreground" />
             </a>
           </div>
@@ -5093,7 +5116,7 @@ function QuestionManager({
       options.length > 10 ||
       answer >= options.length ||
       options.some((option) => !option.trim()) ||
-      !explanation.trim() ||
+      ((!editingProposal || editingProposal.type === 'new_question') && !explanation.trim()) ||
       !sourceReference.trim()
     )
       return;
@@ -5273,7 +5296,7 @@ function QuestionManager({
                 ? 'Add question'
                 : 'Propose a question'
           }
-          subtitle={`${qbank?.name ?? 'QBank'} · explanation and source are required`}
+          subtitle={`${qbank?.name ?? 'QBank'} · ${editingProposal?.type === 'question_edit' ? 'explanation is optional; source is required' : 'explanation and source are required'}`}
           openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
         />
         <form
@@ -5399,17 +5422,16 @@ function QuestionManager({
           <label className="mt-4 block">
             <span className="mb-1.5 block text-sm font-semibold">
               Explanation{' '}
-              <strong className="text-red-600 dark:text-red-300">
-                required
-              </strong>
+              {editingProposal?.type === 'question_edit' ? <span className="text-orange-600 dark:text-orange-400">optional</span> : <strong className="text-red-600 dark:text-red-300">required</strong>}
             </span>
             <textarea
-              required
+              required={editingProposal?.type !== 'question_edit'}
               value={explanation}
               onChange={(event) => setExplanation(event.target.value)}
               className="min-h-28 w-full rounded-xl border bg-card p-3 text-sm"
               placeholder="Explain why the keyed answer is correct."
             />
+            {editingProposal?.type === 'question_edit' && !explanation.trim() && <p className="mt-2 text-sm text-orange-600 dark:text-orange-400">Adding an explanation helps learners. Saving empty removes the existing explanation when accepted.</p>}
           </label>
           <label className="mt-4 block">
             <span className="mb-1.5 block text-sm font-semibold">
@@ -5897,6 +5919,8 @@ export default function MedGuardApp({
     initialCollaborationState(),
   );
   const collaborationWriteInFlight = useRef(false);
+  const collaborationRefreshDeferred = useRef(false);
+  const requestCollaborationRefresh = useRef<(() => void) | undefined>(undefined);
   const liveSnapshot = useRef({ collaboration, user });
   useEffect(() => {
     liveSnapshot.current = { collaboration, user };
@@ -5953,7 +5977,7 @@ export default function MedGuardApp({
           { collaboration: next },
           { cacheScope: user.uid },
         );
-        void saveLocalCollaboration(next, user.uid);
+        void saveLocalCollaboration(next, user.uid).catch(() => setSyncStatus('error'));
       }
     },
     [user],
@@ -6259,7 +6283,7 @@ export default function MedGuardApp({
   }, []);
 
   useEffect(() => {
-    if ('serviceWorker' in navigator)
+    if (process.env.NODE_ENV === 'production' && 'serviceWorker' in navigator)
       navigator.serviceWorker
         .register('/sw.js')
         .then((registration) => {
@@ -6520,7 +6544,7 @@ export default function MedGuardApp({
     saveTimer.current = window.setTimeout(
       () => {
         if (creatingTest.current) return;
-        void saveLocalState(user.uid, state);
+        void saveLocalState(user.uid, state).catch(() => setSyncStatus('error'));
         if (!alreadySynced)
           setSyncStatus(navigator.onLine ? 'local' : 'offline');
       },
@@ -6546,7 +6570,7 @@ export default function MedGuardApp({
         const merged = mergeAppStates(stateSnapshot.current, remote);
         cloudStateSnapshot.current = merged;
         setStateRaw(merged);
-        void saveLocalState(user.uid, merged);
+        void saveLocalState(user.uid, merged).catch(() => setSyncStatus('error'));
       })
       .catch(() => {
         outboxReplayedFor.current = '';
@@ -6560,7 +6584,7 @@ export default function MedGuardApp({
       const merged = mergeAppStates(stateSnapshot.current, remote);
       cloudStateSnapshot.current = merged;
       setStateRaw(merged);
-      void saveLocalState(user.uid, merged);
+      void saveLocalState(user.uid, merged).catch(() => setSyncStatus('error'));
       setSyncStatus('synced');
     });
   }, [hydrated, user]);
@@ -6633,7 +6657,7 @@ export default function MedGuardApp({
     };
     const saveBeforeLeaving = () => {
       const snapshot = stateSnapshot.current;
-      void saveLocalState(user.uid, snapshot);
+      void saveLocalState(user.uid, snapshot).catch(() => setSyncStatus('error'));
       if (!snapshot.settings.autoSync || !stateDirty.current) return;
       const kind =
         viewSnapshot.current === 'test'
@@ -6701,7 +6725,7 @@ export default function MedGuardApp({
         answerStats: lastSavedCollaboration.current.answerStats,
       }) === JSON.stringify(lastSavedCollaboration.current)
     ) {
-      void saveLocalCollaboration(collaboration, user.uid);
+      void saveLocalCollaboration(collaboration, user.uid).catch(() => setSyncStatus('error'));
       setSyncStatus(navigator.onLine ? 'local' : 'offline');
       return;
     }
@@ -6731,6 +6755,7 @@ export default function MedGuardApp({
           .catch(() => setSyncStatus('error'))
           .finally(() => {
             collaborationWriteInFlight.current = false;
+            if (collaborationRefreshDeferred.current) requestCollaborationRefresh.current?.();
           });
       } else {
         setSyncStatus(navigator.onLine ? 'local' : 'offline');
@@ -6775,6 +6800,12 @@ export default function MedGuardApp({
       }).catch(() => undefined);
     };
     const refreshCollaboration = async () => {
+      if (collaborationWriteInFlight.current || collaborationSaveTimer.current) {
+        collaborationRefreshDeferred.current = true;
+        return;
+      }
+      const forceRefresh = collaborationRefreshDeferred.current;
+      collaborationRefreshDeferred.current = false;
       if (
         stopped ||
         !navigator.onLine ||
@@ -6787,7 +6818,7 @@ export default function MedGuardApp({
       try {
         const currentAccount = liveSnapshot.current.user;
         if (!currentAccount || currentAccount.status !== 'approved') return;
-        const shared = await loadCollaborationState(currentAccount);
+        const shared = await loadCollaborationState(currentAccount, forceRefresh);
         if (stopped) return;
         if (
           collaborationWriteInFlight.current ||
@@ -6795,6 +6826,7 @@ export default function MedGuardApp({
           (await loadCollaborationSyncOutbox(currentAccount.uid)) ||
           baseline !== lastSavedCollaboration.current
         ) {
+          collaborationRefreshDeferred.current = true;
           return;
         }
         const merged = mergeLiveState(
@@ -6809,18 +6841,24 @@ export default function MedGuardApp({
           JSON.stringify(liveSnapshot.current.collaboration)
         )
           setCollaboration(merged);
-        void saveLocalCollaboration(merged, currentAccount.uid);
+        void saveLocalCollaboration(merged, currentAccount.uid).catch(() => setSyncStatus('error'));
       } catch {
         /* The stale entry remains stale and will retry on actual use. */
       }
     };
+    const accountRefresh = createRefreshQueue(refreshAccount);
+    const collaborationRefresh = createRefreshQueue(refreshCollaboration);
+    requestCollaborationRefresh.current = collaborationRefresh.request;
     const disconnect = openLiveChannels(channels, (topic) => {
-      if (topic === 'account' || topic === 'connected') void refreshAccount();
-      if (topic === 'collaboration' || topic === 'connected')
-        void refreshCollaboration();
+      if (['account', 'access', 'subscriptions', 'connected'].includes(topic)) accountRefresh.request();
+      if (['collaboration', 'question-catalog', 'catalog', 'review-queue', 'shared-notes', 'access', 'connected'].includes(topic))
+        collaborationRefresh.request();
     });
     return () => {
       stopped = true;
+      accountRefresh.stop();
+      collaborationRefresh.stop();
+      requestCollaborationRefresh.current = undefined;
       disconnect();
     };
   }, [liveChannels, collaborationHydrated]);
@@ -6850,32 +6888,34 @@ export default function MedGuardApp({
               : [];
           })
         : [];
-      if (kind === 'exam')
-        lastSavedCollaboration.current = {
-          ...lastSavedCollaboration.current,
-          answerStats: liveSnapshot.current.collaboration.answerStats,
-        };
-      void saveLocalState(user.uid, snapshot);
-      stateDirty.current = false;
-      if (!snapshot.settings.autoSync) {
-        setSyncStatus(navigator.onLine ? 'local' : 'offline');
-        return;
-      }
+      const checkpointAnswerStats = liveSnapshot.current.collaboration.answerStats;
       checkpointInFlight.current = true;
       setSyncStatus('syncing');
       try {
+        await saveLocalState(user.uid, snapshot);
+        if (!snapshot.settings.autoSync) {
+          setSyncStatus(navigator.onLine ? 'local' : 'offline');
+          return;
+        }
         const remote =
           kind === 'exam'
             ? await saveExamCheckpoint(user.uid, snapshot, answerSelections)
             : await saveFlashcardCheckpoint(user.uid, snapshot);
+        if (kind === 'exam')
+          lastSavedCollaboration.current = {
+            ...lastSavedCollaboration.current,
+            answerStats: checkpointAnswerStats,
+          };
         if (remote) {
+          if (stateSnapshot.current === snapshot) stateDirty.current = false;
           const merged = mergeAppStates(stateSnapshot.current, remote);
           cloudStateSnapshot.current = merged;
           setStateRaw(merged);
           await saveLocalState(user.uid, merged);
         }
-        setSyncStatus('synced');
+        setSyncStatus(navigator.onLine ? 'synced' : 'offline');
       } catch {
+        stateDirty.current = true;
         setSyncStatus(navigator.onLine ? 'local' : 'offline');
       } finally {
         checkpointInFlight.current = false;
@@ -7278,6 +7318,7 @@ export default function MedGuardApp({
   if (view === 'test' && activeTest)
     return (
       <TestView
+        confirmUpdate={confirmUpdate}
         user={user}
         test={activeTest}
         questions={allQuestions}
@@ -7445,7 +7486,7 @@ export default function MedGuardApp({
                 href={announcement.href}
                 className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-[11px] ring-1 ring-white/30 transition hover:bg-white/25"
               >
-                معرفة المزيد
+                Learn more
               </a>
             )}
           </output>

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { preproductionApiTests } from './preproduction-api.mjs';
 import { createHash, createHmac, pbkdf2Sync, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -7,6 +8,9 @@ import { readdirSync } from 'node:fs';
 import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { improvementsApiTests } from './improvements-api.mjs';
+import { saasApiTests } from './saas-api.mjs';
+import { directQuestionEditApiTests } from './direct-question-edit-api.mjs';
+import { serverEfficiencyApiTests } from './server-efficiency-api.mjs';
 
 function decodeBase32(value) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -269,6 +273,7 @@ print(json.dumps(out))`,
     });
   };
   let codeId;
+  await saasApiTests(t, { db, call, mf, emptyState });
   await t.test(
     'Superadmin plan assignments override every entitlement, including Free, and preserve billing and gifts',
     async () => {
@@ -2338,8 +2343,9 @@ print(json.dumps(out))`,
             )
             .first()
         ).value,
-        0,
+        1,
       );
+      assert.equal((await db.prepare('SELECT count(*) AS value FROM duplicate_attempts').first()).value, 0);
       const dailyPayload = (index) => ({
         ...payload,
         stem: `Daily limit fixture ${index} with distinct clinical wording`,
@@ -3361,10 +3367,13 @@ print(json.dumps(out))`,
       1,
     );
   });
+  await preproductionApiTests(t, { db, call });
   await improvementsApiTests(t, db, call, {
     assets,
     fetch: (url, init) => mf.dispatchFetch(url, init),
   });
+  await directQuestionEditApiTests(t, { db, call });
+  await serverEfficiencyApiTests(t, { db, call, mf, assets });
   await t.test(
     'Read-only integrity checks find no contradictions in the local fixture',
     async () => {

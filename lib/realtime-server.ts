@@ -54,16 +54,33 @@ export async function publishChanges(channels: Iterable<string>, topics: Iterabl
 
 // Called only after a mutation has succeeded. No content, names or record IDs
 // are sent over the socket; the client re-fetches through existing permissions.
-export async function notifyMutation(request: Request) {
+export function needsMutationNotification(request: Request): boolean {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(request.method)) return false;
   const path = new URL(request.url).pathname.split('/').slice(3);
   if (
     (['state', 'media', 'ids'].includes(path[0]) && !(path[0] === 'state' && path[1] === 'exam')) ||
     (path[0] === 'auth' && path[1] !== 'register') ||
-    (path[0] === 'platform' && ['exam-start', 'quote'].includes(path[1]))
+    (path[0] === 'platform' && ['exam-start', 'quote', 'import-preview'].includes(path[1]))
   )
-    return;
-  const input = await readJson<Record<string, unknown>>(request, 2_000_000);
+    return false;
+  return true;
+}
+
+export async function notifyMutation(request: Request, response?: Response) {
+  if (!needsMutationNotification(request)) return;
+  const path = new URL(request.url).pathname.split('/').slice(3);
+  const input = request.body ? await readJson<Record<string, unknown>>(request, 2_000_000) : {};
   const user = await currentUser(request);
+  // Results concern the participant and test owner. Publishing each completion
+  // to catalog would wake every user's catalog/leaderboard consumers.
+  if (path[0] === 'preformed' && path[1] === 'submit') {
+    const owner = response?.headers.get('x-qraft-result-owner');
+    const audience = new Set<string>();
+    if (owner) audience.add(`user:${owner}`);
+    if (user) audience.add(`user:${user.uid}`);
+    await publishChanges(audience, ['preformed-results'], request.headers.get('x-qraft-client-id') ?? '');
+    return;
+  }
   const channels = new Set<string>(['admin']);
   if (user) channels.add(`user:${user.uid}`);
   const addUser = (id: unknown) => { if (typeof id === 'string' && id) channels.add(`user:${id}`); };
@@ -115,11 +132,14 @@ export async function notifyMutation(request: Request) {
     topics.add('legal-links'); channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'monitoring') {
     topics.add('monitoring');
-  } else if (path[0] === 'platform' && (path[1] === 'economy-admin' || path[1] === 'import-defaults')) {
+  } else if (path[0] === 'platform' && (path[1] === 'economy-admin' || path[1] === 'import-defaults' || path[1] === 'import-settings')) {
     topics.add('economy');
     topics.add('import-status');
-    if(path[1] === 'import-defaults') channels.add('catalog');
+    if(path[1] === 'import-defaults' || path[1] === 'import-settings') channels.add('catalog');
     topics.add(input.operation === 'grant-reward' ? 'reward-gift' : 'reward');
+  } else if (path[0] === 'platform' && path[1] === 'question-edit') {
+    addBank(input.qbankId);
+    topics.add('question-catalog');
   } else if (path[0] === 'platform' && path[1] === 'classification') {
     addBank(input.qbankId);
     topics.add('question-catalog'); topics.add('collaboration');

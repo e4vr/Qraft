@@ -13,16 +13,9 @@ const API_ROOT = '/api/cloudflare';
 
 export const clientInstanceId = (() => {
   if (typeof window === 'undefined') return '';
-  const key = 'qraft-client-instance';
-  try {
-    const existing = window.sessionStorage.getItem(key);
-    if (existing) return existing;
-    const created = crypto.randomUUID();
-    window.sessionStorage.setItem(key, created);
-    return created;
-  } catch {
-    return crypto.randomUUID();
-  }
+  // Duplicated tabs inherit sessionStorage. A document-local ID ensures that
+  // suppressing the sender's echo never silences another window's updates.
+  return crypto.randomUUID();
 })();
 
 export interface ApiRequestInit extends RequestInit {
@@ -30,22 +23,27 @@ export interface ApiRequestInit extends RequestInit {
   forceRefresh?: boolean;
   requestReason?: RequestReason;
   cacheScope?: string;
+  expectedUserId?: string;
 }
 
 export class ApiError extends Error {
   readonly status: number;
   readonly payload: Record<string, unknown>;
+  readonly retryAfterMs: number | undefined;
 
-  constructor(message: string, status: number, payload: Record<string, unknown>) {
+  constructor(message: string, status: number, payload: Record<string, unknown>, retryAfterMs?: number) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.payload = payload;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
 function mutationTags(path: string, body: BodyInit | null | undefined) {
+  if (path === '/preformed/submit') return ['preformed-results'];
   if(path === '/platform/import-preview') return [];
+  if (path === '/platform/import-settings') return ['import-status'];
   const tags = new Set(policyFor(path).tags);
   let input: Record<string, unknown> = {};
   if (typeof body === 'string') {
@@ -62,6 +60,7 @@ function mutationTags(path: string, body: BodyInit | null | undefined) {
     tags.add('review-queue'); tags.add('question-catalog'); tags.add('reviewer-performance'); tags.add('contributions'); tags.add('economy');
   }
   if (path.startsWith('/platform/classification')) { tags.add('collaboration'); tags.add('question-catalog'); tags.add('test-pool'); }
+  if (path === '/platform/question-edit') { tags.add('collaboration'); tags.add('question-catalog'); tags.add('test-pool'); }
   if (path.startsWith('/qbank-folders/')) { tags.add('collaboration'); tags.add('question-catalog'); tags.add('test-pool'); }
   if (path.startsWith('/platform/discounts') || path.startsWith('/platform/plan-pricing')) { tags.add('discounts'); tags.add('pricing'); }
   if (path.startsWith('/platform/monitoring')) tags.add('monitoring');
@@ -89,23 +88,50 @@ async function network<T>(path: string, init: RequestInit, reason: RequestReason
   if (method !== 'GET' && !(init.body instanceof FormData)) headers.set('content-type', 'application/json');
   if (method !== 'GET' && clientInstanceId) headers.set('x-qraft-client-id', clientInstanceId);
   noteNetworkRequest(method, policyFor(path).name, reason);
-  const response = await fetch(`${API_ROOT}${path}`, {
-    credentials: 'same-origin',
-    ...init,
-    headers,
-  });
-  const payload = (await response.json().catch(() => ({}))) as { error?: string } & T;
+  let response: Response;
+  try {
+    response = await fetch(`${API_ROOT}${path}`, {
+      credentials: 'same-origin',
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    if (init.signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+    throw new ApiError('Unable to connect. Check your connection and try again.', 0, {});
+  }
+  const retryAfter = response.headers.get('retry-after');
+  const retryAfterMs = retryAfter === null ? undefined : /^\d+$/.test(retryAfter)
+    ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now());
+  let payload: Record<string, unknown>;
+  try {
+    const value: unknown = await response.json();
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid API response');
+    payload = value as Record<string, unknown>;
+  } catch {
+    // A truncated success is not an acknowledgement. Preserve pending writes.
+    throw new ApiError(response.status === 429
+      ? 'Too many requests. Please wait a moment and try again.'
+      : 'The server response could not be read. Please try again.',
+      response.ok ? 502 : response.status, {},
+      Number.isFinite(retryAfterMs) ? retryAfterMs : undefined);
+  }
   if (!response.ok)
     throw new ApiError(
-      payload.error || `Request failed (${response.status}).`,
+      typeof payload.error === 'string' ? payload.error : `Request failed (${response.status}).`,
       response.status,
-      payload as Record<string, unknown>,
+      payload,
+      Number.isFinite(retryAfterMs) ? retryAfterMs : undefined,
     );
-  return payload;
+  return payload as T;
 }
 
 export async function api<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
-  const { resourceQuery, forceRefresh, requestReason, cacheScope, ...requestInit } = init;
+  const { resourceQuery, forceRefresh, requestReason, cacheScope, expectedUserId, ...requestInit } = init;
+  if (expectedUserId) {
+    const headers = new Headers(requestInit.headers);
+    headers.set('x-qraft-account', expectedUserId);
+    requestInit.headers = headers;
+  }
   const method = (requestInit.method ?? 'GET').toUpperCase();
   const policy = policyFor(path);
   if (method === 'GET' || resourceQuery) {

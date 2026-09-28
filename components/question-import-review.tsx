@@ -1,19 +1,23 @@
 'use client';
 /* oxlint-disable next/no-img-element */
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, useMemo } from 'react';
 import { Check, ChevronDown, Copy, FileJson, GraduationCap, Upload, LoaderCircle } from 'lucide-react';
-import { duplicateFingerprint, normalizeDuplicateText } from '@/features/duplicates/domain/duplicate-detection';
+import { duplicateFingerprint } from '@/features/duplicates/domain/duplicate-detection';
 import { subscribeLive } from '@/lib/realtime-client';
 import { api } from '@/lib/api-client';
+import { readImportFile } from '@/features/imports/client/read-import-file';
+import { importRequest } from '@/features/imports/client/import-request';
+import { DEFAULT_IMPORT_SETTINGS, ADMIN_MAX_FILE_BYTES, type ImportSettings } from '@/features/imports/domain/import-settings';
+import { withLocalImportMatches, type ImportMatch } from '@/features/imports/domain/local-import-duplicates';
 import {
   parseQuestionImportReport,
   buildQuestionPrompt,
+  importedSourceReference,
   type SkippedImportedQuestion,
   type QuestionPromptSettings,
 } from '@/lib/question-import';
 import {
   optionLabel,
-  type DuplicateCandidate,
   type QuestionProposal,
   type QuestionProposalPayload,
   type QBankSpecialty,
@@ -22,7 +26,6 @@ import {
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 
-type ImportMatch = DuplicateCandidate & {payload:QuestionProposalPayload;canDelete:boolean;draftIndex?:number};
 type ImportChoice = {sourceFingerprint:string;candidateFingerprints:string[]};
 const MAX_CHUNK_BYTES = 900_000;
 const MAX_CHUNK_QUESTIONS = 25;
@@ -30,6 +33,7 @@ const MAX_CHUNK_QUESTIONS = 25;
 function splitImport(
   questions: QuestionProposalPayload[],
   skipped: SkippedImportedQuestion[],
+  questionLimit = MAX_CHUNK_QUESTIONS,
 ) {
   const encoder = new TextEncoder();
   const chunks: Array<{ questions: QuestionProposalPayload[]; skipped: SkippedImportedQuestion[]; bytes: number }> = [];
@@ -37,7 +41,7 @@ function splitImport(
     const bytes = encoder.encode(JSON.stringify(question)).byteLength + 1;
     if (bytes > MAX_CHUNK_BYTES) throw new Error('One question is too large to upload.');
     let chunk = chunks[chunks.length - 1];
-    if (!chunk || chunk.questions.length >= MAX_CHUNK_QUESTIONS || chunk.bytes + bytes > MAX_CHUNK_BYTES) {
+    if (!chunk || chunk.questions.length >= questionLimit || chunk.bytes + bytes > MAX_CHUNK_BYTES) {
       chunk = { questions: [], skipped: [], bytes: 0 };
       chunks.push(chunk);
     }
@@ -82,6 +86,10 @@ export function QuestionImportReview({
   const [comparisonIndex,setComparisonIndex]=useState(0);
   const [checking,setChecking]=useState(false);
   const [limits,setLimits]=useState({questionsPerImport:150,importsPerDay:5});
+  const [importPolicy, setImportPolicy] = useState<ImportSettings>(DEFAULT_IMPORT_SETTINGS);
+  const [adminImport, setAdminImport] = useState(unlimited);
+  const [scanComplete, setScanComplete] = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
   const chunkChoices=useRef<ImportChoice[][]>([]);
   const [reading, setReading] = useState(false);
   const [fileName, setFileName] = useState('');
@@ -118,14 +126,16 @@ export function QuestionImportReview({
   const [confirmAction, confirmationDialog] = useConfirmationDialog();
   useEffect(() => {
     let active = true;
-    const refresh=()=>api<{ suspended: boolean; endsAt: string | null; questionsPerImport:number;importsPerDay:number }>(
+    const refresh=()=>api<{ suspended: boolean; endsAt: string | null; questionsPerImport:number;importsPerDay:number; settings: ImportSettings; isSuperadmin: boolean }>(
       '/platform/json-import-status',
     )
       .then((result) => {
         if (!active) return;
         setLimits({questionsPerImport:result.questionsPerImport,importsPerDay:result.importsPerDay});
+        setImportPolicy(result.settings);
+        setAdminImport(result.isSuperadmin);
         setAccess(
-          result.suspended && (!result.endsAt || Date.parse(result.endsAt)>Date.now())
+          (!result.settings.enabled && !result.isSuperadmin) ? { status: 'suspended', message: 'JSON import is temporarily paused by Superadmin.' } : result.suspended && (!result.endsAt || Date.parse(result.endsAt)>Date.now())
             ? { status: 'suspended', endsAt: result.endsAt }
             : { status: 'allowed' },
         );
@@ -149,7 +159,10 @@ export function QuestionImportReview({
   useEffect(()=>{
     if(access.status!=='suspended'||!access.endsAt)return;
     const timer=window.setTimeout(()=>{
-      void api<{suspended:boolean;endsAt:string|null}>('/platform/json-import-status',{forceRefresh:true,requestReason:'eligibility-parameters-changed'}).then(result=>setAccess(result.suspended?{status:'suspended',endsAt:result.endsAt}:{status:'allowed'})).catch(()=>setAccess({status:'error',message:'Unable to verify Import access.'}));
+      void api<{suspended:boolean;endsAt:string|null;settings:ImportSettings;isSuperadmin:boolean}>('/platform/json-import-status',{forceRefresh:true,requestReason:'eligibility-parameters-changed'}).then(result=>{
+        setImportPolicy(result.settings); setAdminImport(result.isSuperadmin);
+        setAccess(!result.settings.enabled && !result.isSuperadmin ? {status:'suspended',message:'JSON import is temporarily paused by Superadmin.'} : result.suspended ? {status:'suspended',endsAt:result.endsAt} : {status:'allowed'});
+      }).catch(()=>setAccess({status:'error',message:'Unable to verify Import access.'}));
     },Math.max(0,Math.min(2_000_000_000,Date.parse(access.endsAt)-Date.now()+100)));
     return ()=>window.clearTimeout(timer);
   },[access]);
@@ -161,28 +174,47 @@ export function QuestionImportReview({
     ...settings, count: lecture && settings.countMode === 'per_slide' ? 20 : Number(countText), optionCount: Number(optionsText),
   }) : '';
   const draft = drafts[index];
+  const duplicateSummary = useMemo(() => {
+    const active = new Set(drafts.map((_, i) => i).filter(i => !excluded.includes(i)));
+    const banks = new Set<string>();
+    let bankMatches = 0, fileMatches = 0, unresolved = 0;
+    matches.forEach((list, i) => {
+      if (!active.has(i)) return;
+      const relevant = list.filter(match => match.draftIndex === undefined || active.has(match.draftIndex));
+      if (relevant.some(match => match.draftIndex === undefined)) bankMatches++;
+      if (relevant.some(match => match.draftIndex !== undefined)) fileMatches++;
+      relevant.filter(match => match.draftIndex === undefined).forEach(match => banks.add(match.entityId));
+      if (relevant.length && !choices[i]) unresolved++;
+    });
+    return { bankMatches, fileMatches, existing: banks.size, unresolved };
+  }, [drafts, matches, excluded, choices]);
   async function preview(questions:QuestionProposalPayload[]) {
     const results:ImportMatch[][]=[];
-    for(let offset=0;offset<questions.length;offset+=25) {
-      const batch=await api<{matches:ImportMatch[][]}>('/platform/import-preview',{method:'POST',body:JSON.stringify({qbankId:bankId,sourceFile,questions:questions.slice(offset,offset+25)})});
+    for (const chunk of splitImport(questions, [], importPolicy.previewBatchSize)) {
+      const batch=await importRequest<{matches:ImportMatch[][]}>('/platform/import-preview',{method:'POST',body:JSON.stringify({qbankId:bankId,sourceFile,questions:chunk.questions})});
+      if (!Array.isArray(batch.matches) || batch.matches.length !== chunk.questions.length) throw new Error('Duplicate scan was not confirmed. Please retry the scan.');
       results.push(...batch.matches);
+      setScanProgress(results.length);
     }
-    const seen=new Map<string,number>();
-    questions.forEach((payload,i)=>{
-      const key=normalizeDuplicateText(payload.stem), previous=seen.get(key);
-      if(previous!==undefined) results[i].push({entityId:`draft:${previous}`,entityType:'pending_proposal',candidateFingerprint:duplicateFingerprint(questions[previous]),payload:questions[previous],canDelete:true,draftIndex:previous,classification:'exact',similarity:100,detectedAt:new Date().toISOString(),signals:{stem:100,optionsSet:0,optionsOrdered:0,correctAnswer:0,specialty:0,topic:0}});
-      seen.set(key,i);
-    });
-    return results;
+    return withLocalImportMatches(questions, results);
+  }
+  async function scan(questions = drafts) {
+    setChecking(true); setScanComplete(false); setScanProgress(0); setError('');
+    try {
+      const findings = await preview(questions);
+      setMatches(findings); setScanComplete(true); setDirty([]);
+    } catch (caught) {
+      setError(`${caught instanceof Error ? caught.message : 'Duplicate scan could not finish.'} Your questions are still available. Retry the scan before saving.`);
+    } finally { setChecking(false); }
   }
   async function recheck(i:number) {
     if(!dirty.includes(i)) return matches[i]??[];
     setChecking(true);
     try {
       const result=await preview([drafts[i]]);
-      const local=drafts.flatMap((payload,n)=>n!==i&&!excluded.includes(n)&&normalizeDuplicateText(payload.stem)===normalizeDuplicateText(drafts[i].stem)?[{entityId:`draft:${n}`,entityType:'pending_proposal' as const,candidateFingerprint:duplicateFingerprint(payload),payload,canDelete:true,draftIndex:n,classification:'exact' as const,similarity:100,detectedAt:new Date().toISOString(),signals:{stem:100,optionsSet:0,optionsOrdered:0,correctAnswer:0,specialty:0,topic:0}}]:[]);
-      const found=[...result[0],...local];
-      setMatches(current=>current.map((value,n)=>n===i?found:value));
+      const updated = withLocalImportMatches(drafts, matches.map((value, n) => n === i ? result[0] : value), excluded);
+      const found = updated[i];
+      setMatches(updated);
       setDirty(current=>current.filter(n=>n!==i));
       return found;
     } finally {setChecking(false);}
@@ -196,8 +228,10 @@ export function QuestionImportReview({
     try {const wasDirty=dirty.includes(index),found=await recheck(index);if(wasDirty&&found.length)return;if(found.length)keepBoth(found);else advance();} catch(e){setError(e instanceof Error?e.message:'Unable to check duplication.');}
   }
   function excludeQuestion(n:number) {
-    setExcluded(current=>[...new Set([...current,n])]);
-    setMatches(current=>current.map(list=>list.filter(m=>m.draftIndex!==n)));
+    const nextExcluded = [...new Set([...excluded, n])];
+    setExcluded(nextExcluded);
+    setMatches(current=>withLocalImportMatches(drafts, current, nextExcluded));
+    setChoices(current => Object.fromEntries(Object.entries(current).filter(([i]) => Number(i) !== n && !matches[Number(i)]?.some(match => match.draftIndex === n))));
     if(n===index)advance();
   }
   async function deleteOld(match:ImportMatch) {
@@ -225,20 +259,15 @@ export function QuestionImportReview({
     setMessage('');
     if (!drafts.length) setSkipped([]);
     try {
-      if (!unlimited && file.size > 1500000)
-        throw new Error('JSON file must be smaller than 1.5 MB.');
-      if (!/\.(json|txt|text)$/i.test(file.name)) throw new Error('اختر ملف JSON أو TXT يحتوي على أسئلة بصيغة JSON.');
-      const bytes = await file.arrayBuffer();
-      const content = new TextDecoder().decode(bytes).replace(/^\uFEFF/, '').trim();
-      const digest = await crypto.subtle.digest('SHA-256', bytes);
-      const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
-      const report = parseQuestionImportReport(content, '', unlimited ? Number.POSITIVE_INFINITY : limits.questionsPerImport);
+      const maximumBytes = adminImport ? ADMIN_MAX_FILE_BYTES : importPolicy.maxFileMegabytes * 1_000_000;
+      if (file.size > maximumBytes) throw new Error(`JSON file must be smaller than ${maximumBytes / 1_000_000} MB.`);
+      if (!/\.(json|txt|text)$/i.test(file.name)) throw new Error('Choose a JSON or TXT file containing questions in JSON format.');
+      const { report, hash } = await readImportFile(file);
       if (!report.questions.length) {
         if (!drafts.length) setSkipped(report.skipped);
-        throw new Error('لم يتم العثور على أي سؤال مكتمل وصالح. راجع تقرير الأسئلة المتخطاة أدناه.');
+        throw new Error('No complete, valid questions were found. Review the skipped questions below.');
       }
-      const findings=await preview(report.questions);
-      setMatches(findings);setChoices({});setExcluded([]);setDirty([]);setComparison(false);
+      setMatches([]);setChoices({});setExcluded([]);setDirty([]);setComparison(false);setScanComplete(false);
       setSkipped(report.skipped);
       setDrafts(report.questions);
       setFileName(file.name);
@@ -260,6 +289,8 @@ export function QuestionImportReview({
       setUploadProgress(0);
       setUploadTotal(0);
       setLastImportCount(null);
+      setReading(false);
+      await scan(report.questions);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Invalid JSON.');
     } finally {
@@ -269,11 +300,13 @@ export function QuestionImportReview({
   }
   function edit(patch: Partial<QuestionProposalPayload>) {
     if (uploadedChunks.current) return;
-    setDirty(current=>[...new Set([...current,index])]);
-    setChoices(current=>{const next={...current};delete next[index];return next;});
-    setDrafts((current) =>
-      current.map((d, i) => (i === index ? { ...d, ...patch } : d)),
-    );
+    if (Object.keys(patch).some(key => ['stem', 'options', 'answer', 'specialty', 'topic'].includes(key))) {
+      setDirty(current=>[...new Set([...current,index])]);
+      setChoices(current => Object.fromEntries(Object.entries(current).filter(([i]) => Number(i) !== index && !matches[Number(i)]?.some(match => match.draftIndex === index))));
+    }
+    const nextDrafts = drafts.map((draft, i) => i === index ? { ...draft, ...patch } : draft);
+    setMatches(current => withLocalImportMatches(nextDrafts, current, excluded));
+    setDrafts(nextDrafts);
   }
   async function submit() {
     if (operation.current) return;
@@ -281,6 +314,7 @@ export function QuestionImportReview({
     setBusy(true);
     setError('');
     try {
+      if (!scanComplete) throw new Error('Finish the duplicate scan before saving.');
       const checkedMatches=[...matches];
       for(const i of dirty.filter(n=>!excluded.includes(n))) {
         const found=await recheck(i);checkedMatches[i]=found;
@@ -290,8 +324,11 @@ export function QuestionImportReview({
       if(unresolved>=0){setIndex(unresolved);throw new Error('Choose Save as duplication or View the duplication for this question.');}
       const selected=drafts.filter((_,i)=>!excluded.includes(i));
       const selectedChoices=drafts.flatMap((_,i)=>excluded.includes(i)?[]:[choices[i]]);
-      const validated = parseQuestionImportReport({ sourceFile, questions: selected, skipped }, '', unlimited ? Number.POSITIVE_INFINITY : limits.questionsPerImport);
-      if (!validated.questions.length) throw new Error('لا يوجد سؤال صالح للإرسال.');
+      const validated = parseQuestionImportReport({ sourceFile, questions: selected, skipped }, '', Number.POSITIVE_INFINITY);
+      if (!validated.questions.length) throw new Error('There are no valid questions to submit.');
+      if (validated.questions.length !== selected.length)
+        throw new Error('Some edited questions are incomplete. Correct their question text, choices, answer or source before saving; no question has been silently removed.');
+      if (!adminImport && validated.questions.length > limits.questionsPerImport) throw new Error(`Your account allows ${limits.questionsPerImport} questions per import. Remove questions or ask Superadmin to adjust your limit.`);
       const chunks = uploadChunks.current ?? splitImport(validated.questions, validated.skipped);
       if(!uploadChunks.current){let offset=0;chunkChoices.current=chunks.map(chunk=>{const list=selectedChoices.slice(offset,offset+chunk.questions.length);offset+=chunk.questions.length;return list;});}
       uploadChunks.current = chunks;
@@ -301,7 +338,7 @@ export function QuestionImportReview({
         const chunk = chunks[chunkIndex];
         const chunkHash = chunks.length === 1 ? fileHash : [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${fileHash}:${chunkIndex}`)))].map(value => value.toString(16).padStart(2, '0')).join('');
         const chunkName = chunks.length === 1 ? fileName : `${fileName.slice(0, 210)}-part-${chunkIndex + 1}.json`;
-        const result = await api<{
+        const result = await importRequest<{
           proposals: QuestionProposal[];
           successful: number;
           flaggedDuplicates?: number;
@@ -340,7 +377,7 @@ export function QuestionImportReview({
       }
       setLastImportCount(importedCount.current);
       setMessage(
-        'تم إرسال الأسئلة للمراجعة.',
+        'Questions submitted for review.',
       );
       setOpen(false);
       setDrafts([]);
@@ -354,7 +391,7 @@ export function QuestionImportReview({
       setUploadTotal(0);
     } catch (e) {
       setError(
-        `${e instanceof Error ? e.message : 'تعذر الرفع.'} ${uploadedChunks.current ? `تم حفظ ${uploadedChunks.current} دفعة. اضغط إعادة المحاولة لإكمال البقية دون تكرارها.` : 'بقيت الأسئلة متاحة للتعديل وإعادة المحاولة.'}`,
+        `${e instanceof Error ? e.message : 'Unable to upload.'} ${uploadedChunks.current ? `${uploadedChunks.current} batches were saved. Retry to complete the remaining batches without duplicating them.` : 'Your questions remain available to edit and retry.'}`,
       );
       if (!uploadedChunks.current) {
         uploadChunks.current = null;
@@ -378,9 +415,9 @@ export function QuestionImportReview({
   if (access.status === 'suspended')
     return (
       <section className="rounded-2xl border border-destructive/30 bg-destructive/10 p-6 text-center">
-        <h3 className="text-lg font-bold text-destructive">You are suspended</h3>
+        <h3 className="text-lg font-bold text-destructive">Import temporarily unavailable</h3>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Import is temporarily unavailable for this account.
+          {access.message ?? 'Import is temporarily unavailable for this account.'}
           {access.endsAt
             ? ` Access may return after ${new Date(access.endsAt).toLocaleString()}.`
             : ''}
@@ -398,31 +435,31 @@ export function QuestionImportReview({
       <section className="min-w-0 space-y-3 rounded-xl border bg-card p-3 sm:p-4" aria-busy={reading}>
         <label className={`relative flex min-h-44 cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-5 text-center transition-colors focus-within:ring-2 focus-within:ring-primary ${dragging ? 'border-primary bg-primary/10' : 'border-primary/30 bg-primary/5 hover:border-primary hover:bg-primary/10'} ${busy || reading ? 'pointer-events-none opacity-60' : ''}`}>
           <span className="grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">{reading ? <LoaderCircle className="size-6 animate-spin" /> : <Upload className="size-6" />}</span>
-          <span className="text-base font-bold" dir="auto">ارفع الملف هنا <span dir="ltr">JSON / Text</span></span>
-          <span className="text-sm text-muted-foreground" dir="auto">اسحب الملف أو اضغط لاختياره</span>
-          <input aria-label="ارفع الملف هنا JSON / Text" type="file" accept="application/json,text/plain,.json,.txt,.text" disabled={busy || reading}
+          <span className="text-base font-bold" dir="auto">Upload your file here <span dir="ltr">JSON / Text</span></span>
+          <span className="text-sm text-muted-foreground" dir="auto">Drag a file here or click to choose one</span>
+          <input aria-label="Upload your file here JSON / Text" type="file" accept="application/json,text/plain,.json,.txt,.text" disabled={busy || reading}
             onDragOver={e => { e.preventDefault(); if (!busy && !reading) setDragging(true); }}
             onDragLeave={() => setDragging(false)}
-            onDrop={e => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files.length !== 1) { setError('يرجى رفع ملف واحد في كل مرة.'); return; } void read(e.dataTransfer.files[0]); }}
+            onDrop={e => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files.length !== 1) { setError('Please upload one file at a time.'); return; } void read(e.dataTransfer.files[0]); }}
             className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
             onChange={e => { void read(e.target.files?.[0]); e.target.value = ''; }} />
         </label>
-        <p className="text-xs text-muted-foreground" dir="auto">{unlimited ? 'JSON أو ملف نصي يحتوي على JSON · الاستيراد الإداري يرفع الأسئلة على دفعات. راجع الأسئلة قبل إرسالها.' : `JSON أو ملف نصي يحتوي على JSON · حتى ${limits.questionsPerImport} سؤال لكل استيراد · ${limits.importsPerDay} مرات يوميًا · حتى 1.5 MB.`}</p>
+        <p className="text-xs text-muted-foreground" dir="auto">{adminImport ? 'JSON or text containing JSON · Up to 50 MB · Administrative imports submit questions in batches. Review the questions before submitting.' : `JSON or text containing JSON · Up to ${limits.questionsPerImport} questions per import · ${limits.importsPerDay} imports per day · Up to ${importPolicy.maxFileMegabytes} MB.`}</p>
         {busy && uploadTotal > 0 && <output className="block text-sm">Uploading batch {uploadProgress + 1} of {uploadTotal}…</output>}
-        {reading && <output className="block text-sm">Validating file… · جارٍ التحقق من الملف</output>}
+        {reading && <output className="block text-sm">Validating file…</output>}
         {drafts.length > 0 && <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg bg-muted p-3">
           <p className="min-w-0 flex-1 break-words text-sm">{fileName} · {drafts.length} questions ready for review{skipped.length ? ` · ${skipped.length} skipped` : ''}{repaired ? ' · JSON repaired' : ''}</p>
-          <button type="button" disabled={reading || busy} className="q-button min-h-11 border" onClick={() => setOpen(true)}>Resume review · متابعة المراجعة</button>
+          <button type="button" disabled={reading || busy} className="q-button min-h-11 border" onClick={() => setOpen(true)}>Resume review</button>
         </div>}
-        {message && <output className="block space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm" dir="rtl">
+        {message && !error && <output className="block space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm" dir="ltr">
           <strong className="block text-base text-emerald-700 dark:text-emerald-300">{message}</strong>
           {lastImportCount ? <>
-            <span className="block">تم رفع الأسئلة الجديدة وإرسالها إلى فريق المراجعة للتحقق منها قبل إضافتها إلى Q Bank.</span>
-            <span className="block">عدم ظهورها مباشرة في البنك أمر طبيعي؛ ستُضاف تلقائيًا بعد اعتماد المراجعين.</span>
-          </> : <span className="block">لم تُرسل أسئلة جديدة؛ الأسئلة المطابقة موجودة بالفعل أو قيد المراجعة.</span>}
+            <span className="block">New questions were submitted to the review team before being added to the QBank.</span>
+            <span className="block">They will appear in the bank automatically after reviewer approval.</span>
+          </> : <span className="block">No new questions were submitted. Matching questions already exist or are awaiting review.</span>}
         </output>}
-        {skipped.length > 0 && <section className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4" dir="rtl">
-          <h3 className="font-semibold">لم تتم إضافة {skipped.length} أسئلة بسبب مشاكل في المصدر:</h3>
+        {skipped.length > 0 && <section className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4" dir="ltr">
+          <h3 className="font-semibold">{skipped.length} questions were skipped because of source issues:</h3>
           <ul className="mt-2 list-disc space-y-1 ps-5 text-sm">
             {skipped.map((item, itemIndex) => <li key={`${item.originalQuestionNumber ?? 'unknown'}-${item.page ?? 'unknown'}-${itemIndex}`}>
               {item.originalQuestionNumber ? `Question ${item.originalQuestionNumber} — ` : ''}{item.page ? `Page ${item.page}: ` : ''}{item.reason}
@@ -434,29 +471,29 @@ export function QuestionImportReview({
       <div className="space-y-3">
       {(['lecture', 'qbank'] as const).map(source => <div key={source} className={`min-w-0 overflow-hidden rounded-xl border ${selectedSource === source ? 'border-primary/50' : 'border-border'}`}>
         <button type="button" aria-expanded={selectedSource === source} aria-controls={`${panelId}-${source}`} onClick={() => { setSelectedSource(selectedSource === source ? null : source); setSettings(s => ({ ...s, source })); setCopyError(''); }}
-          className={`flex min-h-16 w-full items-center gap-3 p-4 text-start transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary ${selectedSource === source ? 'bg-primary/5' : 'bg-card'}`} dir="rtl">
+          className={`flex min-h-16 w-full items-center gap-3 p-4 text-start transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary ${selectedSource === source ? 'bg-primary/5' : 'bg-card'}`} dir="ltr">
           <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">{source === 'lecture' ? <GraduationCap className="size-5" /> : <FileJson className="size-5" />}</span>
-          <span className="min-w-0 flex-1 text-sm font-semibold leading-6">{source === 'lecture' ? 'ارفع أسئلة مولدة بالذكاء الاصطناعي من المحاضرة (المادة العلمية)' : 'استورد أسئلة بنك الأسئلة بالاستعانة بالذكاء الاصطناعي'}</span>
+          <span className="min-w-0 flex-1 text-sm font-semibold leading-6">{source === 'lecture' ? 'Generate questions from lecture material with AI' : 'Convert question bank files with AI'}</span>
           <ChevronDown className={`size-5 shrink-0 transition-transform ${selectedSource === source ? 'rotate-180' : ''}`} />
         </button>
       <div id={`${panelId}-${source}`} hidden={selectedSource !== source}>
       {selectedSource === source && <>
       <section className="min-w-0 space-y-4 rounded-xl border bg-card p-3 sm:p-4">
         <div>
-          <h3 className="font-semibold">Use AI · إعداد المحتوى</h3>
-          <p className="mt-1 text-sm text-muted-foreground" dir="auto">اختر الإعدادات، وانسخ Prompt إلى أداة الذكاء الاصطناعي مع ملفك، ثم ارفع ملف JSON الناتج هنا لمراجعته. لا يتم إرسال ملفك إلى الذكاء الاصطناعي من داخل الموقع.</p>
-          <p className="mt-2 text-sm text-muted-foreground" dir="auto">يتضمن Prompt تصنيف كل سؤال إلى تخصص (specialty) وموضوع (topic). يقرأهما الموقع مباشرة من JSON، ويمكنك مراجعتهما وتعديلهما قبل الرفع.</p>
+          <h3 className="font-semibold">Prepare content with AI</h3>
+          <p className="mt-1 text-sm text-muted-foreground" dir="auto">Choose your settings, copy the prompt into your AI tool with your file, then upload the resulting JSON here for review. Qraft does not send your file to an AI service.</p>
+          <p className="mt-2 text-sm text-muted-foreground" dir="auto">The prompt asks for a specialty and topic for each question. Qraft reads these from the JSON so you can review and edit them before submitting.</p>
         </div>
-        {!lecture && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">سيطلب Prompt تحويل البنك بدقة، وقراءة النص أو استخدام OCR، وتصحيح الأخطاء الإملائية وفق السياق، وإكمال أربعة خيارات منطقية، وإضافة رقم السؤال والصفحة وشرح الحل.</p>}
+        {!lecture && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">The prompt asks the AI to convert the bank using text extraction or OCR, correct spelling in context, complete four plausible options, and include the question number, page and explanation.</p>}
         {lecture && <div className="grid min-w-0 gap-4 sm:grid-cols-2">
-          <label className="min-w-0 text-sm font-semibold">Question type · نوع السؤال
+          <label className="min-w-0 text-sm font-semibold">Question type
             <select className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" value={settings.kind} onChange={e => setSettings(s => ({ ...s, kind: e.target.value as QuestionPromptSettings['kind'] }))}>
               <option value="clinical">Clinical</option><option value="direct">Direct</option>
             </select>
           </label>
-          <label className="min-w-0 text-sm font-semibold">Question length · طول السؤال
+          <label className="min-w-0 text-sm font-semibold">Question length
             <select className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" value={settings.length} onChange={e => setSettings(s => ({ ...s, length: e.target.value as QuestionPromptSettings['length'] }))}>
-              <option value="short">قصير · Short</option><option value="medium">متوسط · Medium</option><option value="long">طويل · Long</option>
+              <option value="short">Short</option><option value="medium">Medium</option><option value="long">Long</option>
             </select>
           </label>
         </div>}
@@ -464,27 +501,27 @@ export function QuestionImportReview({
           <div className="min-w-0 space-y-2">
             {lecture && <label className="block text-sm font-semibold">Question count mode
               <select className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" value={settings.countMode} onChange={e => setSettings(s => ({ ...s, countMode: e.target.value as QuestionPromptSettings['countMode'] }))}>
-                <option value="fixed">Specific number · عدد محدد</option><option value="per_slide">One question per slide</option>
+                <option value="fixed">Specific number</option><option value="per_slide">One question per slide</option>
               </select>
             </label>}
-            {(!lecture || settings.countMode === 'fixed') && <label className="block text-sm font-semibold">{lecture ? 'Questions to generate' : 'Questions to extract'} · عدد الأسئلة
+            {(!lecture || settings.countMode === 'fixed') && <label className="block text-sm font-semibold">{lecture ? 'Questions to generate' : 'Questions to extract'}
               <input type="number" inputMode="numeric" min={1} max={200} step={1} value={countText} onChange={e => setCountText(e.target.value)} aria-invalid={!countValid} className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" />
             </label>}
-            <p className="text-xs text-muted-foreground">{unlimited ? 'AI prompt: 1–200 questions at a time. Uploaded JSON files can contain any number of questions.' : '1–200 questions per JSON file.'}</p>
-            {!countValid && <p role="alert" className="text-sm text-destructive">اختر عددًا صحيحًا من 1 إلى 200.</p>}
+            <p className="text-xs text-muted-foreground">AI prompt: 1–200 questions at a time. The full file loads for review; account import limits apply when saving.</p>
+            {!countValid && <p role="alert" className="text-sm text-destructive">Choose a whole number from 1 to 200.</p>}
           </div>
-          {lecture && <label className="min-w-0 text-sm font-semibold">Options per question · عدد الخيارات
+          {lecture && <label className="min-w-0 text-sm font-semibold">Options per question
             <input type="number" inputMode="numeric" min={2} max={10} step={1} value={optionsText} onChange={e => setOptionsText(e.target.value)} aria-invalid={!optionsValid} className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" />
-            {!optionsValid && <span role="alert" className="mt-2 block text-sm text-destructive">اختر عددًا صحيحًا من 2 إلى 10.</span>}
+            {!optionsValid && <span role="alert" className="mt-2 block text-sm text-destructive">Choose a whole number from 2 to 10.</span>}
           </label>}
         </div>
         <button type="button" className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" disabled={!prompt}
-          onClick={async () => { try { await navigator.clipboard.writeText(prompt); setCopiedPrompt(prompt); setCopyError(''); } catch { setCopyError('تعذر النسخ. افتح معاينة Prompt أدناه وانسخ النص يدويًا.'); } }}>
+          onClick={async () => { try { await navigator.clipboard.writeText(prompt); setCopiedPrompt(prompt); setCopyError(''); } catch { setCopyError('Unable to copy. Open the prompt preview below and copy the text manually.'); } }}>
           {copiedPrompt === prompt && prompt ? <Check className="size-5" /> : <Copy className="size-5" />}
-          {copiedPrompt === prompt && prompt ? 'تم نسخ Prompt' : 'نسخ تعليمات الذكاء الاصطناعي'}
+          {copiedPrompt === prompt && prompt ? 'Prompt copied' : 'Copy AI prompt'}
           <span className="sr-only">Copy AI prompt</span>
         </button>
-        {copiedPrompt === prompt && prompt && <output className="block text-sm text-emerald-600" dir="auto">تم النسخ. أرفق المصدر مع التعليمات في أداة AI، ثم ارفع الملف الناتج في المربع بالأعلى.</output>}
+        {copiedPrompt === prompt && prompt && <output className="block text-sm text-emerald-600" dir="auto">Copied. Add your source and this prompt to your AI tool, then upload the resulting file above.</output>}
         {copyError && <p role="alert" className="text-sm text-destructive" dir="auto">{copyError}</p>}
         <details className="min-w-0 text-sm">
           <summary className="min-h-11 cursor-pointer py-3">Preview AI prompt</summary>
@@ -495,7 +532,7 @@ export function QuestionImportReview({
       </div>
       </div>)}
       </div>
-      <p className="text-xs text-muted-foreground" dir="auto">يمكنك أيضًا رفع JSON جاهز مباشرة. الإعدادات تخص Prompt ولا تعيد كتابة الملف المستورد أو تغيّر إجاباته. راجع الناتج مقابل المصدر قبل الرفع.</p>
+      <p className="text-xs text-muted-foreground" dir="auto">You can also upload an existing JSON file directly. These settings only affect the prompt; they do not rewrite imported questions or answers. Check the output against your source before uploading.</p>
       <Dialog
         open={open}
         onOpenChange={(o) => {
@@ -504,15 +541,36 @@ export function QuestionImportReview({
       >
         <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-3xl">
           <DialogTitle>Import Review</DialogTitle>
+          <section className="rounded-xl border bg-muted/30 p-4" aria-live="polite">
+            {checking && !scanComplete ? <p className="font-semibold">Checking duplication · {scanProgress} / {drafts.length} questions</p> : scanComplete ? <>
+              <p className="font-semibold">{duplicateSummary.bankMatches} imported questions have possible matches in this bank · {duplicateSummary.existing} existing or pending matches shown.</p>
+              <p className="mt-1 text-sm text-muted-foreground">{duplicateSummary.fileMatches} questions also match earlier questions in this file · {duplicateSummary.unresolved} decisions remaining. Matches are possible duplicates; review before choosing.</p>
+              {duplicateSummary.unresolved > 0 && <button type="button" disabled={busy || checking} className="q-button mt-3 min-h-11 border" onClick={() => {
+                const nextIndex = matches.findIndex((list, i) => list.length && !excluded.includes(i) && !choices[i]);
+                if (nextIndex >= 0) { setIndex(nextIndex); setComparisonIndex(0); setComparison(true); }
+              }}>Review duplications</button>}
+            </> : <p>Questions are loaded. Complete the duplicate scan before saving.</p>}
+            {!checking && !scanComplete && <button type="button" className="q-button mt-3 min-h-11 border" onClick={() => void scan()}>Retry duplicate scan</button>}
+          </section>
+          <label className="block text-sm font-semibold">Source name for this import
+            <input value={sourceFile} disabled={busy || checking || uploadProgress > 0} maxLength={240} className="mt-1 min-h-11 w-full rounded-xl border bg-background px-3" onChange={event => {
+              const name = event.target.value;
+              setSourceFile(name);
+              const renamed = drafts.map(question => ({ ...question, sourceFile: name, sourceReference: importedSourceReference(name, question.sourcePage ?? 0, question.originalQuestionNumber) }));
+              setDrafts(renamed);
+              setMatches(current => withLocalImportMatches(renamed, current, excluded));
+            }} />
+            <span className="mt-1 block text-xs font-normal text-muted-foreground">Changes the source title for every question; page numbers and original question numbers stay intact.</span>
+          </label>
           {matches[index]?.length>0&&!excluded.includes(index)&&<span className="w-fit rounded-full bg-amber-500/15 px-3 py-1 text-sm font-semibold text-amber-700 dark:text-amber-300">duplication</span>}
           <p>
-            تم اكتشاف {drafts.length} سؤالًا · Question {index + 1} of{' '}
+            {drafts.length} questions found · Question {index + 1} of{' '}
             {drafts.length}
           </p>
           <progress aria-label="Question review progress" max={drafts.length || 1} value={index + 1} className="h-2 w-full accent-primary" />
           {excluded.includes(index)&&<p className="text-sm text-muted-foreground">New question deleted from this import.</p>}
           {draft && (
-            <fieldset disabled={busy || uploadProgress > 0} className="min-w-0 space-y-3">
+            <fieldset disabled={busy || checking || uploadProgress > 0 || excluded.includes(index)} className="min-w-0 space-y-3">
               <legend className="sr-only">Review and edit question</legend>
               <label className="block text-sm font-semibold">
                 Question
@@ -523,7 +581,7 @@ export function QuestionImportReview({
                   onChange={(e) => edit({ stem: e.target.value })}
                 />
               </label>
-              <p className="text-sm font-medium">Answer options · اختر الإجابة الصحيحة</p>
+              <p className="text-sm font-medium">Answer options · Select the correct answer</p>
               {draft.options.map((o, i) => (
                 <div className="flex items-start gap-2" key={i}>
                   <label className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center gap-1 rounded-lg border px-2">
@@ -568,7 +626,7 @@ export function QuestionImportReview({
                 ] as const
               ).map((k) => (
                 <label className="block text-sm" key={k}>
-                  {k === 'specialty' ? 'Specialty · التخصص' : k === 'topic' ? 'Topic · الموضوع' : k}
+                  {k === 'specialty' ? 'Specialty' : k === 'topic' ? 'Topic' : k}
                   <textarea
                     dir="auto"
                     className="mt-1 w-full rounded-xl border bg-background p-3"
@@ -578,7 +636,8 @@ export function QuestionImportReview({
                 </label>
               ))}
               <div className="rounded-xl bg-muted p-3 text-sm" dir="auto">
-                <span className="font-semibold">Source · المصدر المختصر</span>
+                <span className="font-semibold">Source · Brief reference</span>
+                <input aria-label="Question source name" maxLength={240} className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" value={draft.sourceFile ?? ''} onChange={event => edit({ sourceFile: event.target.value, sourceReference: importedSourceReference(event.target.value, draft.sourcePage ?? 0, draft.originalQuestionNumber) })} />
                 <p className="mt-1 break-words">{draft.sourceReference}</p>
               </div>
             </fieldset>
@@ -606,11 +665,11 @@ export function QuestionImportReview({
               Previous
             </button>
             <button disabled={busy||checking} className="q-button min-h-11 border" onClick={()=>void next()}>
-              {checking?'Checking…':matches[index]?.length&&!excluded.includes(index)?'Save as duplication':'Next'}
+              {checking?'Checking…':matches[index]?.length&&!excluded.includes(index)?'Keep both':'Next'}
             </button>
             {matches[index]?.length>0&&!excluded.includes(index)&&<button disabled={busy||checking} className="q-button col-span-2 min-h-11 border" onClick={()=>{setComparisonIndex(0);setComparison(true);}}>View the duplication</button>}
             <button
-              disabled={busy || checking || !rightsConfirmed}
+              disabled={busy || checking || !rightsConfirmed || !scanComplete || !sourceFile.trim()}
               className="q-button col-span-2 min-h-11 whitespace-normal bg-primary text-primary-foreground"
               onClick={() => void submit()}
             >
@@ -630,8 +689,8 @@ export function QuestionImportReview({
           <div className="grid gap-2 sm:grid-cols-2">
             <button disabled={checking||busy} className="q-button min-h-11 bg-primary text-primary-foreground" onClick={()=>keepBoth()}>Keep both</button>
             <button disabled={checking||busy} className="q-button min-h-11 border" onClick={()=>excludeQuestion(index)}>Delete new</button>
-            <button disabled={checking||busy||!matches[index]?.[comparisonIndex]?.canDelete} className="q-button min-h-11 border text-destructive" onClick={()=>void deleteOld(matches[index][comparisonIndex])}>Delete old</button>
             <button disabled={checking||busy} className="q-button min-h-11 border" onClick={()=>{setComparison(false);setDirty(current=>[...new Set([...current,index])]);}}>Edit new</button>
+            {matches[index]?.[comparisonIndex]?.canDelete && <button disabled={checking||busy} className="q-button min-h-11 border text-destructive" onClick={()=>void deleteOld(matches[index][comparisonIndex])}>Delete old</button>}
           </div>
         </DialogContent>
       </Dialog>

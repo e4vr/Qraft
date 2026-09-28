@@ -1,4 +1,4 @@
-import { api, setApiCache } from '@/lib/api-client';
+import { ApiError, api, setApiCache } from '@/lib/api-client';
 import type {
   AppUser,
   CollaborationState,
@@ -18,6 +18,7 @@ function collaborationRequest(user: AppUser, force = false) {
   collaborationScope = user.uid;
   return api<CollaborationResponse>('/collaboration', {
     cacheScope: user.uid,
+    expectedUserId: user.uid,
     forceRefresh: force,
     requestReason: force ? 'explicit-refresh' : undefined,
   });
@@ -213,20 +214,28 @@ export function collaborationChangeSet(
 }
 
 async function sendCollaborationState(
+  uid: string,
   next: CollaborationState,
   previous: CollaborationState,
 ): Promise<void> {
-  const operations = collaborationChangeSet(next, previous);
+  const operations = collaborationChangeSet(next, previous).map(operation => {
+    if (operation.collection !== 'answerStats' || operation.type !== 'set') return operation;
+    const value = operation.value as CollaborationState['answerStats'][string];
+    return { ...operation, value: { ...value, selections: { [uid]: value.selections[uid] } } };
+  });
   if (operations.length) {
-    await api('/collaboration', {
+    const result = await api<{ ok?: boolean }>('/collaboration', {
       method: 'PUT',
+      expectedUserId: uid,
       body: JSON.stringify({ operations }),
     });
-    if (collaborationScope) {
+    if (result.ok !== true)
+      throw new ApiError('The server did not confirm your changes. They remain saved locally.', 502, {});
+    if (collaborationScope === uid) {
       setApiCache(
         '/collaboration',
         { collaboration: next },
-        { cacheScope: collaborationScope },
+        { cacheScope: uid },
       );
     }
   }
@@ -260,7 +269,7 @@ export async function flushPendingCollaborationState(
       const operation = await loadCollaborationSyncOutbox(uid);
       if (!operation) return latest;
       await noteCollaborationSyncAttempt(uid, operation.id);
-      await sendCollaborationState(operation.state, operation.base);
+      await sendCollaborationState(uid, operation.state, operation.base);
       await removeCollaborationSync(uid, operation.id);
       latest = operation.state;
     }

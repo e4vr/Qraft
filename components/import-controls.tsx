@@ -2,8 +2,10 @@
 import { useEffect, useState } from 'react';
 import { api, invalidateApiResources } from '@/lib/api-client';
 import type { MemberProfile } from '@/lib/medguard-types';
+import { DEFAULT_IMPORT_SETTINGS, type ImportSettings } from '@/features/imports/domain/import-settings';
 
 export function ImportControls({ members }: { members: MemberProfile[] }) {
+  const [pipeline, setPipeline] = useState<ImportSettings>(DEFAULT_IMPORT_SETTINGS);
   const [userId, setUserId] = useState(members[0]?.uid ?? '');
   const [questions, setQuestions] = useState('150'),
     [times, setTimes] = useState('5'),
@@ -15,6 +17,11 @@ export function ImportControls({ members }: { members: MemberProfile[] }) {
   const [busy, setBusy] = useState(true),
     [error, setError] = useState(''),
     [message, setMessage] = useState('');
+  useEffect(() => {
+    let active = true;
+    void api<ImportSettings>('/platform/import-settings').then(value => { if (active) setPipeline(value); }).catch(error => { if (active) setError(error.message); });
+    return () => { active = false; };
+  }, []);
   useEffect(() => {
     let active = true;
     void api<{
@@ -75,11 +82,11 @@ export function ImportControls({ members }: { members: MemberProfile[] }) {
     try {
       const defaults = operation === 'defaults';
       const result = await api<{ suspension?: { ends_at: string } }>(
-        defaults ? '/platform/import-defaults' : '/platform/economy-admin',
+        operation === 'pipeline' ? '/platform/import-settings' : defaults ? '/platform/import-defaults' : '/platform/economy-admin',
         {
-          method: 'POST',
+          method: operation === 'pipeline' ? 'PUT' : 'POST',
           body: JSON.stringify(
-            defaults
+            operation === 'pipeline' ? { settings: pipeline, reason } : defaults
               ? {
                   questionsPerImport:
                     globalQuestions === '' ? null : Number(globalQuestions),
@@ -130,6 +137,16 @@ export function ImportControls({ members }: { members: MemberProfile[] }) {
           onChange={(e) => setReason(e.target.value)}
         />
       </label>
+      <fieldset disabled={busy} className="space-y-3 rounded-xl border p-4">
+        <legend className="px-2 font-semibold">JSON reading & duplicate review</legend>
+        <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={pipeline.enabled} onChange={event => setPipeline({ ...pipeline, enabled: event.target.checked })} />Allow JSON imports for users</label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="q-ops-field">Maximum user file size (MB)<input type="number" min="0.5" max="50" step="0.5" value={pipeline.maxFileMegabytes} onChange={event => setPipeline({ ...pipeline, maxFileMegabytes: Number(event.target.value) })} /></label>
+          <label className="q-ops-field">Questions per duplicate scan request<select value={pipeline.previewBatchSize} onChange={event => setPipeline({ ...pipeline, previewBatchSize: Number(event.target.value) })}><option value="25">25 · smaller requests</option><option value="50">50 · balanced</option><option value="100">100 · fewer requests</option></select></label>
+        </div>
+        <p className="text-xs text-muted-foreground">Superadmin can still import when user imports are paused. Administrative files are limited to 50 MB; uploads are split into bounded batches. Existing account quotas and suspensions remain available below.</p>
+        <button className="q-button min-h-11 w-full border" onClick={() => void save('pipeline')}>Save JSON settings</button>
+      </fieldset>
       <div className="grid gap-5 lg:grid-cols-2">
         <fieldset
           disabled={busy}

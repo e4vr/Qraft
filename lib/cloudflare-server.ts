@@ -417,6 +417,9 @@ export async function register(request: Request) {
     phone?: string;
     setupToken?: string;
   }>(request);
+  if ([input.name, input.email, input.password, input.universityId, input.phone, input.setupToken]
+    .some(value => value !== undefined && typeof value !== 'string'))
+    return json({ error: 'Invalid registration fields.' }, 400);
   const email = normalizeEmail(input.email ?? '');
   const name = input.name?.trim() ?? '';
   const password = input.password ?? '';
@@ -592,6 +595,9 @@ export async function register(request: Request) {
 export async function login(request: Request) {
   assertSameOrigin(request);
   const input = await readJson<{ email?: string; password?: string }>(request);
+  if (typeof input.email !== 'string' || input.email.length > 254 ||
+      typeof input.password !== 'string' || input.password.length > 128)
+    return json({ error: 'Enter a valid email and password.' }, 400);
   const row = await profileByEmail(input.email ?? '');
   if (!row) {
     // Keep the unknown-account path computationally comparable to a real
@@ -807,7 +813,10 @@ export async function saveState(request: Request) {
     baseRevision?: number;
     operationId?: string;
   }>(request, 2_000_000);
-  if (!input.state || input.state.version !== 1)
+  if (!isRecord(input.state) || input.state.version !== 1 ||
+      !isRecord(input.state.settings) || !isRecord(input.state.progress) ||
+      Object.values(input.state.progress).some(progress => !isRecord(progress)) ||
+      (input.baseRevision !== undefined && (!Number.isSafeInteger(input.baseRevision) || input.baseRevision < 0)))
     return json({ error: 'Invalid state payload.' }, 400);
   const operationId =
     typeof input.operationId === 'string' &&
@@ -1159,10 +1168,10 @@ export async function saveStatePatch(
     return json({ error: 'Approved account required.' }, 403);
   const input = await readJson<Record<string, unknown>>(request, 2_000_000);
   const row = await env.DB.prepare(
-    'SELECT payload FROM app_states WHERE user_id=?',
+    'SELECT payload,revision FROM app_states WHERE user_id=?',
   )
     .bind(user.uid)
-    .first<{ payload: string }>();
+    .first<{ payload: string; revision: number }>();
   const state = row
     ? normalizeAppState(JSON.parse(row.payload) as AppState)
     : initialAppState();
@@ -1249,7 +1258,7 @@ export async function saveStatePatch(
     headers: request.headers,
     body: JSON.stringify({
       state,
-      baseRevision: input.baseRevision,
+      baseRevision: input.baseRevision ?? row?.revision ?? 0,
       operationId: input.operationId,
     }),
   });
@@ -1257,6 +1266,9 @@ export async function saveStatePatch(
   const stateResponse = await saveState(forwarded);
   if (!stateResponse.ok || kind !== 'exam' || !Array.isArray(answerSelections))
     return stateResponse;
+  // Private progress needs no bank broadcast. Only changed shared statistics
+  // below clear this marker, including recovery after a partially failed save.
+  stateResponse.headers.set('x-qraft-unchanged', '1');
   const savedResult = await stateResponse.clone().json() as { superseded?: boolean };
   if (savedResult.superseded) return stateResponse;
   const selections = answerSelections.filter(isRecord).map((item) => ({
@@ -1290,7 +1302,6 @@ export async function saveStatePatch(
         qbankId: item.qbankId,
         questionId: item.questionId,
         selections: {
-          ...existing.get(id)?.selections,
           [user.uid]: item.answer,
         },
       },
@@ -1304,6 +1315,8 @@ export async function saveStatePatch(
   });
   shareCurrentUserRequest(request, collaborationRequest);
   const collaborationResponse = await saveCollaboration(collaborationRequest);
+  if (collaborationResponse.ok && collaborationResponse.headers.get('x-qraft-unchanged') !== '1')
+    stateResponse.headers.delete('x-qraft-unchanged');
   return collaborationResponse.ok ? stateResponse : collaborationResponse;
 }
 
@@ -1598,6 +1611,8 @@ export async function updateOwnProfile(request: Request) {
   const input = await readJson<{ displayName?: string; phone?: string }>(
     request,
   );
+  if (typeof input.displayName !== 'string' || (input.phone !== undefined && typeof input.phone !== 'string'))
+    return json({ error: 'Enter a valid name and mobile number.' }, 400);
   const displayName = input.displayName?.trim() ?? '';
   const phone = normalizePhone(input.phone ?? '');
   if (
@@ -1669,7 +1684,8 @@ export async function changeOwnPassword(request: Request) {
   }>(request);
   const currentPassword = input.currentPassword ?? '';
   const newPassword = input.newPassword ?? '';
-  if (newPassword.length < 10 || newPassword.length > 128)
+  if (typeof currentPassword !== 'string' || currentPassword.length > 128 ||
+      typeof newPassword !== 'string' || newPassword.length < 10 || newPassword.length > 128)
     return json(
       { error: 'Use a new password between 10 and 128 characters.' },
       400,
@@ -2153,9 +2169,9 @@ function answerStatChangeAllowed(
   )
     return false;
   const before = existing?.selections ?? {};
-  return [
-    ...new Set([...Object.keys(before), ...Object.keys(selections)]),
-  ].every((uid) => uid === user.uid || before[uid] === selections[uid]);
+  // Missing participants are not deletions. Old clients may still echo the
+  // snapshot; reject attempts to change others, but accept an own-answer patch.
+  return Object.keys(selections).every((uid) => uid === user.uid || before[uid] === selections[uid]);
 }
 
 function roleApplicationChangeAllowed(
@@ -2679,6 +2695,10 @@ export async function saveCollaboration(request: Request) {
       operation.collection,
       operation.id,
     );
+    if (operation.collection === 'answerStats' && operation.type === 'set') {
+      const value = operation.value as { selections: Record<string, number> };
+      return state.answerStats[operation.id]?.selections[user.uid] !== value.selections[user.uid];
+    }
     return operation.type === 'delete'
       ? current !== undefined
       : !sameJson(operation.value, current);
@@ -2765,7 +2785,11 @@ export async function saveCollaboration(request: Request) {
         operation.collection !== 'profiles' && operation.type === 'set',
     )
     .map((operation) => {
-      const value = operation.value as Record<string, unknown>;
+      const original = operation.value as Record<string, unknown>;
+      const value = operation.collection === 'answerStats'
+        ? { id: operation.id, qbankId: original.qbankId, questionId: original.questionId,
+            selections: { [user.uid]: (original.selections as Record<string, number>)[user.uid] } }
+        : original;
       const metadata = recordData(value);
       return {
         collection: operation.collection,
@@ -2786,6 +2810,7 @@ export async function saveCollaboration(request: Request) {
   if (deletedQBankIds.length) {
     const encodedIds = JSON.stringify(deletedQBankIds);
     statements.push(
+      env.DB.prepare("UPDATE media SET status='delete_pending',updated_at=? WHERE qbank_id IN (SELECT value FROM json_each(?)) AND status='ready'").bind(now, encodedIds),
       env.DB.prepare(`DELETE FROM records WHERE
         qbank_id IN (SELECT value FROM json_each(?)) OR
         (type='qbankShareLinks' AND json_extract(payload,'$.qbankId') IN (SELECT value FROM json_each(?)))`).bind(
@@ -2843,7 +2868,9 @@ export async function saveCollaboration(request: Request) {
     SELECT json_extract(change.value, '$.collection'), json_extract(change.value, '$.id'), json_extract(change.value, '$.qbankId'),
       json_extract(change.value, '$.ownerId'), json_extract(change.value, '$.email'), json_extract(change.value, '$.payload'), ?
     FROM json_each(?) AS change WHERE 1
-    ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id, owner_id=excluded.owner_id, email=excluded.email, payload=excluded.payload, updated_at=excluded.updated_at`).bind(
+    ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id, owner_id=excluded.owner_id, email=excluded.email,
+      payload=CASE WHEN excluded.type='answerStats' THEN json_patch(records.payload,excluded.payload) ELSE excluded.payload END,
+      updated_at=excluded.updated_at`).bind(
         now,
         JSON.stringify(recordSets),
       ),
@@ -2864,7 +2891,7 @@ export async function saveCollaboration(request: Request) {
     );
   if (statements.length) await env.DB.batch(statements);
   await emitUsage(user.uid, { privateBanksCreated: input.operations.filter(operation => operation.collection === 'qbanks' && operation.type === 'set' && (operation.value as QBank)?.visibility === 'private' && !state.qbanks.some(bank => bank.id === operation.id)).length });
-  return json({ ok: true, operations: input.operations });
+  return json({ ok: true, operations: input.operations }, 200, deletedQBankIds.length ? { 'x-qraft-media-cleanup': '1' } : undefined);
 }
 
 export async function reserveIds(request: Request) {
@@ -3260,7 +3287,7 @@ export async function serveMedia(request: Request, key: string) {
       storage_key: string | null;
       status: string;
     }>();
-  if (!metadata || metadata.status === 'account_deleted')
+  if (!metadata || metadata.status !== 'ready')
     return new Response('Not found.', { status: 404 });
   const readyMadeTest = await preformedMediaTest(metadata.qbank_id);
   if (readyMadeTest) {
@@ -3333,56 +3360,6 @@ export async function serveMedia(request: Request, key: string) {
   return new Response(object.body, { headers });
 }
 
-async function removeBankMedia(qbankIds: string[]) {
-  if (!qbankIds.length) return;
-  const rows = await env.DB.prepare(
-    'SELECT key,provider,storage_key,size FROM media WHERE qbank_id IN (SELECT value FROM json_each(?))',
-  )
-    .bind(JSON.stringify(qbankIds))
-    .all<{
-      key: string;
-      provider: string;
-      storage_key: string | null;
-      size: number;
-    }>();
-  if (rows.results.some((row) => row.provider === 'r2') && !hasR2Storage())
-    return json({ error: 'R2 storage is not configured.' }, 503);
-  if (
-    rows.results.some((row) => row.provider !== 'r2') &&
-    !imageKitAuthorization()
-  )
-    return json({ error: 'Legacy ImageKit storage is not configured.' }, 503);
-  for (let offset = 0; offset < rows.results.length; offset += 50) {
-    const deletions = await Promise.all(
-      rows.results.slice(offset, offset + 50).map(async (row) => {
-        if (row.provider === 'r2' && row.storage_key && hasR2Storage()) {
-          await r2StorageService.delete(row.storage_key, Number(row.size || 0));
-          return true;
-        }
-        return deleteImageKitFile(row.key);
-      }),
-    );
-    if (deletions.some((deleted) => !deleted))
-      return json(
-        { error: 'Some images could not be deleted from ImageKit. Try again.' },
-        502,
-      );
-  }
-  const removedLegacyBytes = rows.results.reduce(
-    (total, row) =>
-      row.provider === 'r2' ? total : total + Number(row.size || 0),
-    0,
-  );
-  await env.DB.batch([
-    env.DB.prepare(
-      'DELETE FROM media WHERE qbank_id IN (SELECT value FROM json_each(?))',
-    ).bind(JSON.stringify(qbankIds)),
-    env.DB.prepare(
-      "UPDATE counters SET value=max(0,value-?),updated_at=? WHERE id='media-bytes'",
-    ).bind(removedLegacyBytes, new Date().toISOString()),
-  ]);
-}
-
 export async function deleteBankMedia(request: Request, qbankId: string) {
   assertSameOrigin(request);
   const user = await currentUser(request);
@@ -3403,9 +3380,7 @@ export async function deleteBankMedia(request: Request, qbankId: string) {
       },
       403,
     );
-  const mediaError = await removeBankMedia([qbankId]);
-  if (mediaError) return mediaError;
-  return json({ ok: true });
+  return json({ error: 'Delete the QBank or test first. Its images are cleaned up after the deletion is safely saved.' }, 409);
 }
 
 export async function deleteQBankFolder(request: Request, folderId: string) {
@@ -3444,8 +3419,8 @@ export async function deleteQBankFolder(request: Request, folderId: string) {
       );
     if (targetFolderId && !folders.some((item) => item.id === targetFolderId))
       return json({ error: 'Destination folder not found.' }, 404);
-  } else if (input.mode !== 'cascade' || input.confirmation !== 'حذف') {
-    return json({ error: 'Type حذف to confirm permanent deletion.' }, 400);
+  } else if (input.mode !== 'cascade' || !['DELETE', '\u062d\u0630\u0641'].includes(String(input.confirmation))) {
+    return json({ error: 'Type DELETE to confirm permanent deletion.' }, 400);
   }
   const bankRows = await recordsByTypes(['qbanks']);
   const banks = bankRows
@@ -3456,10 +3431,6 @@ export async function deleteQBankFolder(request: Request, folderId: string) {
       { error: 'Essential QBanks must be moved or removed independently.' },
       409,
     );
-  if (input.mode === 'cascade') {
-    const mediaError = await removeBankMedia(banks.map((bank) => bank.id));
-    if (mediaError) return mediaError;
-  }
   const now = new Date().toISOString();
   const auditId = crypto.randomUUID();
   const bankIds = banks.map((bank) => bank.id);
@@ -3490,6 +3461,7 @@ export async function deleteQBankFolder(request: Request, folderId: string) {
   }
   if (input.mode === 'cascade' && bankIds.length) {
     statements.push(
+      env.DB.prepare("UPDATE media SET status='delete_pending',updated_at=? WHERE qbank_id IN (SELECT value FROM json_each(?)) AND status='ready'").bind(now, JSON.stringify(bankIds)),
       env.DB.prepare(`DELETE FROM records WHERE
         qbank_id IN (SELECT value FROM json_each(?)) OR
         (type='qbanks' AND id IN (SELECT value FROM json_each(?)))`).bind(
@@ -3560,5 +3532,5 @@ export async function deleteQBankFolder(request: Request, folderId: string) {
     deletedFolderIds: folderIdList,
     deletedBankIds: input.mode === 'cascade' ? bankIds : [],
     movedBankIds: input.mode === 'move' ? bankIds : [],
-  });
+  }, 200, input.mode === 'cascade' ? { 'x-qraft-media-cleanup': '1' } : undefined);
 }

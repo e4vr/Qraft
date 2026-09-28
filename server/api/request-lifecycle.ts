@@ -1,62 +1,24 @@
 import { env } from 'cloudflare:workers';
-import { shareCurrentUserRequest } from '@/features/auth/server/auth-service';
-import { notifyMutation } from '@/lib/realtime-server';
+import {
+  currentUser,
+  shareCurrentUserRequest,
+} from '@/features/auth/server/auth-service';
+import { assertSameOrigin } from '@/server/http/request';
+import { enforceRequestLimits } from '@/server/http/rate-limit';
+import {
+  needsMutationNotification,
+  notifyMutation,
+} from '@/lib/realtime-server';
 import { maintenanceGate } from '@/features/administration/server/operations-service';
 
 export function cloudflarePathParts(request: Request): string[] {
-  return new URL(request.url).pathname.split('/').slice(3).map(decodeURIComponent);
-}
-
-function clientKey(request: Request): string {
-  return request.headers.get('cf-connecting-ip') ?? 'local-or-unknown';
-}
-
-async function enforceRateLimits(request: Request): Promise<void> {
-  const key = clientKey(request);
-  const general = await env.API_RATE_LIMITER?.limit({ key });
-  if (general && !general.success) {
-    throw Response.json(
-      { error: 'Too many requests. Try again shortly.' },
-      {
-        status: 429,
-        headers: { 'retry-after': '60', 'cache-control': 'no-store' },
-      },
-    );
-  }
-
-  if (request.method !== 'GET') {
-    const mutation = await env.MUTATION_RATE_LIMITER?.limit({ key });
-    if (mutation && !mutation.success) {
-      throw Response.json(
-        { error: 'Too many changes. Try again shortly.' },
-        {
-          status: 429,
-          headers: { 'retry-after': '60', 'cache-control': 'no-store' },
-        },
-      );
-    }
-  }
-
-  const [scope, action] = cloudflarePathParts(request);
-  if (
-    scope === 'auth' &&
-    ['register', 'login', 'mfa', 'mfa-begin', 'mfa-complete'].includes(
-      action ?? '',
-    )
-  ) {
-    const auth = await env.AUTH_RATE_LIMITER?.limit({ key });
-    if (auth && !auth.success) {
-      throw Response.json(
-        {
-          error:
-            'Too many authentication attempts. Try again in one minute.',
-        },
-        {
-          status: 429,
-          headers: { 'retry-after': '60', 'cache-control': 'no-store' },
-        },
-      );
-    }
+  try {
+    return new URL(request.url).pathname
+      .split('/')
+      .slice(3)
+      .map(decodeURIComponent);
+  } catch {
+    throw Response.json({ error: 'Invalid request path.' }, { status: 400 });
   }
 }
 
@@ -64,11 +26,53 @@ export async function withApiLifecycle(
   request: Request,
   run: () => Promise<Response>,
 ): Promise<Response> {
+  const requestId = crypto.randomUUID();
+  let notification: Request | undefined;
+  const finish = async (response: Response) => {
+    if (response.status === 101) return response;
+    const headers = new Headers(response.headers);
+    headers.delete('x-qraft-result-owner');
+    headers.set('x-request-id', requestId);
+    if (!headers.has('cache-control')) headers.set('cache-control', 'no-store');
+    if (
+      response.status >= 400 &&
+      !headers.get('content-type')?.includes('application/json')
+    ) {
+      headers.set('content-type', 'application/json');
+      return Response.json(
+        { error: await response.text(), requestId },
+        { status: response.status, headers },
+      );
+    }
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  };
   try {
-    await enforceRateLimits(request);
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method))
+      assertSameOrigin(request);
+    await enforceRequestLimits(request, cloudflarePathParts(request), env, () =>
+      currentUser(request),
+    );
+    const expectedUser = request.headers.get('x-qraft-account');
+    if (expectedUser && (await currentUser(request))?.uid !== expectedUser)
+      return finish(
+        Response.json(
+          {
+            error:
+              'The signed-in account changed. Sign in to the original account to synchronize its pending changes.',
+            code: 'ACCOUNT_CHANGED',
+          },
+          { status: 409, headers: { 'cache-control': 'no-store' } },
+        ),
+      );
     const maintenance = await maintenanceGate(request, true);
-    if (maintenance) return maintenance;
-    const notification = request.method === 'GET' ? undefined : request.clone();
+    if (maintenance) return finish(maintenance);
+    notification = needsMutationNotification(request)
+      ? (request.clone() as Request)
+      : undefined;
     const response = await run();
 
     if (
@@ -78,26 +82,32 @@ export async function withApiLifecycle(
     ) {
       try {
         shareCurrentUserRequest(request, notification);
-        await notifyMutation(notification as Request);
+        await notifyMutation(notification, response);
       } catch {
         console.error(
-          JSON.stringify({ event: 'realtime_notification_failed' }),
+          JSON.stringify({ event: 'realtime_notification_failed', requestId }),
         );
       }
     }
 
-    return response;
+    return finish(response);
   } catch (error) {
-    if (error instanceof Response) return error;
+    if (error instanceof Response) return finish(error);
     console.error(
       JSON.stringify({
         event: 'cloudflare_api_error',
-        error: error instanceof Error ? error.message : String(error),
+        requestId,
+        errorType: error instanceof Error ? error.name : 'UnknownError',
       }),
     );
-    return Response.json(
-      { error: 'The request could not be completed.' },
-      { status: 500, headers: { 'cache-control': 'no-store' } },
+    return finish(
+      Response.json(
+        { error: 'The request could not be completed.', requestId },
+        { status: 500, headers: { 'cache-control': 'no-store' } },
+      ),
     );
+  } finally {
+    if (notification?.body && !notification.bodyUsed)
+      void notification.body.cancel().catch(() => undefined);
   }
 }

@@ -120,7 +120,8 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
   assert.equal(sameName.status, 200, JSON.stringify(sameName.data));
   assert.equal(sameName.data.successful, 2);
   assert.equal(sameName.data.skippedDuplicates, 0);
-  assert.equal((await db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type='table' AND name='duplicate_attempts'").first()).count, 0);
+  assert.equal((await db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type='table' AND name='duplicate_attempts'").first()).count, 1);
+  assert.equal((await db.prepare('SELECT count(*) AS count FROM duplicate_attempts').first()).count, 0);
 
   const now = new Date().toISOString();
   let recreatedBank = {
@@ -237,7 +238,7 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
     const guide=buildQuestionPrompt({source:'qbank',kind:'clinical',length:'medium',countMode:'fixed',count:12,optionCount:4});
     assert.match(guide,/electronic question platform/);assert.match(guide,/OCR/);assert.match(guide,/outside the bank only for this explanation/);assert.match(guide,/four close, logical and plausible options/);
     const lecture=buildQuestionPrompt({source:'lecture',kind:'direct',length:'short',countMode:'fixed',count:8,optionCount:4});
-    assert.match(lecture,/Build 8 questions/);assert.match(lecture,/exactly 4 distinct/);assert.match(lecture,/Do not use any external sources/);
+    assert.match(lecture,/target is 8 questions/);assert.match(lecture,/4 distinct answer options/);assert.match(lecture,/exclusive source/);
     const sourceReport=parseQuestionImportReport({sourceFile:'Bank.pdf',questions:[{...reusableQuestion,originalQuestionNumber:'37'}]});
     assert.match(sourceReport.questions[0].sourceReference,/Q.37/);
     assert.equal((await call('pro','/platform/import-defaults')).status,403);
@@ -276,9 +277,37 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
     assert.equal(normalizedPreview.status,200);assert.ok(normalizedPreview.data.matches[0].length);
     assert.equal((await call('admin','/platform/economy-admin',{operation:'suspend-json',userId:'pro',reason:'Manual suspension QA',days:9})).status,200);
     const status=(await call('pro','/platform/json-import-status')).data;assert.equal(status.suspended,true);assert.ok(Math.abs(Date.parse(status.endsAt)-Date.now()-9*86400000)<5000);
+    assert.equal((await call('pro','/platform/import-preview',{qbankId:'smle-gs',questions:[duplicate]})).status,403);
     assert.equal((await call('admin','/platform/economy-admin',{operation:'remove-json-suspension',userId:'pro',reason:'End QA suspension'})).status,200);
     assert.equal((await call('pro','/platform/json-import-status')).data.suspended,false);
     assert.equal((await db.prepare("SELECT count(*) AS value FROM json_import_suspensions WHERE created_by='system' AND removed_at IS NULL").first()).value,0);
   });
 
+  await t.test('Superadmin controls JSON availability and bounded scan batches without bypassing account limits', async () => {
+    for (const uid of ['pro', 'unlimited']) {
+      assert.equal((await call(uid, '/platform/import-settings')).status, 403);
+      assert.equal((await call(uid, '/platform/import-settings', { settings: { enabled: false, maxFileMegabytes: 50, previewBatchSize: 100 }, reason: 'Forbidden override' }, 'PUT')).status, 403);
+    }
+    const original = (await call('admin', '/platform/import-settings')).data;
+    assert.equal(original.previewBatchSize, 50);
+    for (const settings of [{ ...original, previewBatchSize: 1000 }, { ...original, maxFileMegabytes: 51 }, { ...original, enabled: 'yes' }])
+      assert.equal((await call('admin', '/platform/import-settings', { settings, reason: 'Invalid settings' }, 'PUT')).status, 400);
+    const changed = { enabled: false, maxFileMegabytes: 10, previewBatchSize: 100 };
+    assert.equal((await call('admin', '/platform/import-settings', { settings: changed, reason: 'Pause for maintenance' }, 'PUT')).status, 200);
+    assert.deepEqual((await call('pro', '/platform/json-import-status')).data.settings, changed);
+    assert.equal((await call('pro', '/platform/import-preview', { qbankId: 'smle-gs', questions: [reusableQuestion] })).status, 403);
+    const pausedImport = await call('pro', '/platform/import', { ...forPlan('paused', 1), sourceFile: 'fixture.pdf' });
+    assert.equal(pausedImport.status, 403);
+    assert.equal(pausedImport.data.code, 'IMPORT_PAUSED');
+    const hundred = Array.from({ length: 100 }, (_, i) => ({ ...reusableQuestion, stem: `Scan batch item ${i}` }));
+    const preview = await call('admin', '/platform/import-preview', { qbankId: 'smle-gs', questions: hundred });
+    assert.equal(preview.status, 200, JSON.stringify(preview.data));
+    assert.equal(preview.data.matches.length, 100);
+    assert.equal((await call('admin', '/platform/import-preview', { qbankId: 'smle-gs', questions: [...hundred, reusableQuestion] })).status, 400);
+    assert.equal((await call('admin', '/platform/import-settings', { settings: original, reason: 'Restore import settings' }, 'PUT')).status, 200);
+    assert.equal((await db.prepare("SELECT count(*) n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='import_settings_updated'").first()).n, 2);
+    const renamed = await call('admin', '/platform/import', { ...forPlan('renamed-source', 1), questions: [{ ...reusableQuestion, sourceFile: 'Reviewed source title', originalQuestionNumber: '17' }] });
+    assert.equal(renamed.status, 200, JSON.stringify(renamed.data));
+    assert.match(renamed.data.proposals[0].payload.sourceReference, /^Reviewed source title - p\.1 - Q\.17$/);
+  });
 });

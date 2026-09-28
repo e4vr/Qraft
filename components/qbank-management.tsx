@@ -11,7 +11,8 @@ import { QuestionId } from '@/components/question-tools';
 import { ReviewerSearch } from '@/components/reviewer-search';
 import { WorkspaceHeader } from '@/components/workspace-header';
 import { api } from '@/lib/api-client';
-import { deleteQBankImages, uploadQuestionImage } from '@/lib/application-services';
+import { saveDirectQuestionEdit } from '@/features/qbanks/client/direct-question-edit';
+import { uploadQuestionImage } from '@/lib/application-services';
 import {
   bankRoleFor,
   canEditBank,
@@ -213,7 +214,6 @@ export function QBankManagement({
     setBusy(true);
     setError('');
     try {
-      await deleteQBankImages(bankId);
       update((current) => ({
         ...current,
         qbanks: current.qbanks.filter((item) => item.id !== bankId),
@@ -335,7 +335,7 @@ export function QBankManagement({
 
   async function saveQuestion(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!editing || !draft.stem.trim() || draft.options.length < 2 || draft.options.length > 10 || draft.answer >= draft.options.length || draft.options.some((item) => !item.trim()) || !draft.explanation.trim() || !draft.sourceReference.trim()) return;
+    if (!editing || !draft.stem.trim() || draft.options.length < 2 || draft.options.length > 10 || draft.answer >= draft.options.length || draft.options.some((item) => !item.trim()) || (editing === 'new' && !draft.explanation.trim()) || !draft.sourceReference.trim()) return;
     setBusy(true);
     setError('');
     try {
@@ -357,6 +357,11 @@ export function QBankManagement({
       }
       const proposalId = crypto.randomUUID();
       const uploaded = await uploadImages(existing?.questionId ?? `proposal-${proposalId}`);
+      // Preserve completed uploads if the following question save fails.
+      if (uploaded.length) {
+        setDraft(current => ({ ...current, images: [...current.images, ...uploaded] }));
+        setImageFiles([]);
+      }
       const proposedAt = new Date().toISOString();
       const payload = {
         stem: draft.stem.trim(),
@@ -370,6 +375,18 @@ export function QBankManagement({
         sourceReference: draft.sourceReference.trim(),
         images: [...draft.images, ...uploaded],
       };
+      if (existing && user.role === 'super_admin') {
+        const saved = await saveDirectQuestionEdit(user.uid, bankId, existing, payload);
+        confirmUpdate((current) => ({
+          ...current,
+          approvedQuestions: current.approvedQuestions.map(item => item.id === saved.id ? saved : item),
+        }));
+        setEditing(undefined);
+        setDraft(emptyDraft());
+        setImageFiles([]);
+        setMessage('Question updated immediately. Existing review proposals remain pending.');
+        return;
+      }
       update((current) => ({
         ...current,
         proposals: [
@@ -470,7 +487,7 @@ export function QBankManagement({
             </button>
           ))}
         </nav>
-        {message && (
+        {message && !error && (
           <output className="mb-5 flex items-center gap-2 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
             <Check className="size-4" />
             {message}
@@ -531,8 +548,8 @@ export function QBankManagement({
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">Generate a new link at any time. Changing it immediately invalidates the previous link.</p>
                 {shareUrl && (
                   <div className="mt-4 flex gap-2">
-                    <input readOnly value={shareUrl} className="h-11 min-w-0 flex-1 rounded-xl border bg-muted/30 px-3 text-sm" />
-                    <button onClick={() => void navigator.clipboard.writeText(shareUrl)} className="grid size-11 place-items-center rounded-xl border" aria-label="Copy access link">
+                    <input readOnly aria-label="QBank access link" value={shareUrl} className="h-11 min-w-0 flex-1 rounded-xl border bg-muted/30 px-3 text-sm" />
+                    <button onClick={() => { setError(''); setMessage(''); void navigator.clipboard.writeText(shareUrl).then(() => setMessage('Access link copied.')).catch(() => setError('Unable to copy the access link. Select and copy it manually.')); }} className="grid size-11 place-items-center rounded-xl border" aria-label="Copy access link">
                       <Copy className="size-4" />
                     </button>
                   </div>
@@ -804,7 +821,8 @@ export function QBankManagement({
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <label>
                 <span className="mb-1.5 block text-sm font-bold">Explanation</span>
-                <textarea required value={draft.explanation} onChange={(event) => setDraft({ ...draft, explanation: event.target.value })} className="min-h-28 w-full rounded-xl border bg-card p-3" />
+                <textarea required={editing === 'new'} value={draft.explanation} onChange={(event) => setDraft({ ...draft, explanation: event.target.value })} className="min-h-28 w-full rounded-xl border bg-card p-3" />
+                {editing !== 'new' && !draft.explanation.trim() && <p className="mt-2 text-sm text-orange-600 dark:text-orange-400">Explanation is optional. Adding one helps learners; saving empty removes the existing explanation.</p>}
               </label>
               <label>
                 <span className="mb-1.5 block text-sm font-bold">Source</span>
@@ -870,7 +888,7 @@ export function QBankManagement({
               </button>
               <button type="submit" disabled={busy} className="q-button q-button-contribute">
                 {busy ? <RefreshCw className="size-4 animate-spin" /> : <Save className="size-4" />}
-                Submit for review
+                {editing !== 'new' && user.role === 'super_admin' ? 'Save changes now' : 'Submit for review'}
               </button>
             </div>
           </form>

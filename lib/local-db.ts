@@ -1,5 +1,6 @@
 import { normalizeCollaborationState, type AppState, type CollaborationState, type QBankSpecialty, type QBankTopic } from './medguard-types';
 import type { PreformedLocalAttempt } from './preformed-test-types';
+import { coalesceStateCheckpoints } from '@/features/state/domain/checkpoint-outbox';
 import { preformedAttemptKey, preformedCodeKey } from '@/features/exams/domain/preformed-attempt-scope';
 import {
   coalesceCollaborationSync,
@@ -63,7 +64,7 @@ async function writeValue<T>(key: string, value: T, ownerUid?: string): Promise<
     const marker = store.get(`deleted:${uid}`);
     marker.onsuccess = () => { if (!marker.result) store.put(value, key); };
     transaction.oncomplete = () => { db.close(); resolve(); };
-    transaction.onerror = () => { db.close(); reject(transaction.error); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error('Local save aborted.')); };
   });
 }
 
@@ -83,7 +84,7 @@ async function updateValue<T>(
     };
     request.onerror = () => reject(request.error);
     transaction.oncomplete = () => { db.close(); resolve(next!); };
-    transaction.onerror = () => { db.close(); reject(transaction.error); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error('Local save aborted.')); };
   });
 }
 
@@ -118,7 +119,7 @@ export async function deleteClassificationDraft(uid: string, qbankId: string): P
     const transaction = db.transaction(STORE, 'readwrite');
     transaction.objectStore(STORE).delete(`classification-draft:${uid}:${qbankId}`);
     transaction.oncomplete = () => { db.close(); resolve(); };
-    transaction.onerror = () => { db.close(); reject(transaction.error); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error('Local save aborted.')); };
   });
 }
 
@@ -133,8 +134,28 @@ export async function loadPreformedAttemptByCode(scope: string, code: string) {
 
 export async function savePreformedAttempt(scope: string, attempt: PreformedLocalAttempt): Promise<void> {
   const uid = scope.startsWith('user:') ? scope.slice(5) : undefined;
-  await writeValue(preformedAttemptKey(scope, attempt.test.id, attempt.test.version), attempt, uid);
-  await writeValue(preformedCodeKey(scope, attempt.test.code), { testId: attempt.test.id, version: attempt.test.version }, uid);
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE, 'readwrite');
+    const store = transaction.objectStore(STORE);
+    const marker = store.get(`deleted:${uid}`);
+    marker.onsuccess = () => {
+      if (uid && marker.result) return;
+      const key = preformedAttemptKey(scope, attempt.test.id, attempt.test.version);
+      const existing = store.get(key);
+      existing.onsuccess = () => {
+        const current = existing.result as PreformedLocalAttempt | undefined;
+        // A late timer/answer save cannot undo a queued submission or receipt.
+        if (current?.submissionId === attempt.submissionId &&
+            ((current?.submittedAt && !attempt.submittedAt) ||
+             (current?.submissionPending && !attempt.submissionPending && !attempt.submittedAt))) return;
+        store.put(attempt, key);
+        store.put({ testId: attempt.test.id, version: attempt.test.version }, preformedCodeKey(scope, attempt.test.code));
+      };
+    };
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error('Local save aborted.')); };
+  });
 }
 
 export async function deletePreformedAttempt(scope: string, testId: string, version: number): Promise<void> {
@@ -143,28 +164,13 @@ export async function deletePreformedAttempt(scope: string, testId: string, vers
     const transaction = db.transaction(STORE, 'readwrite');
     transaction.objectStore(STORE).delete(preformedAttemptKey(scope, testId, version));
     transaction.oncomplete = () => { db.close(); resolve(); };
-    transaction.onerror = () => { db.close(); reject(transaction.error); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error('Local save aborted.')); };
   });
 }
 
 export async function enqueueStateSync(operation: StateSyncOperation): Promise<void> {
   await updateValue<StateSyncOperation[]>(`state-outbox:${operation.uid}`, current => {
-    const pending = current ?? [];
-    // A full state snapshot does not carry the exam's deferred answer statistics.
-    // Keep partial checkpoints beside it so coalescing can never discard those
-    // user selections before they reach the collaboration store.
-    if (operation.kind === 'full')
-      return [...pending.filter(item => item.kind !== 'full'), operation]
-        .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-    if (operation.kind === 'exam') {
-      const duplicate = pending.some(item =>
-        item.kind === 'exam' && JSON.stringify(item.payload) === JSON.stringify(operation.payload),
-      );
-      return (duplicate ? pending : [...pending, operation])
-        .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-    }
-    return [...pending.filter(item => item.kind !== operation.kind), operation]
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    return coalesceStateCheckpoints(current ?? [], operation);
   });
 }
 
@@ -178,10 +184,11 @@ export async function removeStateSync(uid: string, operationId: string): Promise
   );
 }
 
-export async function noteStateSyncAttempt(uid: string, operationId: string): Promise<void> {
-  await updateValue<StateSyncOperation[]>(`state-outbox:${uid}`, current =>
+export async function noteStateSyncAttempt(uid: string, operationId: string): Promise<StateSyncOperation | undefined> {
+  const pending = await updateValue<StateSyncOperation[]>(`state-outbox:${uid}`, current =>
     (current ?? []).map(item => item.id === operationId ? { ...item, attempts: item.attempts + 1 } : item),
   );
+  return pending.find(item => item.id === operationId);
 }
 
 export async function enqueueCollaborationSync(
@@ -215,7 +222,7 @@ export async function removeCollaborationSync(
     };
     request.onerror = () => reject(request.error);
     transaction.oncomplete = () => { db.close(); resolve(); };
-    transaction.onerror = () => { db.close(); reject(transaction.error); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error('Local save aborted.')); };
   });
 }
 
@@ -258,6 +265,6 @@ export async function forgetLocalUser(uid: string): Promise<void> {
       current.continue();
     };
     transaction.oncomplete = () => { db.close(); resolve(); };
-    transaction.onerror = () => { db.close(); reject(transaction.error); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error('Local save aborted.')); };
   });
 }

@@ -193,7 +193,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
           await call(
             'admin',
             `/qbank-folders/${rootFolder.id}`,
-            { mode: 'cascade', confirmation: 'DELETE' },
+            { mode: 'cascade', confirmation: 'CONFIRM' },
             'DELETE',
           )
         ).status,
@@ -204,7 +204,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
           await call(
             'admin',
             `/qbank-folders/${rootFolder.id}`,
-            { mode: 'cascade', confirmation: 'حذف' },
+            { mode: 'cascade', confirmation: 'DELETE' },
             'DELETE',
           )
         ).status,
@@ -849,7 +849,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
         '/preformed/save',
         {
           test: {
-            ...savedQuestion.data.test,
+            ...privatePublished.data.test,
             visibility: 'public',
             status: 'published',
           },

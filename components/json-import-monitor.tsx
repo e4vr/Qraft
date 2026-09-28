@@ -10,7 +10,7 @@ import {
   Search,
   Trash2,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, invalidateApiResources } from '@/lib/api-client';
 import { subscribeLive } from '@/lib/realtime-client';
 import type { CollaborationState } from '@/lib/medguard-types';
@@ -156,6 +156,10 @@ export function JsonImportMonitor({
   const [detailBusy, setDetailBusy] = useState(false);
   const [removing, setRemoving] = useState('');
   const [confirmRemove, confirmationDialog] = useConfirmationDialog();
+  const loadSequence = useRef(0);
+  const cancelPendingLoads = useCallback(() => { loadSequence.current += 1; }, []);
+  const detailSequence = useRef(0);
+  const [copiedHash, setCopiedHash] = useState('');
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
@@ -170,6 +174,7 @@ export function JsonImportMonitor({
 
   const load = useCallback(
     async (force = false) => {
+      const sequence = ++loadSequence.current;
       setBusy(true);
       setError('');
       try {
@@ -177,15 +182,16 @@ export function JsonImportMonitor({
           forceRefresh: force,
           requestReason: force ? 'explicit-refresh' : undefined,
         });
-        setData(next);
+        if (sequence === loadSequence.current) setData(next);
       } catch (loadError) {
+        if (sequence !== loadSequence.current) return;
         setError(
           loadError instanceof Error
             ? loadError.message
             : 'Unable to load Import activity.',
         );
       } finally {
-        setBusy(false);
+        if (sequence === loadSequence.current) setBusy(false);
       }
     },
     [query],
@@ -193,8 +199,8 @@ export function JsonImportMonitor({
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 180);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    return () => { window.clearTimeout(timer); cancelPendingLoads(); };
+  }, [load, cancelPendingLoads]);
 
   useEffect(
     () =>
@@ -210,22 +216,25 @@ export function JsonImportMonitor({
   );
 
   async function openDetails(run: ImportRun) {
+    const sequence = ++detailSequence.current;
     setDetailBusy(true);
     setError('');
+    setCopiedHash('');
     try {
       const detail = await api<{ run: ImportRun; attempts: ImportAttempt[] }>(
         `/platform/json-imports?run=${encodeURIComponent(run.id)}`,
         { forceRefresh: true, requestReason: 'explicit-refresh' },
       );
-      setSelected(detail);
+      if (sequence === detailSequence.current) setSelected(detail);
     } catch (detailError) {
+      if (sequence !== detailSequence.current) return;
       setError(
         detailError instanceof Error
           ? detailError.message
           : 'Unable to load import details.',
       );
     } finally {
-      setDetailBusy(false);
+      if (sequence === detailSequence.current) setDetailBusy(false);
     }
   }
 
@@ -497,9 +506,10 @@ export function JsonImportMonitor({
         </section>
       </div>
 
-      <Dialog open={Boolean(selected)} onOpenChange={(open) => !open && setSelected(undefined)}>
+      <Dialog open={Boolean(selected)} onOpenChange={(open) => { if (!open) { ++detailSequence.current; setDetailBusy(false); setSelected(undefined); } }}>
         <DialogContent className="max-h-[90dvh] max-w-4xl overflow-y-auto">
           <DialogTitle>Import details</DialogTitle>
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           {selected && (
             <div className="space-y-5">
               <section className="grid gap-3 rounded-2xl border bg-muted/20 p-4 sm:grid-cols-2">
@@ -523,13 +533,14 @@ export function JsonImportMonitor({
                     </code>
                     <button
                       type="button"
-                      aria-label="Copy file hash"
-                      onClick={() => void navigator.clipboard.writeText(selected.run.file_hash)}
+                      aria-label={copiedHash === selected.run.file_hash ? 'File hash copied' : 'Copy file hash'}
+                      onClick={() => { setError(''); void navigator.clipboard.writeText(selected.run.file_hash).then(() => setCopiedHash(selected.run.file_hash)).catch(() => setError('Unable to copy the file hash. Select and copy it manually.')); }}
                       className="grid size-10 place-items-center rounded-xl border"
                     >
                       <Copy className="size-4" />
                     </button>
                   </div>
+                  {copiedHash === selected.run.file_hash && <output className="text-xs text-emerald-700 dark:text-emerald-300">File hash copied.</output>}
                 </div>
                 <p className="sm:col-span-2 rounded-xl bg-blue-50 p-3 text-xs leading-5 text-blue-800 dark:bg-blue-500/10 dark:text-blue-200">
                   Re-upload is allowed. The server compares current questions,

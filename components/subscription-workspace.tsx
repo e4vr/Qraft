@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { subscribeLive } from '@/lib/realtime-client';
 import { Check, Crown, Eye, X, Search, Ticket, Users, ShieldCheck, Pencil, Plus, ChevronLeft, ChevronRight, History, SlidersHorizontal } from 'lucide-react';
 import { api, setApiCache } from '@/lib/api-client';
@@ -53,6 +53,7 @@ export function Subscribe({
   onUser: (user: AppUser) => void;
 }) {
   const [code, setCode] = useState(''),
+    [appliedCode, setAppliedCode] = useState(''),
     [price, setPrice] = useState<Quote>(),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
@@ -60,6 +61,9 @@ export function Subscribe({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<Exclude<PlanId, 'free'>>('pro');
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const actionInFlight = useRef(false);
+  const quoteSequence = useRef(0);
+  const currentPrice = price?.plan === selectedPlan ? price : undefined;
   const [catalogPlans,setCatalogPlans] = useState<Partial<Record<PlanId, typeof PLAN_LIMITS[PlanId] & {description?:string}>>>({});
   const catalogLimits = (id:PlanId): typeof PLAN_LIMITS[PlanId] & {description?:string} => catalogPlans[id] ?? PLAN_LIMITS[id];
   const [catalogPrices, setCatalogPrices] = useState<Partial<Record<PlanId, number>>>({});
@@ -72,15 +76,18 @@ export function Subscribe({
   useEffect(() => {
     let active = true;
     const stop = subscribeLive(() => {
-      if (busy) return;
-      void api<Quote>('/platform/quote', { method: 'POST', resourceQuery: true, cacheScope: user.uid, body: JSON.stringify({ code: price?.code || '', plan: selectedPlan }) })
-        .then(quote => { if (active) setPrice(quote); })
-        .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Unable to refresh price.'); });
+      if (actionInFlight.current) return;
+      const sequence = ++quoteSequence.current;
+      setPrice(undefined);
+      void api<Quote>('/platform/quote', { method: 'POST', resourceQuery: true, cacheScope: user.uid, body: JSON.stringify({ code: appliedCode, plan: selectedPlan }) })
+        .then(quote => { if (active && sequence === quoteSequence.current) setPrice(quote); })
+        .catch(e => { if (active && sequence === quoteSequence.current) setError(e instanceof Error ? e.message : 'Unable to refresh price.'); });
     }, ['pricing']);
     return () => { active = false; stop(); };
-  }, [price?.code, busy, selectedPlan, user.uid]);
+  }, [appliedCode, selectedPlan, user.uid]);
   useEffect(() => {
     let live = true;
+    const sequence = ++quoteSequence.current;
     api<Quote>('/platform/quote', {
       method: 'POST',
       resourceQuery: true,
@@ -88,18 +95,22 @@ export function Subscribe({
       body: JSON.stringify({ code: '', plan: selectedPlan }),
     })
       .then((q) => {
-        if (live) setPrice(q);
+        if (live && sequence === quoteSequence.current) setPrice(q);
       })
       .catch((e) => {
-        if (live) setError(e.message);
+        if (live && sequence === quoteSequence.current) setError(e.message);
       });
     return () => {
       live = false;
     };
   }, [selectedPlan, user.uid]);
   async function apply() {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    ++quoteSequence.current;
     setBusy(true);
     setError('');
+    setSuccess('');
     try {
       setPrice(
         await api<Quote>('/platform/quote', {
@@ -109,33 +120,41 @@ export function Subscribe({
           body: JSON.stringify({ code: code.trim().toUpperCase(), plan: selectedPlan }),
         }),
       );
+      setAppliedCode(code.trim().toUpperCase());
       setRequestId(crypto.randomUUID());
     } catch (e) {
+      setPrice(undefined);
       setError(e instanceof Error ? e.message : 'Unable to apply code.');
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   }
   async function subscribe() {
+    if (actionInFlight.current || !currentPrice) return;
+    actionInFlight.current = true;
+    ++quoteSequence.current;
     setBusy(true);
     setError('');
+    setSuccess('');
     try {
       const result = await api<{ upgraded?: boolean; url?: string; user?: AppUser }>(
         '/platform/checkout',
         {
           method: 'POST',
-          body: JSON.stringify({ code: price?.code || '', requestId, plan: selectedPlan }),
+          body: JSON.stringify({ code: currentPrice.code || '', requestId, plan: selectedPlan }),
         },
       );
       if (result.upgraded && result.user) {
         setAuthenticatedUserCache(result.user);
         onUser(result.user);
-        setSuccess(`تم تفعيل ${catalogLimits(selectedPlan).name} لمدة سنة كاملة`);
+        setSuccess(`${catalogLimits(selectedPlan).name} is now active for one year.`);
       } else if (result.url) window.location.assign(result.url);
+      else throw new Error('The subscription could not be confirmed. Please try again.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to subscribe.');
-      setRequestId(crypto.randomUUID());
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   }
@@ -147,7 +166,7 @@ export function Subscribe({
           Choose the plan that fits your study
         </h1>
         <p className="mt-2 text-muted-foreground">
-          ارتقِ بتجربتك الدراسية — اشتراك لمدة سنة كاملة.
+          Support your study with a one-year subscription.
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -164,8 +183,14 @@ export function Subscribe({
             <button
               type="button"
               key={plan}
-              disabled={!selectable}
-              onClick={() => plan !== 'free' && setSelectedPlan(plan)}
+              disabled={!selectable || busy}
+              aria-pressed={selectedPlan === plan}
+              onClick={() => {
+                if (plan === 'free' || plan === selectedPlan || actionInFlight.current) return;
+                ++quoteSequence.current;
+                setPrice(undefined); setCode(''); setAppliedCode(''); setError(''); setSuccess('');
+                setRequestId(crypto.randomUUID()); setSelectedPlan(plan);
+              }}
               className={`relative rounded-2xl border p-4 text-left transition ${selectedPlan === plan ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : 'bg-card'} disabled:cursor-default`}
             >
               {plan === 'pro' && <span className="absolute right-3 top-3 rounded-full bg-primary px-2 py-1 text-[10px] font-bold text-primary-foreground">MOST POPULAR</span>}
@@ -190,44 +215,44 @@ export function Subscribe({
           className="q-button inline-flex items-center gap-2 border"
         >
           <Eye className="size-4" />
-          استعرض تفاصيل الخطط
+          Compare plan details
         </button>
       </div>
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-        <DialogContent className="max-h-[88dvh] overflow-y-auto border-0 bg-[#f7fbfc] p-0 shadow-2xl dark:bg-slate-950 sm:max-w-5xl">
+        <DialogContent className="max-h-[88dvh] overflow-x-hidden overflow-y-auto border-0 bg-[#f7fbfc] p-0 shadow-2xl dark:bg-slate-950 sm:max-w-5xl">
           <div className="border-b bg-gradient-to-br from-[#e8f8f7] via-background to-background px-5 py-7 text-center dark:from-[#0d2c36] sm:px-8">
-            <DialogTitle className="text-2xl font-black tracking-tight text-[#07233d] dark:text-white sm:text-3xl">
-              خطط اشتراك QBank
+            <DialogTitle className="px-8 text-2xl font-black tracking-tight text-[#07233d] dark:text-white sm:text-3xl">
+              QBank subscription plans
             </DialogTitle>
             <p className="mt-2 text-sm text-muted-foreground sm:text-base">
-              اختر الخطة المناسبة لطريقتك في الدراسة والمساهمة
+              Choose the plan that fits how you study and contribute.
             </p>
           </div>
           <div className="px-3 pb-5 pt-4 sm:px-6 sm:pb-7">
-          <div className="overflow-x-auto rounded-3xl border border-[#d6e8e8] bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+          <div className="relative overflow-x-auto rounded-3xl border border-[#d6e8e8] bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
             <table className="w-full min-w-[700px] border-collapse text-sm">
               <thead className="text-left">
                 <tr>
-                  <th className="w-[25%] p-4 align-bottom font-semibold text-muted-foreground">المميزات</th>
+                  <th className="w-[25%] p-4 align-bottom font-semibold text-muted-foreground">Features</th>
                   {PLAN_ORDER.map((plan) => (
                     <th key={plan} className={`p-4 text-center align-bottom ${plan === 'pro' ? 'border-x-2 border-t-2 border-[#18b39f] bg-[#effcf9] dark:bg-[#123b3b]' : ''}`}>
-                      {plan === 'pro' && <span className="mx-auto mb-2 flex w-fit items-center justify-center whitespace-nowrap rounded-full bg-[#18b39f] px-3 py-1 text-[10px] font-bold leading-4 text-white shadow-sm">الأكثر شيوعًا</span>}
+                      {plan === 'pro' && <span className="mx-auto mb-2 flex w-fit items-center justify-center whitespace-nowrap rounded-full bg-[#18b39f] px-3 py-1 text-[10px] font-bold leading-4 text-white shadow-sm">Most popular</span>}
                       <span className="block text-lg font-black text-[#07233d] dark:text-white">{catalogLimits(plan).name}</span>
-                      <span className="mt-1 block text-xs font-normal text-muted-foreground">{plan === 'free' ? 'ابدأ مجانًا' : catalogPrices[plan] === undefined ? '…' : `${catalogPrices[plan]} SAR / سنة`}</span>
+                      <span className="mt-1 block text-xs font-normal text-muted-foreground">{plan === 'free' ? 'Start free' : catalogPrices[plan] === undefined ? '…' : `${catalogPrices[plan]} SAR / year`}</span>
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {[
-                  ['السعر السنوي', (plan: PlanId) => plan === 'free' ? 'مجاني' : catalogPrices[plan] === undefined ? '…' : `${catalogPrices[plan]} SAR`],
-                  ['الاختبارات', (plan: PlanId) => catalogLimits(plan).lifetimeExamLimit ? `${catalogLimits(plan).lifetimeExamLimit} مدى الحياة` : `${catalogLimits(plan).monthlyExamLimit} شهريًا`],
-                  ['الأسئلة لكل اختبار', (plan: PlanId) => String(catalogLimits(plan).maxQuestionsPerExam)],
-                  ['إنشاء QBank', (plan: PlanId) => catalogLimits(plan).canCreateQBank],
-                  ['إضافة الأسئلة والمساهمات', (plan: PlanId) => catalogLimits(plan).canAddQuestions && catalogLimits(plan).canContribute],
-                  ['رفع صور المساهمات', (plan: PlanId) => catalogLimits(plan).canUploadImages],
-                  ['استيراد JSON / AI', (plan: PlanId) => catalogLimits(plan).canUseJsonImport],
-                  ['الملاحظات الخاصة', (plan: PlanId) => catalogLimits(plan).canUsePrivateNotes],
+                  ['Annual price', (plan: PlanId) => plan === 'free' ? 'Free' : catalogPrices[plan] === undefined ? '…' : `${catalogPrices[plan]} SAR`],
+                  ['Exams', (plan: PlanId) => catalogLimits(plan).lifetimeExamLimit ? `${catalogLimits(plan).lifetimeExamLimit} for account lifetime` : `${catalogLimits(plan).monthlyExamLimit} per month`],
+                  ['Questions per exam', (plan: PlanId) => String(catalogLimits(plan).maxQuestionsPerExam)],
+                  ['Create a QBank', (plan: PlanId) => catalogLimits(plan).canCreateQBank],
+                  ['Add questions and contributions', (plan: PlanId) => catalogLimits(plan).canAddQuestions && catalogLimits(plan).canContribute],
+                  ['Upload contribution images', (plan: PlanId) => catalogLimits(plan).canUploadImages],
+                  ['JSON / AI import', (plan: PlanId) => catalogLimits(plan).canUseJsonImport],
+                  ['Private notes', (plan: PlanId) => catalogLimits(plan).canUsePrivateNotes],
                   ['Flashcards', (plan: PlanId) => catalogLimits(plan).canUseFlashcards],
                 ].map(([label, value]) => (
                   <tr key={String(label)} className="border-t">
@@ -236,7 +261,7 @@ export function Subscribe({
                       const result = (value as (plan: PlanId) => string | boolean)(plan);
                       return (
                         <td key={plan} className={`border-t p-3 text-center text-muted-foreground ${plan === 'pro' ? 'border-x-2 border-x-[#18b39f] bg-[#effcf9] dark:bg-[#123b3b]' : ''}`}>
-                          {typeof result === 'boolean' ? (result ? <span className="mx-auto grid size-6 place-items-center rounded-full bg-[#18b39f] text-white"><Check className="size-4" /></span> : <span className="mx-auto grid size-6 place-items-center rounded-full bg-red-100 text-red-500 dark:bg-red-950"><X className="size-4" /></span>) : <span className="font-semibold text-[#07233d] dark:text-slate-100">{result}</span>}
+                          {typeof result === 'boolean' ? (result ? <span className="mx-auto grid size-6 place-items-center rounded-full bg-[#18b39f] text-white"><Check aria-hidden="true" className="size-4" /><span className="sr-only">Included</span></span> : <span className="mx-auto grid size-6 place-items-center rounded-full bg-red-100 text-red-500 dark:bg-red-950"><X aria-hidden="true" className="size-4" /><span className="sr-only">Not included</span></span>) : <span className="font-semibold text-[#07233d] dark:text-slate-100">{result}</span>}
                         </td>
                       );
                     })}
@@ -249,35 +274,35 @@ export function Subscribe({
         </DialogContent>
       </Dialog>
       <div className="rounded-2xl border border-amber-400/40 bg-card p-5">
-        {price ? (
+        {currentPrice ? (
           <div aria-live="polite">
             <p className="text-3xl font-black">
-              {sar(price.final)}{' '}
+              {sar(currentPrice.final)}{' '}
               <span className="text-sm font-normal text-muted-foreground">
                 / Year
               </span>
             </p>
-            {price.code && (
+            {currentPrice.code && (
               <div className="mt-3 space-y-1 text-sm">
                 <p>
-                  Original: <s>{sar(price.original)}</s>
+                  Original: <s>{sar(currentPrice.original)}</s>
                 </p>
                 <p>
-                  Discount: {sar(price.discount)}{' '}
-                  {price.percent !== null ? `(${price.percent}%)` : ''}
+                  Discount: {sar(currentPrice.discount)}{' '}
+                  {currentPrice.percent !== null ? `(${currentPrice.percent}%)` : ''}
                 </p>
-                <p>Applied: {price.code}</p>
+                <p>Applied: {currentPrice.code}</p>
               </div>
             )}
           </div>
         ) : (
-          <p>Loading price…</p>
+          <output>{error ? 'Price unavailable. Apply a valid code or leave it blank and try again.' : 'Loading price…'}</output>
         )}
         <label
           className="mt-5 block text-sm font-semibold"
           htmlFor="discount-code"
         >
-          كود خصم / Discount Code
+          Discount code
         </label>
         <div className="mt-2 flex gap-2">
           <input
@@ -285,12 +310,13 @@ export function Subscribe({
             className="min-w-0 flex-1 rounded-xl border bg-background px-3 py-3"
             maxLength={40}
             value={code}
+            disabled={busy}
             onChange={(e) => setCode(e.target.value)}
             autoComplete="off"
           />
           <button
             className="q-button border"
-            disabled={busy || !price}
+            disabled={busy}
             onClick={() => void apply()}
           >
             Apply
@@ -306,18 +332,18 @@ export function Subscribe({
         )}
         <button
           className="q-button mt-4 w-full bg-primary text-primary-foreground"
-          disabled={busy || !price || (user.effectivePlan ?? user.tier) === selectedPlan}
+          disabled={busy || !currentPrice || (user.effectivePlan ?? user.tier) === selectedPlan}
           onClick={() => void subscribe()}
         >
           {busy
             ? 'Processing…'
             : (user.effectivePlan ?? user.tier) === selectedPlan
               ? `${catalogLimits(selectedPlan).name} active`
-              : 'اشترك الآن'}
+              : 'Subscribe now'}
         </button>
         <p className="mt-3 text-xs text-muted-foreground">
-          {price?.final === 0
-            ? `يتم تفعيل ${catalogLimits(selectedPlan).name} مباشرة بعد تأكيد الاشتراك.`
+          {currentPrice?.final === 0
+            ? `${catalogLimits(selectedPlan).name} activates immediately after you confirm the subscription.`
             : 'Subscription requests open EduStack WhatsApp. Paid activation is confirmed by the administrator.'}
         </p>
       </div>
@@ -559,7 +585,7 @@ export function SubscriptionAdmin({
   return (
     <section className="q-control-workspace">
       {error && <p role="alert" className="q-control-feedback q-control-error">{error}</p>}
-      {message && <output className="q-control-feedback">{message}</output>}
+      {message && !error && <output className="q-control-feedback">{message}</output>}
       <div className="q-control-summary">
         {(section === 'discounts' ? [{ label: 'Matching codes', value: summary.total, icon: Ticket }, { label: 'Enabled codes', value: summary.enabled, icon: Check }, { label: 'Total redemptions', value: summary.uses, icon: History }] : [{ label: 'Matching accounts', value: summary.total, icon: Users }, { label: 'Paid-plan access', value: summary.paid, icon: Crown }, { label: 'Admin assignments', value: summary.overrides, icon: ShieldCheck }]).map(item => <div key={item.label}><item.icon className="size-5" /><span>{item.label}</span><strong>{busy ? '…' : (item.value ?? 0).toLocaleString()}</strong></div>)}
       </div>

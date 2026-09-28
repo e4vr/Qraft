@@ -24,6 +24,7 @@ export type ResourcePolicy = {
 // Freshness belongs to resources. There are deliberately no time-based TTLs:
 // cached data becomes stale after a mutation/realtime signal, not after a page mount.
 export const resourcePolicies: ResourcePolicy[] = [
+  { name: 'import-settings', class: 'event-driven', tags: ['import-status'], persistence: 'memory', match: path => path.startsWith('/platform/import-settings') },
   {name:'import-controls',class:'parameter-driven',tags:['economy','import-status'],persistence:'memory',match:path=>path.startsWith('/platform/import-controls')},
   {name:'import-defaults',class:'event-driven',tags:['economy','import-status'],persistence:'memory',match:path=>path.startsWith('/platform/import-defaults')},
   { name:'monitoring', class:'parameter-driven', tags:['monitoring'], persistence:'memory', match:path => path.startsWith('/platform/monitoring') },
@@ -31,7 +32,7 @@ export const resourcePolicies: ResourcePolicy[] = [
   { name:'plan-pricing', class:'event-driven', tags:['pricing'], persistence:'memory', match:path => path.startsWith('/platform/plan-pricing') || path.startsWith('/platform/plan-catalog') },
   { name: 'session', class: 'session', tags: ['account'], persistence: 'memory', match: path => path === '/auth/session' },
   { name: 'personal-state', class: 'session', tags: ['personal-state'], persistence: 'indexed-db', match: path => path === '/state' || path.startsWith('/state/') },
-  { name: 'collaboration', class: 'event-driven', tags: ['collaboration', 'question-catalog', 'review-queue'], persistence: 'indexed-db', match: path => path.startsWith('/collaboration') },
+  { name: 'collaboration', class: 'event-driven', tags: ['collaboration', 'question-catalog', 'review-queue', 'question-stats'], persistence: 'indexed-db', match: path => path.startsWith('/collaboration') },
   { name: 'announcement', class: 'event-driven', tags: ['announcement'], persistence: 'memory', match: path => path.startsWith('/platform/announcement') },
   { name: 'legal-links', class: 'static', tags: ['legal-links'], persistence: 'memory', match: path => path.startsWith('/platform/legal-links') },
   { name: 'reviewer-performance', class: 'event-driven', tags: ['reviewer-performance'], persistence: 'memory', match: path => path.startsWith('/platform/reviewer-performance') },
@@ -47,6 +48,7 @@ export const resourcePolicies: ResourcePolicy[] = [
   { name: 'import-status', class: 'session', tags: ['import-status', 'economy'], persistence: 'memory', match: path => path.startsWith('/platform/json-import-status') },
   { name: 'json-import-monitor', class: 'parameter-driven', tags: ['json-import-monitor'], persistence: 'memory', match: path => path.startsWith('/platform/json-imports') },
   { name: 'test-pool', class: 'parameter-driven', tags: ['test-pool', 'question-catalog', 'account'], persistence: 'memory', match: path => path.startsWith('/platform/test-pool') },
+  { name: 'preformed-results', class: 'event-driven', tags: ['preformed-tests', 'preformed-results'], persistence: 'memory', match: path => /^\/preformed\/(catalog|manage|leaderboard)(\?|$)/.test(path) },
   { name: 'preformed-tests', class: 'event-driven', tags: ['preformed-tests'], persistence: 'indexed-db', match: path => path.startsWith('/preformed/') },
   { name: 'backup', class: 'transactional', tags: ['backup'], persistence: 'memory', match: path => path.includes('backup') },
 ];
@@ -73,7 +75,13 @@ export type RequestMetrics = {
 };
 
 const cache = new Map<string, CacheEntry>();
-const inFlight = new Map<string, Promise<unknown>>();
+type PendingRead = {
+  promise: Promise<unknown>;
+  tags: Set<string>;
+  invalidatedBy?: string;
+  superseded?: boolean;
+};
+const inFlight = new Map<string, PendingRead>();
 let cacheGeneration = 0;
 const metrics: RequestMetrics = {
   GET: 0,
@@ -165,7 +173,11 @@ export async function readThrough<T>({
   if (running) {
     metrics.deduplicatedRequests++;
     metrics.networkRequestsAvoided++;
-    return running as Promise<T>;
+    // A notification during the read may describe a newer commit. Consumers
+    // arriving after it share one follow-up read, never the obsolete response.
+    if (running.invalidatedBy)
+      return running.promise.then(() => readThrough<T>({ key, tags, load, reason: 'server-invalidation' }));
+    return running.promise as Promise<T>;
   }
   metrics.cacheMisses++;
   const requestReason = reason ?? (force
@@ -176,25 +188,37 @@ export async function readThrough<T>({
         : 'server-invalidation'
       : 'initial-cache-miss');
   const generation = cacheGeneration;
+  const pending: PendingRead = { promise: Promise.resolve(), tags: new Set(tags) };
   const request = load(requestReason).then(value => {
     // A request started for a previous account/session must never repopulate the
     // cache after logout or account switching.
-    if (generation === cacheGeneration)
-      cache.set(key, { value, stale: false, tags: new Set(tags) });
+    if (generation === cacheGeneration && !pending.superseded)
+      cache.set(key, { value, stale: pending.invalidatedBy !== undefined,
+        invalidatedBy: pending.invalidatedBy, tags: new Set(tags) });
+    if (generation === cacheGeneration && pending.superseded) {
+      const authoritative = cache.get(key);
+      if (authoritative && !authoritative.stale) return authoritative.value as T;
+    }
     return value;
   });
-  inFlight.set(key, request);
-  const cleanup = () => { if (inFlight.get(key) === request) inFlight.delete(key); };
+  pending.promise = request;
+  inFlight.set(key, pending);
+  const cleanup = () => { if (inFlight.get(key) === pending) inFlight.delete(key); };
   void request.then(cleanup, cleanup);
   return request;
 }
 
 export function writeCache<T>(key: string, value: T, tags: string[]) {
+  const pending = inFlight.get(key);
+  if (pending) pending.superseded = true;
   cache.set(key, { value, stale: false, tags: new Set(tags) });
 }
 
 export function invalidateTags(tags: Iterable<string>, reason = 'mutation') {
   const changed = new Set(tags);
+  for (const pending of inFlight.values()) {
+    if ([...pending.tags].some(tag => changed.has(tag))) pending.invalidatedBy = reason;
+  }
   for (const entry of cache.values()) {
     if ([...entry.tags].some(tag => changed.has(tag))) {
       entry.stale = true;

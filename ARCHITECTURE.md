@@ -136,9 +136,7 @@ npx wrangler secret put ROOT_ADMIN_EMAIL
 npx wrangler secret put ROOT_ADMIN_SETUP_TOKEN
 npx wrangler secret put BACKUP_SIGNING_KEY
 npx wrangler d1 migrations apply qraft-qbank --remote
-npm.cmd run build
-npm.cmd run deploy:realtime
-npm.cmd run deploy:app
+npm.cmd run deploy:production
 ```
 
 إذا كان bucket موجودًا، لا تعِد إنشاءه؛ اكتفِ بالتأكد أن `wrangler.jsonc` binding يطابق اسمه. خذ D1 export قبل تطبيق migrations في الإنتاج. لا يلزم `CLOUDFLARE_ACCOUNT_ID` داخل Worker لأن D1/R2 يستخدمان bindings مباشرة. أضف `database_id` إلى إعداد بيئة الإنتاج فقط إذا كان نشر المشروع لا يقوم بالـprovisioning التلقائي، واستخدم ID قاعدة D1 الحالية حتى لا تنشئ قاعدة جديدة.

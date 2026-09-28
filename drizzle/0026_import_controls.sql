@@ -20,9 +20,9 @@ BEGIN
  SELECT RAISE(ABORT,'JSON_IMPORT_PENDING_LIMIT') WHERE
  (SELECT count(*) FROM records WHERE type='questionProposals' AND owner_id=NEW.user_id AND json_extract(payload,'$.status')='pending')+NEW.successful_count>NEW.pending_limit;
 END;
--- Automatic duplicate penalties are retired; manual suspensions remain.
-UPDATE json_import_suspensions SET removed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),removed_by='system-policy-retired' WHERE created_by='system' AND removed_at IS NULL;
-DROP TABLE duplicate_attempts;
+-- Keep historical duplicate attempts and existing suspensions. New imports use
+-- explicit duplicate review, while an existing suspension remains in force
+-- until its original expiry or an administrator removes it.
 -- Indexed bank and stem search; only searchable question text is duplicated in D1.
 CREATE VIRTUAL TABLE import_question_search USING fts5(stem,bank,entity_id UNINDEXED,entity_type UNINDEXED);
 INSERT INTO import_question_search(rowid,stem,bank,entity_id,entity_type)

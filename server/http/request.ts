@@ -17,7 +17,9 @@ export async function readLimitedBytes(
     if (done) break;
     total += value.byteLength;
     if (total > maximumBytes) {
-      await reader.cancel();
+      // A cloned request uses a tee: awaiting cancellation here can deadlock
+      // until the notification branch is also cancelled by the lifecycle.
+      void reader.cancel().catch(() => undefined);
       throw new Response('Request payload is too large.', { status: 413 });
     }
     chunks.push(value);
@@ -44,7 +46,10 @@ export async function readJson<T>(
   maximumBytes = 64_000,
 ): Promise<T> {
   try {
-    return JSON.parse(await readLimitedText(request, maximumBytes)) as T;
+    const value: unknown = JSON.parse(await readLimitedText(request, maximumBytes));
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Response('Expected a JSON object.', { status: 400 });
+    return value as T;
   } catch (error) {
     if (error instanceof Response) throw error;
     throw new Response('Invalid JSON payload.', { status: 400 });
@@ -53,6 +58,7 @@ export async function readJson<T>(
 
 export function assertSameOrigin(request: Request): void {
   const origin = request.headers.get('origin');
-  if (origin && origin !== new URL(request.url).origin)
+  if ((origin && origin !== new URL(request.url).origin) ||
+    request.headers.get('sec-fetch-site') === 'cross-site')
     throw new Response('Cross-origin request rejected.', { status: 403 });
 }

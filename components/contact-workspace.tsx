@@ -1,8 +1,8 @@
 'use client';
 /* oxlint-disable next/no-img-element */
-import { useEffect, useState } from 'react';
-import { MessageSquareText, ArrowLeft } from 'lucide-react';
-import { api, setApiCache } from '@/lib/api-client';
+import { useEffect, useRef, useState } from 'react';
+import { MessageSquareText, ArrowRight } from 'lucide-react';
+import { api, ApiError, invalidateApiResources } from '@/lib/api-client';
 import { subscribeLive } from '@/lib/realtime-client';
 import { QuestionId } from '@/components/question-tools';
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from '@/components/ui/alert-dialog';
@@ -33,12 +33,12 @@ export function ContactWorkspace({ admin = false }: { admin?: boolean }) {
       <div className="rounded-2xl border bg-card p-5 sm:p-8">
         <span className="mb-4 grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary"><MessageSquareText aria-hidden="true" className="size-6" /></span>
         <h1 className="text-xl font-bold sm:text-2xl">{admin ? 'Contact Tickets' : 'Contact Us'}</h1>
-        <div className="mt-3 space-y-1 text-sm leading-7 text-muted-foreground" dir="rtl">
-          <p>{admin ? 'استعرض شكاوى المستخدمين ومشاكل الحسابات والأسئلة في مكان واحد.' : 'أرسل بلاغًا عن مشكلة تقنية أو مشكلة في حسابك أو أحد الأسئلة.'}</p>
-          <p>{admin ? 'تابع التفاصيل، وردّ على البلاغات وحدّث حالتها عند الحاجة.' : 'تابع بلاغاتك وردود الإدارة بشكل خاص من خلال هذه الخدمة.'}</p>
+        <div className="mt-3 space-y-1 text-sm leading-7 text-muted-foreground">
+          <p>{admin ? 'Review technical, account and question issues in one place.' : 'Report a technical, account or question issue.'}</p>
+          <p>{admin ? 'Read the details, reply and update ticket statuses.' : 'Track your tickets and administrator replies privately.'}</p>
         </div>
-        <button type="button" onClick={() => setStartedFor(admin)} className="q-button q-button-primary mt-6 w-full whitespace-normal sm:w-auto" dir="rtl">
-          {admin ? 'استعرض الشكاوى الحالية' : 'اطلب الخدمة الآن'}<ArrowLeft aria-hidden="true" className="size-4" />
+        <button type="button" onClick={() => setStartedFor(admin)} className="q-button q-button-primary mt-6 w-full whitespace-normal sm:w-auto">
+          {admin ? 'View tickets' : 'Open support'}<ArrowRight aria-hidden="true" className="size-4" />
         </button>
       </div>
     </section>
@@ -59,47 +59,65 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
     [confirmDelete, setConfirmDelete] = useState(false),
     [deleting, setDeleting] = useState(false),
     [busy, setBusy] = useState(false),
+    [loading, setLoading] = useState(true),
+    [loadError, setLoadError] = useState(''),
     [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
     [revision, setRevision] = useState(0),
     [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const mutationInFlight = useRef(false);
+  const drafts = useRef(new Map<string, { title: string; body: string; question: string; requestId: string }>());
+  const selectedId = selected?.id;
+  function openTicket(ticket?: Ticket) {
+    if (mutationInFlight.current) return;
+    drafts.current.set(selectedId ?? '', { title, body, question, requestId });
+    const draft = drafts.current.get(ticket?.id ?? '');
+    setTitle(draft?.title ?? ''); setBody(draft?.body ?? ''); setQuestion(draft?.question ?? '');
+    setRequestId(draft?.requestId ?? crypto.randomUUID());
+    setSelected(ticket); setMessages([]); setMessageOffset(0);
+    setError(''); setNotice(''); setLoadError(''); setLoading(true);
+  }
   useEffect(() => subscribeLive(() => setRevision(r => r + 1), ['contact']), []);
   useEffect(() => {
+    if (busy || deleting) return;
     let live = true;
     const timer = setTimeout(() => {
-      setBusy(true);
-      const path = selected
-        ? `id=${selected.id}&offset=${messageOffset}`
+      setLoading(true);
+      const path = selectedId
+        ? `id=${selectedId}&offset=${messageOffset}`
         : `search=${encodeURIComponent(search)}&status=${filter}&offset=${offset}`;
       api<{ tickets?: Ticket[]; messages?: Message[]; ticket?: Ticket }>(
         `/contact?${path}`,
       )
         .then((r) => {
-          if (!live) return;
-          setError('');
+          if (!live || mutationInFlight.current) return;
+          setLoadError('');
           if (r.tickets) setTickets(r.tickets);
           if (r.messages) setMessages(r.messages);
           if (r.ticket) setSelected(current => current && current.id === r.ticket?.id && current.status !== r.ticket.status ? { ...current, status: r.ticket.status } : current);
         })
         .catch((e) => {
-          if (!live) return;
-          if (selected && e.message === 'Ticket not found.') {
+          if (!live || mutationInFlight.current) return;
+          if (selectedId && e instanceof ApiError && e.status === 404) {
             setSelected(undefined); setMessages([]); setMessageOffset(0);
             setNotice('This ticket is no longer available.');
-          } else setError(e.message);
+          } else setLoadError(e instanceof Error ? e.message : 'Unable to load tickets. Please try again.');
         })
         .finally(() => {
-          if (live) setBusy(false);
+          if (live) setLoading(false);
         });
     }, 250);
     return () => {
       live = false;
       clearTimeout(timer);
     };
-  }, [selected, search, filter, offset, messageOffset, revision]);
+  }, [selectedId, search, filter, offset, messageOffset, revision, busy, deleting]);
   async function send() {
+    if (mutationInFlight.current || !body.trim() || (!selected && !title.trim())) return;
+    mutationInFlight.current = true;
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       const result = await api<{ ticket: Ticket; message: Message }>('/contact', {
         method: 'POST',
@@ -111,27 +129,16 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
           requestId,
         }),
       });
+      if (!result.ticket || !result.message) throw new Error('The server did not confirm your message. Your draft is preserved; please try again.');
+      // A replay can be the first acknowledgement this tab receives.
+      invalidateApiResources(['contact']);
       setBody('');
       setTitle('');
       setQuestion('');
       setRequestId(crypto.randomUUID());
-      setNotice('تم إرسال البلاغ / Message sent successfully.');
-      if (!result.ticket || !result.message) return;
+      setNotice('Message sent successfully.');
       if (selected) {
-        const updatedTicket = { ...selected, updated_at: result.ticket.updated_at };
-        const nextMessages = [...messages.filter((item) => item.id !== result.message.id), result.message];
-        setSelected(updatedTicket);
-        setMessages(nextMessages);
-        setApiCache(`/contact?id=${selected.id}&offset=${messageOffset}`, {
-          ticket: updatedTicket,
-          messages: nextMessages,
-        });
-      } else {
-        setTickets((current) => {
-          const next = [result.ticket, ...current.filter((item) => item.id !== result.ticket.id)];
-          setApiCache(`/contact?search=${encodeURIComponent(search)}&status=${filter}&offset=${offset}`, { tickets: next });
-          return next;
-        });
+        setSelected({ ...selected, ...result.ticket });
       }
     } catch (e) {
       setError(
@@ -140,12 +147,15 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
           : 'Unable to send. Your draft is preserved.',
       );
     } finally {
+      mutationInFlight.current = false;
       setBusy(false);
     }
   }
   async function status(value: string) {
-    if (!selected || value === selected.status) return;
+    if (!selected || value === selected.status || mutationInFlight.current) return;
+    mutationInFlight.current = true;
     setBusy(true);
+    setError(''); setNotice('');
     try {
       const result = await api<{ ticket: Ticket }>('/contact', {
         method: 'POST',
@@ -158,18 +168,20 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
       const updatedTicket = { ...selected, ...result.ticket };
       setSelected(updatedTicket);
       setTickets((current) => current.map((item) => item.id === updatedTicket.id ? { ...item, ...updatedTicket } : item));
-      setApiCache(`/contact?id=${selected.id}&offset=${messageOffset}`, { ticket: updatedTicket, messages });
       setNotice('Status updated.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to update status.');
     } finally {
+      mutationInFlight.current = false;
       setBusy(false);
     }
   }
   async function deleteTicket() {
-    if (!selected || deleting) return;
+    if (!selected || mutationInFlight.current) return;
+    mutationInFlight.current = true;
     setDeleting(true);
     setError('');
+    setNotice('');
     try {
       await api('/contact', { method: 'DELETE', body: JSON.stringify({ id: selected.id }) });
       setTickets((items) => items.filter((t) => t.id !== selected.id));
@@ -180,13 +192,15 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
       setBody('');
       setRequestId(crypto.randomUUID());
       setConfirmDelete(false);
-      setNotice('تم حذف البلاغ / Ticket deleted.');
-      setApiCache(`/contact?search=${encodeURIComponent(search)}&status=${filter}&offset=0`, {
-        tickets: tickets.filter((item) => item.id !== selected.id),
-      });
+      drafts.current.delete(selected.id);
+      const draft = drafts.current.get('');
+      setTitle(draft?.title ?? ''); setBody(draft?.body ?? ''); setQuestion(draft?.question ?? '');
+      setRequestId(draft?.requestId ?? crypto.randomUUID());
+      setNotice('Ticket deleted.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to delete ticket.');
     } finally {
+      mutationInFlight.current = false;
       setDeleting(false);
     }
   }
@@ -200,15 +214,16 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
         Report a technical, account or question issue. Replies remain private
         between you and the Superadmin.
       </p>
-      {error && (
+      {(error || loadError) && !confirmDelete && (
         <p
           role="alert"
           className="rounded-xl bg-destructive/10 p-3 text-destructive"
         >
-          {error}
+          {error || loadError}
         </p>
       )}
-      {notice && <output className="text-emerald-600">{notice}</output>}
+      {notice && !error && !loadError && <output className="text-emerald-700 dark:text-emerald-300">{notice}</output>}
+      {loadError && <button type="button" className="q-button border" disabled={loading || busy || deleting} onClick={() => setRevision(value => value + 1)}>Try again</button>}
       <AlertDialog open={confirmDelete} onOpenChange={(open) => { if (!deleting) setConfirmDelete(open); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -226,10 +241,8 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
         <>
           <button
             className="q-button border"
-            onClick={() => {
-              setSelected(undefined);
-              setMessageOffset(0);
-            }}
+            disabled={busy || deleting}
+            onClick={() => openTicket()}
           >
             Back to tickets
           </button>
@@ -256,7 +269,7 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
                 Status
                 <select
                   className={input}
-                  disabled={busy}
+                  disabled={busy || loading || deleting}
                   value={selected.status}
                   onChange={(e) => void status(e.target.value)}
                 >
@@ -301,7 +314,7 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 className="q-button border"
-                disabled={messageOffset === 0 || busy}
+                disabled={messageOffset === 0 || busy || loading || deleting}
                 onClick={() =>
                   setMessageOffset(Math.max(0, messageOffset - 50))
                 }
@@ -310,7 +323,7 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
               </button>
               <button
                 className="q-button border"
-                disabled={messages.length <= 50 || busy}
+                disabled={messages.length <= 50 || busy || loading || deleting}
                 onClick={() => setMessageOffset(messageOffset + 50)}
               >
                 Next messages
@@ -324,6 +337,8 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
             <input
               className={input}
               placeholder="Search tickets or Question ID"
+              aria-label="Search tickets or Question ID"
+              disabled={busy || deleting}
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
@@ -333,6 +348,7 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
             <select
               className={input}
               aria-label="Ticket status"
+              disabled={busy || deleting}
               value={filter}
               onChange={(e) => {
                 setFilter(e.target.value);
@@ -349,11 +365,8 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
           {tickets.slice(0, 50).map((t) => (
             <button
               key={t.id}
-              onClick={() => {
-                setSelected(t);
-                setMessages([]);
-                setNotice('');
-              }}
+              disabled={busy || deleting}
+              onClick={() => openTicket(t)}
               className="block w-full rounded-xl border bg-card p-4 text-start"
             >
               <strong className="break-words">{t.title}</strong>
@@ -367,7 +380,7 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
               </span>
             </button>
           ))}
-          {!busy && !tickets.length && <p>No tickets yet.</p>}
+          {!loading && !loadError && tickets.length === 0 && <p className="text-sm text-muted-foreground">{search || filter ? 'No tickets match your filters.' : 'No tickets yet.'}</p>}
           <div className="flex gap-2">
             <button
               className="q-button border"
@@ -378,7 +391,7 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
             </button>
             <button
               className="q-button border"
-              disabled={tickets.length <= 50 || busy}
+              disabled={tickets.length <= 50 || busy || loading || deleting}
               onClick={() => setOffset(offset + 50)}
             >
               Next
@@ -405,6 +418,7 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
                 <input
                   required
                   maxLength={160}
+                  disabled={busy || deleting}
                   className={input}
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
@@ -414,6 +428,7 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
                 Question ID (optional)
                 <input
                   className={input}
+                  disabled={busy || deleting}
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
                   placeholder="#00125"
@@ -426,6 +441,7 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
             <textarea
               required
               maxLength={10000}
+              disabled={busy || deleting}
               dir="auto"
               className={`${input} min-h-36`}
               value={body}
@@ -433,14 +449,14 @@ function ActiveContactWorkspace({ admin }: { admin: boolean }) {
             />
           </label>
           <button
-            disabled={busy || !body.trim()}
+            disabled={busy || deleting || loading || !body.trim() || (!selected && !title.trim())}
             className="q-button bg-primary text-primary-foreground"
           >
             {busy ? 'Sending…' : 'Send'}
           </button>
         </form>
       ) : null}
-      {busy && <output>Loading…</output>}
+      {loading && !busy && !deleting && <output>Loading…</output>}
     </section>
   );
 }

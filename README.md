@@ -2,6 +2,7 @@
 
 The canonical checkout is `app`; previous release worktrees have been consolidated.
 All changes follow [QRAFT_ENGINEERING_CONSTITUTION.md](QRAFT_ENGINEERING_CONSTITUTION.md).
+See [SaaS readiness and validation](docs/SAAS_READINESS_2026-09-27.ar.md) for the 100-user local scenario, current safeguards, and remaining cloud launch checks.
 See [the current foundation decisions](docs/QRAFT_FOUNDATION_2026-09-27.ar.md) for synchronization, participant privacy, server grading, and the transitional data capacity policy.
 
 Qraft 1.0.0 is a private, installable medical QBank PWA. It supports collaborative question authoring and review, personal study progress, subscriptions, account administration, support tickets, and live invalidation across active sessions.
@@ -55,10 +56,10 @@ Create the `qraft-assets` R2 bucket, configure `ROOT_ADMIN_EMAIL` and `ROOT_ADMI
 Deploy the real-time worker before the application worker:
 
 ```bash
-npm run build
-npm run deploy:realtime
-npm run deploy:app
+npm run deploy:production
 ```
+
+The production command requires a clean committed checkout, rebuilds against production resources, validates bindings, deploys realtime first, and records the commit/PWA/schema identity. Run the validation commands and validate the same commit in staging before production. Database backups and migrations remain explicit operations before deployment.
 
 ## Validation
 
@@ -69,3 +70,5 @@ npx tsc --noEmit
 npm run build
 npm run cloudflare:check
 ```
+
+`npm run test:saas` runs focused reliability and API tests, including 100 concurrent synthetic accounts against a disposable local D1 database. It writes `outputs/saas-local-load.json`. Local results do not certify production capacity; use an isolated staging environment before a paid launch. Subscription activation remains an audited administrator workflow.

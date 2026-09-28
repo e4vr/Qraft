@@ -120,6 +120,24 @@ class PlatformDatabaseTests(unittest.TestCase):
 
 
 class ReleaseUpgradeTests(unittest.TestCase):
+    def test_import_controls_upgrade_preserves_duplicate_history_and_suspensions(self):
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        db.execute('PRAGMA foreign_keys=ON')
+        migrations = sorted((ROOT / 'drizzle').glob('*.sql'))
+        for path in migrations:
+            if int(path.name[:4]) <= 25:
+                db.executescript(path.read_text(encoding='utf-8'))
+        db.execute("INSERT INTO profiles(uid,email,password_hash,password_salt,profile_json,created_at,updated_at) VALUES('upgrade','upgrade@example.test','unused','unused','{}','2026-09-27','2026-09-27')")
+        db.execute("INSERT INTO duplicate_attempts(id,user_id,kind,content_hash,confirmed,created_at) VALUES('attempt','upgrade','question','hash',1,'2026-09-27')")
+        db.execute("INSERT INTO json_import_suspensions(id,user_id,reason,starts_at,ends_at,created_by) VALUES('suspension','upgrade','Synthetic policy fixture','2026-09-27','2027-09-27','system')")
+        for path in migrations:
+            if int(path.name[:4]) > 25:
+                db.executescript(path.read_text(encoding='utf-8'))
+        self.assertEqual(db.execute("SELECT id,confirmed FROM duplicate_attempts WHERE user_id='upgrade'").fetchall(), [('attempt', 1)])
+        self.assertEqual(db.execute("SELECT removed_at FROM json_import_suspensions WHERE id='suspension'").fetchone(), (None,))
+        self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(), [])
+
     def test_rc1_import_history_survives_rc2_migrations_and_repeat_imports(self):
         db = sqlite3.connect(':memory:')
         self.addCleanup(db.close)

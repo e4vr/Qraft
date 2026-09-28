@@ -11,6 +11,7 @@ export interface StateSyncNotice {
 
 const channelName = 'qraft-state-sync';
 let channel: BroadcastChannel | undefined;
+const localLocks = new Map<string, Promise<unknown>>();
 
 function sharedChannel() {
   if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return undefined;
@@ -21,7 +22,13 @@ function sharedChannel() {
 export async function withStateSyncLock<T>(uid: string, run: () => Promise<T>): Promise<T> {
   if (typeof navigator !== 'undefined' && navigator.locks)
     return navigator.locks.request(`qraft-state-sync:${uid}`, run);
-  return run();
+  // Older browsers still need serialization within a tab. Cross-tab conflicts
+  // remain protected by the server revision and persisted operation ID.
+  const previous = localLocks.get(uid) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(run);
+  localLocks.set(uid, next);
+  try { return await next; }
+  finally { if (localLocks.get(uid) === next) localLocks.delete(uid); }
 }
 
 export function publishStateSync(notice: StateSyncNotice) {

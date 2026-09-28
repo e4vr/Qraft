@@ -43,7 +43,6 @@ next-env.d.ts
 /.deployment-backups/
 *.tsbuildinfo
 *-backup.sql
-/.deployment-backups/
 /check-db.sql
 
 # Isolated review artifacts

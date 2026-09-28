@@ -7,11 +7,13 @@ import { cleanStateSyncOperations } from './features/state/server/state-service'
 import { cleanPreformedTestOperations } from './lib/preformed-test-server';
 import { withSecurityHeaders } from './server/http/security-headers';
 import { maintenanceGate } from './features/administration/server/operations-service';
+import { withApiLifecycle } from './server/api/request-lifecycle';
 
 function withBuildIdentity(response: Response, env: Cloudflare.Env) {
-  if (!env.BUILD_VERSION || response.status === 101) return response;
+  if (response.status === 101) return response;
   const headers = new Headers(response.headers);
-  headers.set('x-qraft-build', env.BUILD_VERSION);
+  headers.delete('x-qraft-media-cleanup');
+  if (env.BUILD_VERSION) headers.set('x-qraft-build', env.BUILD_VERSION);
   if (env.BUILD_TIMESTAMP) headers.set('x-qraft-build-time', env.BUILD_TIMESTAMP);
   if (env.BUILD_SERVICE_WORKER) headers.set('x-qraft-sw', env.BUILD_SERVICE_WORKER);
   if (env.BUILD_SCHEMA) headers.set('x-qraft-schema', env.BUILD_SCHEMA);
@@ -22,14 +24,14 @@ function withBuildIdentity(response: Response, env: Cloudflare.Env) {
 const worker: ExportedHandler<Cloudflare.Env> = {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext) {
     // API enforcement lives in the lifecycle too, so route-level tests exercise it.
-    if (!new URL(request.url).pathname.startsWith('/api/cloudflare/') || new URL(request.url).pathname === '/api/cloudflare/realtime') {
+    if (!new URL(request.url).pathname.startsWith('/api/cloudflare/')) {
       const maintenance = await maintenanceGate(request);
       if (maintenance) return withBuildIdentity(withSecurityHeaders(request, maintenance), env);
     }
     // WebSocket upgrades must reach Cloudflare unchanged (HTTP 101).
     if (new URL(request.url).pathname === '/api/cloudflare/realtime') {
       try {
-        return withSecurityHeaders(request, await connectRealtime(request));
+        return withSecurityHeaders(request, await withApiLifecycle(request, () => connectRealtime(request)));
       } catch {
         return withSecurityHeaders(
           request,
@@ -41,7 +43,8 @@ const worker: ExportedHandler<Cloudflare.Env> = {
       }
     }
     const response = await application.fetch(request, env, ctx);
-    if (request.method === 'DELETE' && new URL(request.url).pathname === '/api/cloudflare/auth/account' && response.ok)
+    if (response.ok && (response.headers.get('x-qraft-media-cleanup') === '1' ||
+        (request.method === 'DELETE' && new URL(request.url).pathname === '/api/cloudflare/auth/account')))
       ctx.waitUntil(cleanDeletedAccountMedia());
     return withBuildIdentity(withSecurityHeaders(request, response), env);
   },

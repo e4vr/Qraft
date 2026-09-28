@@ -70,7 +70,6 @@ import { PreformedReportsAdmin } from '@/components/preformed-tests-workspace';
 import { QBankFolderManager } from '@/components/qbank-folder-manager';
 import { JsonImportMonitor } from '@/components/json-import-monitor';
 import { api, invalidateApiResources, setApiCache } from '@/lib/api-client';
-import { deleteQBankImages } from '@/lib/application-services';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 
@@ -887,7 +886,6 @@ export function AdminDashboard({
     setQbankActionId(bank.id);
     setQbankActionMessage('');
     try {
-      await deleteQBankImages(bank.id);
       await api('/collaboration', {
         method: 'PUT',
         body: JSON.stringify({
@@ -2454,7 +2452,7 @@ export function AdminDashboard({
                 <section className="flex max-h-[620px] min-w-0 flex-col overflow-hidden rounded-2xl bg-card ring-1 ring-border">
                   <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-4">
                     <h2 className="text-sm font-bold">
-                      Registered IDs · إجمالي الأرقام المسجلة
+                      Registered IDs
                     </h2>
                     <output
                       aria-label="Total registered student IDs"

@@ -253,7 +253,7 @@ export function ReviewWorkspace({
       }).catch(() => undefined);
     };
     reconcile();
-    const stop = subscribeLive(reconcile, ['review-queue']);
+    const stop = subscribeLive(reconcile, ['review-queue', 'question-catalog']);
     return () => { active = false; stop(); };
   }, [user, replaceFromServer]);
   useEffect(() => {
@@ -315,7 +315,7 @@ export function ReviewWorkspace({
         { method: 'POST', body: '{}' },
       );
       setHistoryPreference({ userId: user.uid, clearedAt: result.clearedAt });
-      setNotice('تم مسح سجل المراجعة لحسابك فقط.');
+      setNotice('Your review history has been cleared for this account.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to clear history.');
     } finally {
@@ -799,7 +799,7 @@ export function ReviewWorkspace({
             </div>
           </section>
         )}
-        {notice && (
+        {notice && !error && (
           <output className="mb-4 block text-sm text-emerald-600" dir="auto">
             {notice}
           </output>
@@ -815,7 +815,9 @@ export function ReviewWorkspace({
         <section className="space-y-4">
           {visible.length ? (
             visible.map((proposal) => {
-              const current = proposal.currentSnapshot ?? proposal.payload;
+              const current = (section === 'pending' && proposal.type === 'question_edit'
+                ? collaboration.approvedQuestions.find(question => question.id === proposal.questionId)
+                : undefined) ?? proposal.currentSnapshot ?? proposal.payload;
               const duplicateCandidates = proposalDuplicateCandidates(proposal);
               const duplicateFlagged = isFlaggedDuplicate(proposal);
               const bank = collaboration.qbanks.find(
@@ -958,12 +960,12 @@ export function ReviewWorkspace({
                     />
                     <DiffField
                       label="Explanation"
-                      current={current.explanation}
+                      current={current.explanation ?? ''}
                       proposed={proposal.payload.explanation}
                     />
                     <DiffField
                       label="Source"
-                      current={current.sourceReference}
+                      current={current.sourceReference ?? ('sourceFile' in current ? current.sourceFile : '') ?? ''}
                       proposed={proposal.payload.sourceReference}
                     />
                   </div>}

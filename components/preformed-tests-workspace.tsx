@@ -2,11 +2,10 @@
 
 /* oxlint-disable next/no-img-element */
 
-import { api } from '@/lib/api-client';
+import { ApiError, api } from '@/lib/api-client';
 import { WorkspaceHeader } from '@/components/workspace-header';
 import { QuestionNavigator } from '@/components/exams/question-navigator';
 import {
-  deleteQBankImages,
   uploadQuestionImage,
 } from '@/lib/application-services';
 import {
@@ -1098,10 +1097,10 @@ function TestEditor({
             <div className="mt-4 space-y-3 rounded-xl border bg-card p-3 sm:p-4">
               <label className={`relative flex min-h-44 cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed p-5 text-center transition-colors ${importDragging ? 'border-primary bg-primary/10' : 'border-primary/30 bg-primary/5 hover:border-primary hover:bg-primary/10'}`}>
                 <span className="grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary"><Upload className="size-6" /></span>
-                <span className="text-base font-bold" dir="auto">ارفع الملف هنا <span dir="ltr">JSON / Text</span></span>
-                <span className="text-sm text-muted-foreground" dir="auto">اسحب الملف أو اضغط لاختياره</span>
+                <span className="text-base font-bold" dir="auto">Upload your file here <span dir="ltr">JSON / Text</span></span>
+                <span className="text-sm text-muted-foreground" dir="auto">Drag a file here or click to choose one</span>
                 <input
-                  aria-label="ارفع الملف هنا JSON / Text"
+                  aria-label="Upload your file here JSON / Text"
                   type="file"
                   accept="application/json,text/plain,.json,.txt,.text"
                   className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
@@ -1125,7 +1124,7 @@ function TestEditor({
                 />
               </label>
               <p className="text-xs text-muted-foreground" dir="auto">
-                JSON أو ملف نصي يحتوي على JSON · من 1 إلى 200 سؤال · حتى 1.5 MB. يتبقى {availableImportSlots} موضعًا في هذا الاختبار (الحد الأقصى 35).
+                JSON or text containing JSON · 1–200 questions per file · Up to 1.5 MB. This test has {availableImportSlots} question slots remaining (35 maximum).
               </p>
             </div>
             <div className="mt-4 space-y-3">
@@ -1141,30 +1140,30 @@ function TestEditor({
                       setCopyError('');
                     }}
                     className={`flex min-h-16 w-full items-center gap-3 p-4 text-start transition-colors hover:bg-muted/60 ${selectedImportSource === source ? 'bg-primary/5' : 'bg-card'}`}
-                    dir="rtl"
+                    dir="ltr"
                   >
                     <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">{source === 'lecture' ? <GraduationCap className="size-5" /> : <FileJson className="size-5" />}</span>
-                    <span className="min-w-0 flex-1 text-sm font-semibold leading-6">{source === 'lecture' ? 'ارفع أسئلة مولدة بالذكاء الاصطناعي من المحاضرة (المادة العلمية)' : 'استورد أسئلة بنك الأسئلة بالاستعانة بالذكاء الاصطناعي'}</span>
+                    <span className="min-w-0 flex-1 text-sm font-semibold leading-6">{source === 'lecture' ? 'Generate questions from lecture material with AI' : 'Convert question bank files with AI'}</span>
                     <ChevronRight className={`size-5 shrink-0 transition-transform ${selectedImportSource === source ? '-rotate-90' : 'rotate-90'}`} />
                   </button>
                   {selectedImportSource === source && (
                     <div className="min-w-0 space-y-4 rounded-xl border bg-card p-3 sm:p-4">
                       <div>
-                        <h3 className="font-semibold">Use AI · إعداد المحتوى</h3>
-                        <p className="mt-1 text-sm text-muted-foreground" dir="auto">اختر الإعدادات، وانسخ Prompt إلى أداة الذكاء الاصطناعي مع ملفك، ثم ارفع ملف JSON الناتج لإضافة أسئلته إلى هذا الاختبار ومراجعتها. لا يتم إرسال ملفك إلى الذكاء الاصطناعي من داخل الموقع.</p>
-                        <p className="mt-2 text-sm text-muted-foreground" dir="auto">يتضمن Prompt تصنيف كل سؤال إلى تخصص (specialty) وموضوع (topic). راجع الناتج مقابل المصدر قبل الرفع.</p>
+                        <h3 className="font-semibold">Prepare content with AI</h3>
+                        <p className="mt-1 text-sm text-muted-foreground" dir="auto">Choose your settings, copy the prompt into your AI tool with your file, then upload the resulting JSON to review and add its questions to this test. Qraft does not send your file to an AI service.</p>
+                        <p className="mt-2 text-sm text-muted-foreground" dir="auto">The prompt asks for a specialty and topic for each question. Check the output against your source before uploading.</p>
                       </div>
-                      {source === 'qbank' && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">سيطلب Prompt نقل الأسئلة والخيارات بالترتيب الأصلي دون تخمين. أي سؤال ناقص أو غير مقروء سيُتجاوز وحده مع تسجيل السبب، بينما تستمر معالجة بقية الملف.</p>}
+                      {source === 'qbank' && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">The prompt preserves the original question and option order without guessing. Incomplete or unreadable questions are skipped with a reason while the rest of the file is processed.</p>}
                       {source === 'lecture' && (
                         <div className="grid gap-4 sm:grid-cols-2">
-                          <label className="text-sm font-semibold">Question type · نوع السؤال
+                          <label className="text-sm font-semibold">Question type
                             <select className={`${inputClass} mt-2`} value={importKind} onChange={(event) => { setImportKind(event.target.value as QuestionPromptSettings['kind']); setCopiedPrompt(false); }}>
                               <option value="clinical">Clinical</option><option value="direct">Direct</option>
                             </select>
                           </label>
-                          <label className="text-sm font-semibold">Question length · طول السؤال
+                          <label className="text-sm font-semibold">Question length
                             <select className={`${inputClass} mt-2`} value={importLength} onChange={(event) => { setImportLength(event.target.value as QuestionPromptSettings['length']); setCopiedPrompt(false); }}>
-                              <option value="short">قصير · Short</option><option value="medium">متوسط · Medium</option><option value="long">طويل · Long</option>
+                              <option value="short">Short</option><option value="medium">Medium</option><option value="long">Long</option>
                             </select>
                           </label>
                         </div>
@@ -1173,23 +1172,23 @@ function TestEditor({
                         <div className="space-y-2">
                           {source === 'lecture' && <label className="block text-sm font-semibold">Question count mode
                             <select className={`${inputClass} mt-2`} value={importCountMode} onChange={(event) => { setImportCountMode(event.target.value as QuestionPromptSettings['countMode']); setCopiedPrompt(false); }}>
-                              <option value="fixed">Specific number · عدد محدد</option><option value="per_slide">One question per slide</option>
+                              <option value="fixed">Specific number</option><option value="per_slide">One question per slide</option>
                             </select>
                           </label>}
-                          {(source === 'qbank' || importCountMode === 'fixed') && <label className="block text-sm font-semibold">{source === 'lecture' ? 'Questions to generate' : 'Questions to extract'} · عدد الأسئلة
+                          {(source === 'qbank' || importCountMode === 'fixed') && <label className="block text-sm font-semibold">{source === 'lecture' ? 'Questions to generate' : 'Questions to extract'}
                             <input type="number" inputMode="numeric" min={1} max={Math.max(1, availableImportSlots)} step={1} className={`${inputClass} mt-2`} value={safeImportCount} onChange={(event) => { setImportCount(Number(event.target.value) || 1); setCopiedPrompt(false); }} />
                           </label>}
                           <p className="text-xs text-muted-foreground">1–{availableImportSlots} questions for this test. A JSON file may contain up to 200 questions.</p>
                         </div>
-                        {source === 'lecture' && <label className="text-sm font-semibold">Options per question · عدد الخيارات
+                        {source === 'lecture' && <label className="text-sm font-semibold">Options per question
                           <input type="number" inputMode="numeric" min={2} max={10} className={`${inputClass} mt-2`} value={importOptionCount} onChange={(event) => { setImportOptionCount(Math.max(2, Math.min(10, Number(event.target.value) || 2))); setCopiedPrompt(false); }} />
                         </label>}
                       </div>
                       <button type="button" className="q-button q-button-primary min-h-12" onClick={() => void copyImportPrompt()} disabled={!importPrompt}>
                         {copiedPrompt ? <Check className="size-4" /> : <Copy className="size-4" />}
-                        {copiedPrompt ? 'تم نسخ Prompt' : 'نسخ تعليمات الذكاء الاصطناعي'}
+                        {copiedPrompt ? 'Prompt copied' : 'Copy AI prompt'}
                       </button>
-                      {copiedPrompt && <output className="block text-sm text-emerald-600" dir="auto">تم النسخ. أرفق المصدر مع التعليمات في أداة AI، ثم ارفع الملف الناتج في المربع بالأعلى.</output>}
+                      {copiedPrompt && <output className="block text-sm text-emerald-600" dir="auto">Copied. Add your source and this prompt to your AI tool, then upload the resulting file above.</output>}
                       {copyError && <p role="alert" className="text-sm text-destructive">{copyError}</p>}
                       <details className="text-sm">
                         <summary className="min-h-11 cursor-pointer py-3">Preview AI prompt</summary>
@@ -1200,7 +1199,7 @@ function TestEditor({
                 </div>
               ))}
             </div>
-            <p className="mt-4 text-xs text-muted-foreground" dir="auto">يمكنك أيضًا رفع JSON جاهز مباشرة. الإعدادات تخص Prompt ولا تعيد كتابة الملف المستورد أو تغيّر إجاباته. راجع الناتج مقابل المصدر قبل الرفع.</p>
+            <p className="mt-4 text-xs text-muted-foreground" dir="auto">You can also upload an existing JSON file directly. These settings only affect the prompt; they do not rewrite imported questions or answers. Check the output against your source before uploading.</p>
           </section>
         </dialog>
       )}
@@ -1244,6 +1243,7 @@ export function PreformedTestRunner({
   const [leaderboard, setLeaderboard] = useState<PreformedLeaderboardEntry[]>();
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const submitLock = useRef(false);
+  const autoSubmitted = useRef('');
   const questionBodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1262,16 +1262,30 @@ export function PreformedTestRunner({
       .then(async (saved) => {
         if (!active) return;
         setScope(nextScope);
-        if (saved && !saved.submittedAt) {
-          const payload = await api<{ test: PreformedTestDocument }>(
+        if (saved?.submittedAt && saved.result) {
+          setAttempt(saved);
+          setResult(saved.result);
+          setElapsed(saved.elapsedSeconds);
+        } else if (saved && !saved.submittedAt) {
+          let restored = saved;
+          try {
+            // Pending submissions must replay their original token, even if
+            // their first response was lost after the server accepted it.
+            const payload = !saved.submissionPending && navigator.onLine ? await api<{ test: PreformedTestDocument }>(
             `/preformed/open?code=${encodeURIComponent(code)}`,
             { forceRefresh: true, requestReason: 'reconnect-reconciliation',
+              cacheScope: nextScope, expectedUserId: accountUid,
               headers: { 'x-qraft-attempt-token': saved.test.attemptToken ?? '' } },
-          );
+            ) : undefined;
+            if (payload) restored = { ...saved, test: payload.test };
+          } catch (caught) {
+            if (caught instanceof ApiError && caught.status < 500) throw caught;
+            if (active) setError('Connection unavailable. Your saved attempt is available on this device; reconnect to submit.');
+          }
           if (!active) return;
-          setAttempt({ ...saved, test: payload.test });
+          setAttempt(restored);
           setName(saved.participantName);
-          setElapsed(Math.max(saved.elapsedSeconds, Math.floor((Date.now() - Date.parse(payload.test.attemptStartedAt ?? saved.startedAt)) / 1000)));
+          setElapsed(Math.max(saved.elapsedSeconds, Math.floor((Date.now() - Date.parse(restored.test.attemptStartedAt ?? saved.startedAt)) / 1000)));
           setIndex(Math.max(0, Math.min(saved.currentIndex ?? 0, saved.questionOrder.length - 1)));
         }
       })
@@ -1295,6 +1309,8 @@ export function PreformedTestRunner({
         `/preformed/open?code=${encodeURIComponent(code)}`,
         {
           forceRefresh: true,
+          cacheScope: scope,
+          expectedUserId: accountUid,
           requestReason: 'user-transaction',
           headers: passcode ? { 'x-qraft-test-passcode': passcode } : undefined,
         },
@@ -1378,9 +1394,14 @@ export function PreformedTestRunner({
   const submit = useCallback(async () => {
     if (!attempt || submitLock.current || result) return;
     submitLock.current = true;
+    autoSubmitted.current = attempt.submissionId;
     setBusy(true);
     setError('');
     try {
+      const pending = { ...attempt, elapsedSeconds: elapsed, submissionPending: true };
+      await savePreformedAttempt(scope, pending);
+      setAttempt(pending);
+      if (!navigator.onLine) throw new Error('Your answers are saved on this device. Submission will retry when the connection returns.');
       const submissionId = attempt.submissionId;
       const localAttemptNumber =
         Number(
@@ -1398,6 +1419,7 @@ export function PreformedTestRunner({
         questions: PreformedQuestion[];
       }>('/preformed/submit', {
         method: 'POST',
+        expectedUserId: accountUid,
         body: JSON.stringify({
           submissionId,
           attemptToken: attempt.test.attemptToken,
@@ -1407,12 +1429,17 @@ export function PreformedTestRunner({
           answers: attempt.answers,
         }),
       });
+      if (payload.accepted !== true || !Number.isFinite(payload.score) ||
+          !Array.isArray(payload.questions) || payload.questions.length !== attempt.test.questions.length)
+        throw new Error('The server did not confirm the result. Your submission remains saved for retry.');
       const completed = {
         ...attempt,
         test: { ...attempt.test, questions: payload.questions, answersHidden: false },
         elapsedSeconds: elapsed,
         submittedAt: new Date().toISOString(),
         score: payload.score,
+        submissionPending: false,
+        result: { score: payload.score, questionCount: payload.questionCount, percentage: payload.percentage, rank: payload.rank, leaderboard: payload.leaderboard },
       };
       await savePreformedAttempt(scope, completed);
       setAttempt(completed);
@@ -1434,19 +1461,19 @@ export function PreformedTestRunner({
       setBusy(false);
       submitLock.current = false;
     }
-  }, [attempt, elapsed, result, user, scope]);
+  }, [attempt, elapsed, result, user, scope, accountUid]);
 
   useEffect(() => {
-    if (!attempt || result) return;
+    if (!attempt || result || attempt.submissionPending) return;
     const timer = window.setInterval(
-      () => setElapsed((current) => current + 1),
+      () => setElapsed(Math.max(attempt.elapsedSeconds, Math.floor((Date.now() - Date.parse(attempt.test.attemptStartedAt ?? attempt.startedAt)) / 1000))),
       1000,
     );
     return () => window.clearInterval(timer);
   }, [attempt, result]);
   useEffect(() => {
-    if (!attempt || result) return;
-    if (elapsed % 5 !== 0) return;
+    if (!attempt || result || attempt.submissionPending) return;
+    if (elapsed % 15 !== 0) return;
     void savePreformedAttempt(scope, { ...attempt, elapsedSeconds: elapsed }).catch(
       () => setError('Could not save this attempt on your device. Please try again.'),
     );
@@ -1455,10 +1482,19 @@ export function PreformedTestRunner({
     ? attempt.test.settings.durationMinutes * 60
     : null;
   useEffect(() => {
-    if (limit === null || elapsed < limit || !attempt || result) return;
-    const timer = window.setTimeout(() => void submit(), 0);
+    if (!attempt || result || !navigator.onLine || autoSubmitted.current === attempt.submissionId) return;
+    if (!attempt.submissionPending && (limit === null || elapsed < limit)) return;
+    const timer = window.setTimeout(() => {
+      autoSubmitted.current = attempt.submissionId;
+      void submit();
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [attempt, elapsed, limit, result, submit]);
+  useEffect(() => {
+    const online = () => { if (attempt && !result && (attempt.submissionPending || (limit !== null && elapsed >= limit))) void submit(); };
+    window.addEventListener('online', online);
+    return () => window.removeEventListener('online', online);
+  }, [attempt, result, submit, limit, elapsed]);
 
   const continueLater = async () => {
     if (!attempt) return onClose();
@@ -1672,7 +1708,7 @@ export function PreformedTestRunner({
               onClick={() => void submit()}
               className="q-button q-button-primary"
             >
-              Submit
+              {attempt.submissionPending ? 'Retry submission' : 'Submit'}
             </button>
           )}
         </nav>
@@ -1745,7 +1781,7 @@ export function PreformedTestRunner({
                     return (
                       <button
                         key={optionIndex}
-                        disabled={reviewing}
+                        disabled={reviewing || busy || attempt.submissionPending}
                         onClick={() => {
                           const next = {
                             ...attempt,
@@ -1825,7 +1861,7 @@ export function PreformedTestRunner({
                   className="q-button q-button-primary"
                 >
                   <Send className="size-4" />
-                  {busy ? 'Submitting…' : 'Submit test'}
+                  {busy ? 'Submitting…' : attempt.submissionPending ? 'Retry submission' : 'Submit test'}
                 </button>
               )}
             </div>
@@ -1902,9 +1938,13 @@ export function PreformedTestsWorkspace({
   const [stats, setStats] = useState<ManageResponse>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [loading, setLoading] = useState(true);
+  const actionInFlight = useRef(false);
   const [copiedCode, setCopiedCode] = useState('');
   const [confirmAction, confirmationDialog] = useConfirmationDialog();
   const loadSequence = useRef(0);
+  const cancelPendingLoads = useCallback(() => { loadSequence.current += 1; }, []);
   const copyResetTimer = useRef<number | undefined>(undefined);
   const canCreate = ['pro', 'unlimited'].includes(
     user.effectivePlan ?? user.tier,
@@ -1913,7 +1953,7 @@ export function PreformedTestsWorkspace({
     async (force = false, silent = false) => {
       const sequence = ++loadSequence.current;
       if (!silent) {
-        setBusy(true);
+        setLoading(true);
         setError('');
       }
       try {
@@ -1926,7 +1966,7 @@ export function PreformedTestsWorkspace({
             requestReason: force ? 'explicit-refresh' : undefined,
           },
         );
-        if (sequence === loadSequence.current) setTests(value.tests);
+        if (sequence === loadSequence.current) { setTests(value.tests); }
       } catch (caught) {
         if (!silent && sequence === loadSequence.current)
           setError(
@@ -1935,15 +1975,15 @@ export function PreformedTestsWorkspace({
               : 'Could not load ready-made tests.',
           );
       } finally {
-        if (!silent) setBusy(false);
+        if (sequence === loadSequence.current) setLoading(false);
       }
     },
     [user.uid],
   );
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    return () => { window.clearTimeout(timer); cancelPendingLoads(); };
+  }, [load, cancelPendingLoads]);
   useEffect(
     () => subscribeLive(() => {
       void load(true, true);
@@ -1955,7 +1995,7 @@ export function PreformedTestsWorkspace({
       }).then(value => setStats(current => current?.test.id === id
         ? (owner ? value : { ...current, leaderboard: value.leaderboard }) : current))
         .catch(() => setStats(current => current?.test.id === id ? undefined : current));
-    }, ['preformed-tests']),
+    }, ['preformed-tests', 'preformed-results', 'connected']),
     [load, stats, user.uid],
   );
   useEffect(
@@ -1964,43 +2004,37 @@ export function PreformedTestsWorkspace({
     },
     [],
   );
+  async function runAction(action: () => Promise<void>, fallback: string) {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    // A read started before this action must not overwrite its result.
+    ++loadSequence.current;
+    setLoading(false); setBusy(true); setError(''); setNotice('');
+    try { await action(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : fallback); }
+    finally { actionInFlight.current = false; setBusy(false); }
+  }
   const create = async () => {
     if (!canCreate) return onUpgrade();
-    setBusy(true);
-    setError('');
-    try {
-      const value = await api<{ test: PreformedTestDocument }>(
-        '/preformed/create',
-        { method: 'POST', body: '{}' },
-      );
+    await runAction(async () => {
+      const value = await api<{ test: PreformedTestDocument }>('/preformed/create', { method: 'POST', body: '{}' });
       setEditing(value.test);
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : 'Could not create a test.',
-      );
-    } finally {
-      setBusy(false);
-    }
+    }, 'Could not create a test. Please try again.');
   };
   const edit = async (id: string, showStats = false) => {
-    setBusy(true);
-    setError('');
-    try {
-      const value = await api<ManageResponse>(
-        `/preformed/manage?id=${encodeURIComponent(id)}`,
-        { forceRefresh: true, requestReason: 'user-transaction' },
-      );
-      if (showStats) setStats(value);
-      else setEditing(value.test);
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : 'Could not load this test.',
-      );
-    } finally {
-      setBusy(false);
-    }
+    await runAction(async () => {
+      const value = await api<ManageResponse>(`/preformed/manage?id=${encodeURIComponent(id)}`, { forceRefresh: true, requestReason: 'user-transaction' });
+      if (showStats) setStats(value); else setEditing(value.test);
+    }, 'Could not load this test. Please try again.');
+  };
+  const showBoard = async (test: PreformedTestSummary) => {
+    await runAction(async () => {
+      const value = await api<{ leaderboard: PreformedLeaderboardEntry[] }>(`/preformed/leaderboard?id=${encodeURIComponent(test.id)}`);
+      setStats({ test: { ...test, questions: [], hasPasscode: false }, leaderboard: value.leaderboard, questionStats: [] });
+    }, 'Could not load the leaderboard. Please try again.');
   };
   const share = async (code: string) => {
+    setError('');
     try {
       await navigator.clipboard.writeText(testUrl(code));
       setCopiedCode(code);
@@ -2023,15 +2057,12 @@ export function PreformedTestsWorkspace({
       }))
     )
       return;
-    const value = await api<{ code: string }>('/preformed/rotate-code', {
-      method: 'POST',
-      body: JSON.stringify({ id }),
-    });
-    setTests((current) =>
-      current.map((item) =>
-        item.id === id ? { ...item, code: value.code } : item,
-      ),
-    );
+    await runAction(async () => {
+      const value = await api<{ code: string }>('/preformed/rotate-code', { method: 'POST', body: JSON.stringify({ id }) });
+      setTests(current => current.map(item => item.id === id ? { ...item, code: value.code } : item));
+      setCopiedCode('');
+      setNotice('A new join code has been created. The previous link no longer works.');
+    }, 'Could not change the join code. Please try again.');
   };
   const remove = async (test: PreformedTestSummary) => {
     if (
@@ -2044,47 +2075,28 @@ export function PreformedTestsWorkspace({
       }))
     )
       return;
-    setBusy(true);
-    try {
-      await deleteQBankImages(`preformed-${test.id}`);
-      await api('/preformed/delete', {
-        method: 'DELETE',
-        body: JSON.stringify({ id: test.id }),
-      });
-      setTests((current) => current.filter((item) => item.id !== test.id));
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : 'Could not delete the test.',
-      );
-    } finally {
-      setBusy(false);
-    }
+    await runAction(async () => {
+      await api('/preformed/delete', { method: 'DELETE', body: JSON.stringify({ id: test.id }) });
+      setTests(current => current.filter(item => item.id !== test.id));
+      setNotice('Test deleted.');
+    }, 'Could not delete the test. Please try again.');
   };
   const report = async (id: string) => {
+    if (actionInFlight.current) return;
     const reason = window.prompt('What should the Superadmin review?');
     if (!reason?.trim()) return;
-    await api('/preformed/report', {
-      method: 'POST',
-      body: JSON.stringify({ id, reason }),
-    });
-    setError('Report sent. Thank you.');
+    await runAction(async () => {
+      await api('/preformed/report', { method: 'POST', body: JSON.stringify({ id, reason }) });
+      setNotice('Report sent. Thank you.');
+    }, 'Could not send the report. Please try again.');
   };
   const moderate = async (id: string) => {
-    if (
-      !(await confirmAction({
-        title: 'Hide this public test?',
-        description:
-          'Participants will no longer be able to find or open this test until it is restored.',
-        confirmLabel: 'Hide test',
-        tone: 'warning',
-      }))
-    )
-      return;
-    await api('/preformed/moderate', {
-      method: 'PUT',
-      body: JSON.stringify({ id, hidden: true }),
-    });
-    setTests((current) => current.filter((item) => item.id !== id));
+    if (!(await confirmAction({ title: 'Hide this public test?', description: 'Participants will no longer be able to find or open this test until it is restored.', confirmLabel: 'Hide test', tone: 'warning' }))) return;
+    await runAction(async () => {
+      await api('/preformed/moderate', { method: 'PUT', body: JSON.stringify({ id, hidden: true }) });
+      setTests(current => current.filter(item => item.id !== id));
+      setNotice('Test hidden.');
+    }, 'Could not hide the test. Please try again.');
   };
   const visible = tests.filter((item) =>
     tab === 'mine'
@@ -2158,7 +2170,7 @@ export function PreformedTestsWorkspace({
           </div>
           <button
             onClick={() => void load(true)}
-            disabled={busy}
+            disabled={busy || loading}
             className="q-button q-button-secondary"
           >
             <RefreshCw className={`size-4 ${busy ? 'animate-spin' : ''}`} />
@@ -2166,7 +2178,8 @@ export function PreformedTestsWorkspace({
           </button>
           {tab === 'mine' && (
             <button
-              onClick={() => void create()}
+              disabled={busy || loading}
+                        onClick={() => void create()}
               className="q-button q-button-primary ml-auto"
               aria-label={
                 !canCreate ? 'New test — Pro plan required' : undefined
@@ -2192,11 +2205,13 @@ export function PreformedTestsWorkspace({
           )}
         </div>
         {error && (
-          <output className="mt-4 block rounded-xl bg-muted p-3 text-sm">
+          <p role="alert" className="mt-4 block rounded-xl bg-destructive/10 p-3 text-sm text-destructive">
             {error}
-          </output>
+          </p>
         )}
-        {!visible.length && !busy ? (
+        {notice && !error && <output className="mt-4 block rounded-xl bg-emerald-500/10 p-3 text-sm text-emerald-700 dark:text-emerald-300">{notice}</output>}
+        {loading && <output className="mt-4 block text-sm">Loading tests…</output>}
+        {!visible.length && !busy && !loading && !error ? (
           <div className={`${panelClass} mt-5 p-12 text-center`}>
             <div className="mx-auto grid size-16 place-items-center rounded-2xl bg-primary/10 text-primary">
               <Globe2 className="size-7" />
@@ -2242,7 +2257,7 @@ export function PreformedTestsWorkspace({
                 </div>
                 <div className="mt-auto flex flex-wrap gap-2 pt-5">
                   <button
-                    disabled={test.status !== 'published'}
+                    disabled={busy || loading || test.status !== 'published'}
                     title={
                       test.status !== 'published'
                         ? 'Publish this test before opening it.'
@@ -2255,7 +2270,7 @@ export function PreformedTestsWorkspace({
                     {test.status === 'published' ? 'Open' : test.status}
                   </button>
                   <button
-                    disabled={test.status !== 'published'}
+                    disabled={busy || loading || test.status !== 'published'}
                     title={
                       test.status !== 'published'
                         ? 'Publish this test before sharing it.'
@@ -2274,6 +2289,7 @@ export function PreformedTestsWorkspace({
                   {test.ownerId === user.uid ? (
                     <>
                       <button
+                        disabled={busy || loading}
                         onClick={() => void edit(test.id)}
                         className="q-button q-button-secondary"
                       >
@@ -2281,6 +2297,7 @@ export function PreformedTestsWorkspace({
                         Edit
                       </button>
                       <button
+                        disabled={busy || loading}
                         onClick={() => void edit(test.id, true)}
                         className="q-button q-button-secondary"
                       >
@@ -2289,6 +2306,8 @@ export function PreformedTestsWorkspace({
                       </button>
                       <button
                         title="Rotate code"
+                        aria-label={`Rotate code for ${test.title}`}
+                        disabled={busy || loading}
                         onClick={() => void rotate(test.id)}
                         className="q-button q-button-secondary px-3"
                       >
@@ -2296,6 +2315,8 @@ export function PreformedTestsWorkspace({
                       </button>
                       <button
                         title="Delete"
+                        aria-label={`Delete ${test.title}`}
+                        disabled={busy || loading}
                         onClick={() => void remove(test)}
                         className="q-button q-button-secondary px-3 text-red-600"
                       >
@@ -2305,22 +2326,8 @@ export function PreformedTestsWorkspace({
                   ) : (
                     <>
                       <button
-                        onClick={() =>
-                          void api<{
-                            leaderboard: PreformedLeaderboardEntry[];
-                          }>(`/preformed/leaderboard?id=${test.id}`).then(
-                            (value) =>
-                              setStats({
-                                test: {
-                                  ...test,
-                                  questions: [],
-                                  hasPasscode: false,
-                                },
-                                leaderboard: value.leaderboard,
-                                questionStats: [],
-                              }),
-                          )
-                        }
+                        disabled={busy || loading}
+                        onClick={() => void showBoard(test)}
                         className="q-button q-button-secondary"
                       >
                         <Trophy className="size-4" />
@@ -2328,6 +2335,8 @@ export function PreformedTestsWorkspace({
                       </button>
                       <button
                         title="Report"
+                        aria-label={`Report ${test.title}`}
+                        disabled={busy || loading}
                         onClick={() => void report(test.id)}
                         className="q-button q-button-secondary px-3"
                       >
@@ -2335,6 +2344,8 @@ export function PreformedTestsWorkspace({
                       </button>
                       {user.role === 'super_admin' && user.mfaVerified && (
                         <button
+                          disabled={busy || loading}
+                        aria-label={`Hide ${test.title}`}
                           onClick={() => void moderate(test.id)}
                           className="q-button q-button-secondary px-3 text-red-600"
                         >

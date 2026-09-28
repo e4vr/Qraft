@@ -14,9 +14,18 @@ jobs:
           node-version: 22.13.0
           cache: npm
       - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm test
       - run: python tests/platform-database.test.py
       - run: npx tsc --noEmit
       - run: npm run lint
       - run: npm run build
       - run: npm run cloudflare:check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: saas-local-validation
+          path: |
+            outputs/saas-local-load.json
+            outputs/server-efficiency.json
+          if-no-files-found: ignore

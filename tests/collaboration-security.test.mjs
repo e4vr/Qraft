@@ -384,7 +384,7 @@ void test('published ready-made tests expose a direct share link', async () => {
   assert.match(workspace, /url\.searchParams\.set\('join_test', code\)/);
   assert.match(workspace, /Copy link/);
   assert.match(workspace, /Link copied/);
-  assert.match(workspace, /disabled=\{test\.status !== 'published'\}/);
+  assert.match(workspace, /disabled=\{busy \|\| loading \|\| test\.status !== 'published'\}/);
 });
 
 void test('the sidebar keeps navigation scrollable and the account footer visible', async () => {
@@ -570,10 +570,10 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
   assert.match(manager, /QuestionImportReview/);
   assert.match(preformed, /onClick=\{openImport\}/);
   assert.match(preformed, /Import<\/h2>/);
-  assert.match(preformed, /ارفع الملف هنا/);
+  assert.match(preformed, /Upload your file here/);
   assert.match(preformed, /Questions to generate/);
   assert.match(preformed, /Questions to extract/);
-  assert.match(preformed, /نسخ تعليمات الذكاء الاصطناعي/);
+  assert.match(preformed, /Copy AI prompt/);
   assert.match(preformed, /buildQuestionPrompt/);
   assert.match(platform, /questionId:\s*status === 'approved'/);
   assert.match(review, /Bulk review/);
@@ -664,7 +664,7 @@ void test('questions and JSON prompts support a configurable number of options',
     new URL('lib/question-import.ts', root),
     'utf8',
   );
-  assert.match(importer, /exactly \$\{optionCount\} distinct/);
+  assert.match(importer, /\$\{optionCount\} distinct answer options/);
   assert.match(
     importer,
     /options.length < 2\s*\|\|\s*item.options.length > 10/,
@@ -762,13 +762,13 @@ void test('QBank library uses Superadmin folders, personal shortcuts, and bookma
   assert.match(workspace, /q-coarse-pointer-only/);
   assert.match(workspace, /by \{bank\.ownerName\}/);
   assert.match(folderManager, /One global structure, up to two levels/);
-  assert.match(folderManager, /Type حذف to confirm/);
+  assert.match(folderManager, /Type DELETE to confirm/);
   assert.match(server, /Verified Superadmin access required/);
   assert.match(
     server,
     /Essential QBanks must be moved or removed independently/,
   );
-  assert.match(server, /input\.confirmation !== 'حذف'/);
+  assert.match(server, /\['DELETE', '\\u062d\\u0630\\u0641'\]\.includes\(String\(input\.confirmation\)\)/);
 });
 
 void test('touch input uses one event path, forgiving targets, and touch-safe scrolling', async () => {

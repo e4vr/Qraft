@@ -266,6 +266,7 @@ export const preformedTests = sqliteTable(
     visibility: text('visibility', { enum: ['public', 'private'] }).notNull().default('private'),
     status: text('status', { enum: ['draft', 'published', 'paused', 'hidden'] }).notNull().default('draft'),
     version: integer('version').notNull().default(1),
+    editRevision: integer('edit_revision').notNull().default(0),
     questionsJson: text('questions_json').notNull().default('[]'),
     settingsJson: text('settings_json').notNull().default('{}'),
     passcodeHash: text('passcode_hash'),

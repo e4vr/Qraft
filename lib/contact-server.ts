@@ -118,6 +118,26 @@ export async function contactApi(request: Request) {
     await env.DB.batch(statements);
     return json({ ticket: { ...ticket, status: text('status'), updated_at: now } });
   }
+  // Retries must return the same response contract, even if the ticket was
+  // resolved after the original reply. Never reuse an ID for another ticket.
+  const messageId = text('requestId');
+  if (!/^[a-zA-Z0-9-]{20,80}$/.test(messageId))
+    return json({ error: 'Invalid request ID.' }, 400);
+  const prior = await env.DB.prepare(
+    'SELECT ticket_id,user_id,body,attachment,created_at FROM ticket_messages WHERE id=?',
+  ).bind(messageId).first<{ ticket_id: string; user_id: string; body: string; attachment: string | null; created_at: string }>();
+  if (prior) {
+    if (prior.user_id !== user.uid || (id && prior.ticket_id !== id) || prior.body !== text('body'))
+      return json({ error: 'This request ID has already been used for another message.' }, 409);
+    const savedTicket = await env.DB.prepare(
+      `SELECT t.id,t.title,t.status,t.user_id,p.email,json_extract(p.profile_json,'$.displayName') AS name,CASE WHEN t.question_linked=1 THEN coalesce(q.question_id,'deleted') END AS question_id,t.created_at,t.updated_at FROM tickets t JOIN profiles p ON p.uid=t.user_id LEFT JOIN question_registry q ON q.uuid=t.question_uuid WHERE t.id=?`,
+    ).bind(prior.ticket_id).first();
+    if (!savedTicket) return json({ error: 'Ticket not found.' }, 404);
+    return json({ id: prior.ticket_id, ticket: savedTicket, message: {
+      id: messageId, name: user.displayName, role: user.role,
+      body: prior.body, attachment: prior.attachment, created_at: prior.created_at,
+    }, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
+  }
   const body = text('body'),
     title = text('title');
   if (
@@ -161,18 +181,6 @@ export async function contactApi(request: Request) {
     questionUuid = q.uuid;
   }
   const ticketId = id || `T-${crypto.randomUUID()}`;
-  const messageId = text('requestId');
-  if (!/^[a-zA-Z0-9-]{20,80}$/.test(messageId))
-    return json({ error: 'Invalid request ID.' }, 400);
-  const prior = await env.DB.prepare(
-    'SELECT ticket_id,user_id FROM ticket_messages WHERE id=?',
-  )
-    .bind(messageId)
-    .first<{ ticket_id: string; user_id: string }>();
-  if (prior)
-    return prior.user_id === user.uid
-      ? json({ ok: true, id: prior.ticket_id })
-      : json({ error: 'Invalid request ID.' }, 409);
   const statements = [];
   if (!ticket)
     statements.push(

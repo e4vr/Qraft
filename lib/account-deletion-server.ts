@@ -3,23 +3,9 @@ import { currentUser } from '@/features/auth/server/auth-service';
 import { assertSameOrigin, readJson } from '@/server/http/request';
 import { json } from '@/server/http/response';
 import type { AppUser, QBank } from './medguard-types';
-import { r2StorageService } from './storage-service';
 import { publishChanges } from './realtime-server';
 
-export async function cleanDeletedAccountMedia() {
-  const rows = await env.DB.prepare("SELECT key,storage_key,provider,size FROM media WHERE status='account_deleted' LIMIT 50").all<{ key: string; storage_key: string | null; provider: string; size: number }>();
-  for (const row of rows.results) {
-    try {
-      if (row.provider === 'r2') await r2StorageService.delete(row.storage_key ?? row.key, row.size);
-      else {
-        if (!env.IMAGEKIT_PRIVATE_KEY) continue;
-        const response = await fetch(`https://api.imagekit.io/v1/files/${encodeURIComponent(row.storage_key ?? row.key)}`, { method: 'DELETE', headers: { authorization: `Basic ${btoa(`${env.IMAGEKIT_PRIVATE_KEY}:`)}` } });
-        if (!response.ok && response.status !== 404) continue;
-      }
-      await env.DB.prepare("DELETE FROM media WHERE key=? AND status='account_deleted'").bind(row.key).run();
-    } catch { /* Keep the durable cleanup marker; retry on the next administration request. */ }
-  }
-}
+export { cleanPendingMedia as cleanDeletedAccountMedia } from '@/features/media/server/media-cleanup';
 
 type Row = { type: string; id: string; qbank_id: string | null; owner_id: string | null; email: string | null; payload: string };
 

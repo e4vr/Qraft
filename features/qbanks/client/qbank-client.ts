@@ -5,6 +5,7 @@ import type {
 } from '@/lib/medguard-types';
 
 async function upload(
+  uid: string,
   file: File,
   qbankId: string,
   questionId: string,
@@ -14,12 +15,14 @@ async function upload(
   form.append('file', file);
   form.append('qbankId', qbankId);
   form.append('questionId', questionId);
-  return (
-    await api<{ url: string }>(`/media/${kind}`, {
+  const result = await api<{ url: string }>(`/media/${kind}`, {
       method: 'POST',
+      expectedUserId: uid,
       body: form,
-    })
-  ).url;
+    });
+  if (typeof result.url !== 'string' || !result.url.trim())
+    throw new Error('The image upload was not confirmed. Keep this draft and retry.');
+  return result.url;
 }
 
 export async function uploadNoteImage(
@@ -28,7 +31,7 @@ export async function uploadNoteImage(
   qbankId = 'smle-gs',
   questionId = 'general',
 ): Promise<string> {
-  return upload(file, qbankId, questionId, 'notes');
+  return upload(_uid, file, qbankId, questionId, 'notes');
 }
 
 export async function uploadQuestionImage(
@@ -37,7 +40,7 @@ export async function uploadQuestionImage(
   qbankId: string,
   questionId: string,
 ): Promise<string> {
-  return upload(file, qbankId, questionId, 'questions');
+  return upload(_uid, file, qbankId, questionId, 'questions');
 }
 
 export async function deleteQBankImages(qbankId: string): Promise<void> {

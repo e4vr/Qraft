@@ -5,10 +5,14 @@ import { clientInstanceId, invalidateApiResources } from './api-client';
 export const LIVE_CHANGE = 'qraft-live-change';
 
 const topicTags: Record<string, string[]> = {
-  connected: ['account', 'collaboration', 'review-queue', 'question-catalog', 'subscriptions', 'discounts', 'contributions', 'economy', 'contact', 'monitoring', 'site-operations', 'pricing'],
+  connected: ['account', 'collaboration', 'review-queue', 'question-catalog', 'subscriptions', 'discounts', 'contributions', 'economy', 'contact', 'monitoring', 'site-operations', 'pricing', 'preformed-tests', 'preformed-results', 'announcement', 'legal-links', 'test-pool'],
   collaboration: ['collaboration'],
   catalog: ['collaboration', 'question-catalog', 'test-pool'],
   'question-catalog': ['question-catalog', 'test-pool', 'collaboration'],
+  'question-stats': ['question-stats'],
+  'shared-notes': ['collaboration'],
+  'preformed-tests': ['preformed-tests'],
+  'preformed-results': ['preformed-results'],
   'review-queue': ['review-queue', 'collaboration'],
   'reviewer-performance': ['reviewer-performance'],
   'review-history': ['review-history'],
@@ -32,14 +36,35 @@ const topicTags: Record<string, string[]> = {
 
 export function subscribeLive(callback: (topic: string) => void, topics?: string[]) {
   const listener = (event: Event) => {
-    const topic = (event as CustomEvent<string>).detail;
+    const detail = (event as CustomEvent<string | string[]>).detail;
+    const changed = Array.isArray(detail) ? detail : [detail];
     if (document.visibilityState === 'hidden') return;
     // A connection event is transport state, not a data change. Consumers should
     // refresh only when one of their requested topics actually changed.
-    if (!topics || topics.includes(topic)) callback(topic);
+    const topic = changed.find(item => !topics || topics.includes(item));
+    if (topic) callback(topic);
   };
   window.addEventListener(LIVE_CHANGE, listener);
   return () => window.removeEventListener(LIVE_CHANGE, listener);
+}
+
+// A bounded window absorbs the same mutation arriving over bank, user and admin
+// sockets. Invalidate every affected resource before waking any consumer.
+export function createLiveBatch(deliver: (topics: string[]) => void, delay = 80) {
+  const pending = new Set<string>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return {
+    add(topic: string) {
+      pending.add(topic);
+      timer ??= setTimeout(() => {
+        timer = undefined;
+        const topics = [...pending];
+        pending.clear();
+        deliver(topics);
+      }, delay);
+    },
+    stop() { clearTimeout(timer); timer = undefined; pending.clear(); },
+  };
 }
 
 export function createReconnectCoordinator(reconcile: () => void) {
@@ -72,12 +97,25 @@ export function openLiveChannels(
   const retries = new Map<string, ReturnType<typeof setTimeout>>();
   const attempts = new Map<string, number>();
   const connectedBefore = new Set<string>();
-  const emit = (topic = 'connected') => {
-    invalidateApiResources(topicTags[topic] ?? ['collaboration'], topic === 'connected' ? 'reconnect' : `realtime:${topic}`);
-    changed(topic);
-    window.dispatchEvent(new CustomEvent(LIVE_CHANGE, { detail: topic }));
+  const hiddenTopics = new Set<string>();
+  const deliver = (topics: string[]) => {
+    for (const topic of topics)
+      invalidateApiResources(topicTags[topic] ?? [topic], topic === 'connected' ? 'reconnect' : `realtime:${topic}`);
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      topics.forEach(topic => hiddenTopics.add(topic));
+      return;
+    }
+    topics.forEach(changed);
+    window.dispatchEvent(new CustomEvent(LIVE_CHANGE, { detail: topics }));
   };
-  const reconnects = createReconnectCoordinator(() => emit());
+  const batch = createLiveBatch(deliver);
+  const reconnects = createReconnectCoordinator(() => deliver(['connected']));
+  const visible = () => {
+    if (document.visibilityState === 'hidden' || !hiddenTopics.size) return;
+    const topics = [...hiddenTopics];
+    hiddenTopics.clear();
+    deliver(topics);
+  };
   function connect(channel: string) {
     if (stopped || !navigator.onLine || sockets.has(channel)) return;
     const url = new URL('/api/cloudflare/realtime', window.location.origin);
@@ -95,9 +133,9 @@ export function openLiveChannels(
       if (event.data === 'pong') return;
       try {
         const message = JSON.parse(String(event.data)) as { type?: string; topic?: string; resources?: string[] };
-        if (message.type === 'changed' && typeof message.topic === 'string') emit(message.topic);
+        if (message.type === 'changed' && typeof message.topic === 'string') batch.add(message.topic);
         if (message.type === 'resources_changed' && Array.isArray(message.resources))
-          message.resources.filter(resource => typeof resource === 'string').forEach(emit);
+          message.resources.filter(resource => typeof resource === 'string').forEach(topic => batch.add(topic));
       } catch { /* Ignore malformed packets. */ }
     };
     socket.onerror = () => socket.close();
@@ -116,18 +154,26 @@ export function openLiveChannels(
     for (const retry of retries.values()) clearTimeout(retry);
     retries.clear();
     if (!navigator.onLine) {
-      for (const socket of sockets.values()) socket.close(1000, 'Offline');
+      for (const [channel, socket] of sockets) {
+        // onclose is intentionally ignored after sockets.clear(). Record the
+        // recovery wave first, or going offline silently loses reconciliation.
+        if (connectedBefore.has(channel)) reconnects.disconnected(channel);
+        socket.close(1000, 'Offline');
+      }
       sockets.clear();
     } else channels.forEach(connect);
   };
   window.addEventListener('online', resume);
   window.addEventListener('offline', resume);
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visible);
   channels.forEach(connect);
   return () => {
     stopped = true;
+    batch.stop();
     retries.forEach(clearTimeout);
     sockets.forEach(socket => socket.close(1000, 'Leaving'));
     window.removeEventListener('online', resume);
     window.removeEventListener('offline', resume);
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visible);
   };
 }

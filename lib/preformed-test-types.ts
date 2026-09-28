@@ -33,6 +33,7 @@ export interface PreformedTestSummary {
   visibility: 'public' | 'private';
   status: 'draft' | 'published' | 'paused' | 'hidden';
   version: number;
+  editRevision?: number;
   questionCount: number;
   settings: PreformedTestSettings;
   createdAt: string;
@@ -81,5 +82,7 @@ export interface PreformedLocalAttempt {
   startedAt: string;
   elapsedSeconds: number;
   submittedAt?: string;
+  submissionPending?: boolean;
+  result?: { score: number; questionCount: number; percentage: number; rank: number | null; leaderboard: boolean };
   score?: number;
 }
