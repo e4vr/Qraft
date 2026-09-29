@@ -59,17 +59,22 @@ const IMPORTANT_WORDS = new Set([
 ]);
 
 /** Formatting-only normalization. Meaningful punctuation, signs and numbers survive. */
-export function normalizeDuplicateText(value: string) {
+export function normalizeDuplicateFormatting(value: string) {
   return String(value ?? '')
     .normalize('NFKC')
     .toLocaleLowerCase('en-US')
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
-    .replace(/^\s*(?:q(?:uestion)?\s*)?\d+\s*[.)\-:]\s*/i, '')
     .replace(/\s+([,;:?!])/g, '$1')
     .replace(/([([{])\s+/g, '$1')
     .replace(/\s+([)\]}])/g, '$1')
     .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function normalizeDuplicateText(value: string) {
+  return normalizeDuplicateFormatting(value)
+    .replace(/^\s*(?:q(?:uestion)?\s*)?\d+\s*[.)\-:]\s*/i, '')
     .trim();
 }
 

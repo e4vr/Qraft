@@ -7,6 +7,7 @@ import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { listAdminSubscribers } from './admin-subscribers';
 import { reviewerPerformance } from './reviewer-performance-server';
 import { testPool } from './test-pool-server';
+import { exactImportIdentity } from '@/features/imports/domain/exact-import-duplicates';
 import {
   currentUser,
   profileById,
@@ -49,6 +50,7 @@ import {
   detectDuplicateReview,
   DUPLICATE_DETECTION_CONFIG,
   duplicateFingerprint,
+  normalizeDuplicateText,
   prepareDuplicateCandidate,
 } from '@/features/duplicates/domain/duplicate-detection';
 
@@ -2560,6 +2562,8 @@ export async function platformApi(request: Request, action: string) {
     if (action === 'import' && request.method === 'POST') {
       if (user.role === 'super_admin' && !root)
         return json({ error: 'Superadmin verification required.' }, 403);
+      if (input.skipExactDuplicates !== undefined && typeof input.skipExactDuplicates !== 'boolean')
+        throw new ValidationError('Invalid exact-duplicate skipping option.');
       const batchId = text('requestId');
       if (!/^[a-zA-Z0-9-]{20,80}$/.test(batchId))
         throw new ValidationError('Invalid import ID.');
@@ -2693,13 +2697,20 @@ export async function platformApi(request: Request, action: string) {
       const candidates = await importCandidates(bank.id,report.questions);
       const preparedCandidates: ReturnType<typeof prepareDuplicateCandidate>[] = [...candidates];
       const duplicateIndex = new ImportDuplicateIndex(preparedCandidates);
-      const skippedDuplicates = 0;
+      let skippedDuplicates = 0;
       const accepted: Array<{
         id: string;
         payload: QuestionProposal['payload'];
         duplicateReview?: QuestionProposal['duplicateReview'];
       }> = [];
       for (const [index, payload] of report.questions.entries()) {
+        const identity = exactImportIdentity(payload);
+        if (input.skipExactDuplicates === true && identity &&
+            duplicateIndex.exact(bank.id, normalizeDuplicateText(payload.stem))
+              .some(candidate => exactImportIdentity(candidate.payload) === identity)) {
+          skippedDuplicates++;
+          continue;
+        }
         const proposalId = `${batchId}-${index}`;
         const prepared = prepareDuplicateCandidate({
           entityId: proposalId,
@@ -2840,6 +2851,9 @@ export async function platformApi(request: Request, action: string) {
         repaired: result.repaired,
         report: report.skipped,
       });
+      if (skippedDuplicates) monitoringStatements.push(auditStatement(user,
+        'import_exact_duplicates_skipped', bank.id, null,
+        { batchId, skippedDuplicates, explicitlyRequested: true }));
       if (!proposals.length) {
         await env.DB.batch([
           env.DB.prepare(

@@ -21,6 +21,7 @@ import { json } from '@/server/http/response';
 import { getPlanLimits } from '@/features/subscriptions/domain/plan-config';
 import { compactSourceReference } from '@/lib/question-import';
 import { ImportDuplicateIndex } from '@/features/imports/domain/import-duplicate-index';
+import { exactImportIdentity } from '@/features/imports/domain/exact-import-duplicates';
 export { ImportDuplicateIndex };
 
 export async function importLimits(user: AppUser) {
@@ -64,7 +65,11 @@ export function detectImportDuplication(
       sourceEntityId,
       candidates: index.near(bankId, normalized),
     });
-  const matches = sameText.map((c) => ({
+  // Show full-content matches before stem-only matches in the bounded preview.
+  const identity = exactImportIdentity(incoming);
+  const matches = [...sameText].sort((left, right) =>
+    Number(exactImportIdentity(right.payload) === identity) - Number(exactImportIdentity(left.payload) === identity)
+  ).map((c) => ({
     entityId: c.entityId,
     entityType: c.entityType,
     questionId: c.questionId,

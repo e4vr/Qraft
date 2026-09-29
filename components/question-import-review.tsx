@@ -9,6 +9,7 @@ import { readImportFile } from '@/features/imports/client/read-import-file';
 import { importRequest } from '@/features/imports/client/import-request';
 import { DEFAULT_IMPORT_SETTINGS, ADMIN_MAX_FILE_BYTES, type ImportSettings } from '@/features/imports/domain/import-settings';
 import { withLocalImportMatches, type ImportMatch } from '@/features/imports/domain/local-import-duplicates';
+import { planExactImportSkip } from '@/features/imports/domain/exact-import-duplicates';
 import {
   parseQuestionImportReport,
   buildQuestionPrompt,
@@ -81,6 +82,8 @@ export function QuestionImportReview({
   const [matches,setMatches]=useState<ImportMatch[][]>([]);
   const [choices,setChoices]=useState<Record<number,ImportChoice>>({});
   const [excluded,setExcluded]=useState<number[]>([]);
+  const [skipExactDuplicates, setSkipExactDuplicates] = useState(false);
+  const skipExactForUpload = useRef(false);
   const [dirty,setDirty]=useState<number[]>([]);
   const [comparison,setComparison]=useState(false);
   const [comparisonIndex,setComparisonIndex]=useState(0);
@@ -108,6 +111,7 @@ export function QuestionImportReview({
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadTotal, setUploadTotal] = useState(0);
   const [lastImportCount, setLastImportCount] = useState<number | null>(null);
+  const [lastSkippedDuplicateCount, setLastSkippedDuplicateCount] = useState(0);
   const panelId = useId();
   const [selectedSource, setSelectedSource] = useState<QuestionPromptSettings['source'] | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -174,11 +178,14 @@ export function QuestionImportReview({
     ...settings, count: lecture && settings.countMode === 'per_slide' ? 20 : Number(countText), optionCount: Number(optionsText),
   }) : '';
   const draft = drafts[index];
+  const exactSkipPlan = useMemo(() => planExactImportSkip(drafts, matches, excluded, dirty), [drafts, matches, excluded, dirty]);
+  const skippedExact = useMemo(() => new Set(skipExactDuplicates ? exactSkipPlan.indexes : []), [skipExactDuplicates, exactSkipPlan]);
+  const reviewMatches = useMemo(() => withLocalImportMatches(drafts, matches, [...excluded, ...skippedExact]), [drafts, matches, excluded, skippedExact]);
   const duplicateSummary = useMemo(() => {
-    const active = new Set(drafts.map((_, i) => i).filter(i => !excluded.includes(i)));
+    const active = new Set(drafts.map((_, i) => i).filter(i => !excluded.includes(i) && !skippedExact.has(i)));
     const banks = new Set<string>();
     let bankMatches = 0, fileMatches = 0, unresolved = 0;
-    matches.forEach((list, i) => {
+    reviewMatches.forEach((list, i) => {
       if (!active.has(i)) return;
       const relevant = list.filter(match => match.draftIndex === undefined || active.has(match.draftIndex));
       if (relevant.some(match => match.draftIndex === undefined)) bankMatches++;
@@ -187,7 +194,7 @@ export function QuestionImportReview({
       if (relevant.length && !choices[i]) unresolved++;
     });
     return { bankMatches, fileMatches, existing: banks.size, unresolved };
-  }, [drafts, matches, excluded, choices]);
+  }, [drafts, reviewMatches, excluded, choices, skippedExact]);
   async function preview(questions:QuestionProposalPayload[]) {
     const results:ImportMatch[][]=[];
     for (const chunk of splitImport(questions, [], importPolicy.previewBatchSize)) {
@@ -203,9 +210,25 @@ export function QuestionImportReview({
     try {
       const findings = await preview(questions);
       setMatches(findings); setScanComplete(true); setDirty([]);
+      return findings;
     } catch (caught) {
       setError(`${caught instanceof Error ? caught.message : 'Duplicate scan could not finish.'} Your questions are still available. Retry the scan before saving.`);
     } finally { setChecking(false); }
+  }
+  async function skipAllDuplication() {
+    if (operation.current || busy || checking || uploadedChunks.current || !scanComplete) return;
+    operation.current = true;
+    try {
+      const findings = dirty.length ? await scan() : matches;
+      if (!findings) return;
+      const plan = planExactImportSkip(drafts, findings, excluded);
+      const removed = new Set([...excluded, ...plan.indexes]);
+      setSkipExactDuplicates(true);
+      setComparison(false);
+      setComparisonIndex(0);
+      const next = drafts.findIndex((_, i) => !removed.has(i));
+      if (next >= 0) setIndex(next);
+    } finally { operation.current = false; }
   }
   async function recheck(i:number) {
     if(!dirty.includes(i)) return matches[i]??[];
@@ -225,6 +248,7 @@ export function QuestionImportReview({
     advance();
   }
   async function next() {
+    if (skippedExact.has(index)) { advance(); return; }
     try {const wasDirty=dirty.includes(index),found=await recheck(index);if(wasDirty&&found.length)return;if(found.length)keepBoth(found);else advance();} catch(e){setError(e instanceof Error?e.message:'Unable to check duplication.');}
   }
   function excludeQuestion(n:number) {
@@ -268,6 +292,8 @@ export function QuestionImportReview({
         throw new Error('No complete, valid questions were found. Review the skipped questions below.');
       }
       setMatches([]);setChoices({});setExcluded([]);setDirty([]);setComparison(false);setScanComplete(false);
+      setSkipExactDuplicates(false); skipExactForUpload.current = false;
+      setLastSkippedDuplicateCount(0);
       setSkipped(report.skipped);
       setDrafts(report.questions);
       setFileName(file.name);
@@ -315,12 +341,20 @@ export function QuestionImportReview({
     setError('');
     try {
       if (!scanComplete) throw new Error('Finish the duplicate scan before saving.');
-      const checkedMatches=[...matches];
-      for(const i of dirty.filter(n=>!excluded.includes(n))) {
+      let checkedMatches=[...matches];
+      if (skipExactDuplicates && dirty.some(n => !excluded.includes(n))) {
+        const findings = await scan();
+        if (!findings) throw new Error('Finish the duplicate scan before saving.');
+        checkedMatches = findings;
+      }
+      for(const i of (skipExactDuplicates ? [] : dirty.filter(n=>!excluded.includes(n)))) {
         const found=await recheck(i);checkedMatches[i]=found;
         if(found.length){setIndex(i);throw new Error('Review the duplication before saving.');}
       }
-      const unresolved=checkedMatches.findIndex((list,i)=>!excluded.includes(i)&&list.length&&!choices[i]);
+      const skipIndexes = skipExactDuplicates ? planExactImportSkip(drafts, checkedMatches, excluded).indexes : [];
+      const removed = new Set([...excluded, ...skipIndexes]);
+      const activeMatches = withLocalImportMatches(drafts, checkedMatches, [...excluded, ...skipIndexes]);
+      const unresolved=activeMatches.findIndex((list,i)=>!removed.has(i)&&list.length&&!choices[i]);
       if(unresolved>=0){setIndex(unresolved);throw new Error('Choose Save as duplication or View the duplication for this question.');}
       const selected=drafts.filter((_,i)=>!excluded.includes(i));
       const selectedChoices=drafts.flatMap((_,i)=>excluded.includes(i)?[]:[choices[i]]);
@@ -328,9 +362,9 @@ export function QuestionImportReview({
       if (!validated.questions.length) throw new Error('There are no valid questions to submit.');
       if (validated.questions.length !== selected.length)
         throw new Error('Some edited questions are incomplete. Correct their question text, choices, answer or source before saving; no question has been silently removed.');
-      if (!adminImport && validated.questions.length > limits.questionsPerImport) throw new Error(`Your account allows ${limits.questionsPerImport} questions per import. Remove questions or ask Superadmin to adjust your limit.`);
+      if (!adminImport && validated.questions.length - skipIndexes.length > limits.questionsPerImport) throw new Error(`Your account allows ${limits.questionsPerImport} questions per import. Remove questions or ask Superadmin to adjust your limit.`);
       const chunks = uploadChunks.current ?? splitImport(validated.questions, validated.skipped);
-      if(!uploadChunks.current){let offset=0;chunkChoices.current=chunks.map(chunk=>{const list=selectedChoices.slice(offset,offset+chunk.questions.length);offset+=chunk.questions.length;return list;});}
+      if(!uploadChunks.current){skipExactForUpload.current=skipExactDuplicates;let offset=0;chunkChoices.current=chunks.map(chunk=>{const list=selectedChoices.slice(offset,offset+chunk.questions.length);offset+=chunk.questions.length;return list;});}
       uploadChunks.current = chunks;
       setUploadTotal(chunks.length);
       if (!batchIds.current.length) batchIds.current = chunks.map((_, chunkIndex) => chunkIndex === 0 ? requestId : crypto.randomUUID());
@@ -352,6 +386,7 @@ export function QuestionImportReview({
           body: JSON.stringify({
             questions: chunk.questions,
             duplicateChoices:chunkChoices.current[chunkIndex],
+            skipExactDuplicates: skipExactForUpload.current,
             skipped: chunk.skipped,
             sourceFile: validated.sourceFile,
             repaired: repaired || validated.repaired,
@@ -376,11 +411,13 @@ export function QuestionImportReview({
         setUploadProgress(chunkIndex + 1);
       }
       setLastImportCount(importedCount.current);
+      setLastSkippedDuplicateCount(skippedDuplicateCount.current);
       setMessage(
         'Questions submitted for review.',
       );
       setOpen(false);
       setDrafts([]);
+      setSkipExactDuplicates(false);
       uploadChunks.current = null;
       uploadedChunks.current = 0;
       importedCount.current = 0;
@@ -453,6 +490,7 @@ export function QuestionImportReview({
         </div>}
         {message && !error && <output className="block space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm" dir="ltr">
           <strong className="block text-base text-emerald-700 dark:text-emerald-300">{message}</strong>
+          {lastSkippedDuplicateCount > 0 && <span className="block">{lastImportCount ?? 0} new questions submitted · {lastSkippedDuplicateCount} exact duplicates skipped.</span>}
           {lastImportCount ? <>
             <span className="block">New questions were submitted to the review team before being added to the QBank.</span>
             <span className="block">They will appear in the bank automatically after reviewer approval.</span>
@@ -546,9 +584,16 @@ export function QuestionImportReview({
               <p className="font-semibold">{duplicateSummary.bankMatches} imported questions have possible matches in this bank · {duplicateSummary.existing} existing or pending matches shown.</p>
               <p className="mt-1 text-sm text-muted-foreground">{duplicateSummary.fileMatches} questions also match earlier questions in this file · {duplicateSummary.unresolved} decisions remaining. Matches are possible duplicates; review before choosing.</p>
               {duplicateSummary.unresolved > 0 && <button type="button" disabled={busy || checking} className="q-button mt-3 min-h-11 border" onClick={() => {
-                const nextIndex = matches.findIndex((list, i) => list.length && !excluded.includes(i) && !choices[i]);
+                const nextIndex = reviewMatches.findIndex((list, i) => list.length && !excluded.includes(i) && !skippedExact.has(i) && !choices[i]);
                 if (nextIndex >= 0) { setIndex(nextIndex); setComparisonIndex(0); setComparison(true); }
               }}>Review duplications</button>}
+              <div className="mt-3 space-y-2">
+                <button type="button" disabled={busy || checking || uploadProgress > 0 || (skipExactDuplicates ? false : !exactSkipPlan.indexes.length && !dirty.length)} className="q-button min-h-11 border" onClick={() => skipExactDuplicates ? setSkipExactDuplicates(false) : void skipAllDuplication()}>
+                  {skipExactDuplicates ? 'Undo skip all duplication' : 'Skip all duplication'}
+                </button>
+                <p className="text-sm text-muted-foreground">Skips matching question text, answer choices and correct answer. Existing bank questions stay available; one copy of each new question is kept.</p>
+                {skipExactDuplicates && <p className="text-sm font-semibold">{skippedExact.size} exact matches marked for skipping · {drafts.length - excluded.length - skippedExact.size} questions remaining. Matches are checked again when saving.</p>}
+              </div>
             </> : <p>Questions are loaded. Complete the duplicate scan before saving.</p>}
             {!checking && !scanComplete && <button type="button" className="q-button mt-3 min-h-11 border" onClick={() => void scan()}>Retry duplicate scan</button>}
           </section>
@@ -569,6 +614,7 @@ export function QuestionImportReview({
           </p>
           <progress aria-label="Question review progress" max={drafts.length || 1} value={index + 1} className="h-2 w-full accent-primary" />
           {excluded.includes(index)&&<p className="text-sm text-muted-foreground">New question deleted from this import.</p>}
+          {!excluded.includes(index) && skippedExact.has(index) && <p className="text-sm text-muted-foreground">Exact duplicate marked for skipping when this import is saved.</p>}
           {draft && (
             <fieldset disabled={busy || checking || uploadProgress > 0 || excluded.includes(index)} className="min-w-0 space-y-3">
               <legend className="sr-only">Review and edit question</legend>
@@ -665,9 +711,9 @@ export function QuestionImportReview({
               Previous
             </button>
             <button disabled={busy||checking} className="q-button min-h-11 border" onClick={()=>void next()}>
-              {checking?'Checking…':matches[index]?.length&&!excluded.includes(index)?'Keep both':'Next'}
+              {checking?'Checking…':matches[index]?.length&&!excluded.includes(index)&&!skippedExact.has(index)?'Keep both':'Next'}
             </button>
-            {matches[index]?.length>0&&!excluded.includes(index)&&<button disabled={busy||checking} className="q-button col-span-2 min-h-11 border" onClick={()=>{setComparisonIndex(0);setComparison(true);}}>View the duplication</button>}
+            {matches[index]?.length>0&&!excluded.includes(index)&&!skippedExact.has(index)&&<button disabled={busy||checking} className="q-button col-span-2 min-h-11 border" onClick={()=>{setComparisonIndex(0);setComparison(true);}}>View the duplication</button>}
             <button
               disabled={busy || checking || !rightsConfirmed || !scanComplete || !sourceFile.trim()}
               className="q-button col-span-2 min-h-11 whitespace-normal bg-primary text-primary-foreground"

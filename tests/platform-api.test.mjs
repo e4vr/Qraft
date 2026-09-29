@@ -12,6 +12,7 @@ import { saasApiTests } from './saas-api.mjs';
 import { directQuestionEditApiTests } from './direct-question-edit-api.mjs';
 import { serverEfficiencyApiTests } from './server-efficiency-api.mjs';
 import { qbankLifecycleApiTests } from './qbank-lifecycle-api.mjs';
+import { exactImportSkipApiTests } from './exact-import-skip-api.mjs';
 
 function decodeBase32(value) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -3401,5 +3402,6 @@ print(json.dumps(out))`,
       }
     },
   );
+  await exactImportSkipApiTests(t, { db, call });
   await qbankLifecycleApiTests(t, { db, call });
 });
