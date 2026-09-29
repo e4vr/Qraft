@@ -1,7 +1,7 @@
 'use client';
 /* oxlint-disable next/no-img-element */
 import { useEffect, useId, useRef, useState, useMemo } from 'react';
-import { Check, ChevronDown, Copy, FileJson, GraduationCap, Upload, LoaderCircle } from 'lucide-react';
+import { Check, ChevronDown, Copy, FileJson, GraduationCap, Upload, LoaderCircle, Eye, ListFilter, Undo2, RotateCcw, CheckCheck, Trash2, Pencil } from 'lucide-react';
 import { duplicateFingerprint } from '@/features/duplicates/domain/duplicate-detection';
 import { subscribeLive } from '@/lib/realtime-client';
 import { api } from '@/lib/api-client';
@@ -26,6 +26,7 @@ import {
 } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import { ImportReviewActions, type ImportSaveStage } from '@/components/import-review-actions';
 
 type ImportChoice = {sourceFingerprint:string;candidateFingerprints:string[]};
 const MAX_CHUNK_BYTES = 900_000;
@@ -110,6 +111,7 @@ export function QuestionImportReview({
   const batchIds = useRef<string[]>([]);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadTotal, setUploadTotal] = useState(0);
+  const [saveStage, setSaveStage] = useState<ImportSaveStage>('preparing');
   const [lastImportCount, setLastImportCount] = useState<number | null>(null);
   const [lastSkippedDuplicateCount, setLastSkippedDuplicateCount] = useState(0);
   const panelId = useId();
@@ -338,10 +340,12 @@ export function QuestionImportReview({
     if (operation.current) return;
     operation.current = true;
     setBusy(true);
+    setSaveStage('preparing');
     setError('');
     try {
       if (!scanComplete) throw new Error('Finish the duplicate scan before saving.');
       let checkedMatches=[...matches];
+      if (dirty.some(n => !excluded.includes(n))) setSaveStage('checking');
       if (skipExactDuplicates && dirty.some(n => !excluded.includes(n))) {
         const findings = await scan();
         if (!findings) throw new Error('Finish the duplicate scan before saving.');
@@ -367,6 +371,7 @@ export function QuestionImportReview({
       if(!uploadChunks.current){skipExactForUpload.current=skipExactDuplicates;let offset=0;chunkChoices.current=chunks.map(chunk=>{const list=selectedChoices.slice(offset,offset+chunk.questions.length);offset+=chunk.questions.length;return list;});}
       uploadChunks.current = chunks;
       setUploadTotal(chunks.length);
+      setSaveStage('uploading');
       if (!batchIds.current.length) batchIds.current = chunks.map((_, chunkIndex) => chunkIndex === 0 ? requestId : crypto.randomUUID());
       for (let chunkIndex = uploadedChunks.current; chunkIndex < chunks.length; chunkIndex += 1) {
         const chunk = chunks[chunkIndex];
@@ -482,11 +487,10 @@ export function QuestionImportReview({
             onChange={e => { void read(e.target.files?.[0]); e.target.value = ''; }} />
         </label>
         <p className="text-xs text-muted-foreground" dir="auto">{adminImport ? 'JSON or text containing JSON · Up to 50 MB · Administrative imports submit questions in batches. Review the questions before submitting.' : `JSON or text containing JSON · Up to ${limits.questionsPerImport} questions per import · ${limits.importsPerDay} imports per day · Up to ${importPolicy.maxFileMegabytes} MB.`}</p>
-        {busy && uploadTotal > 0 && <output className="block text-sm">Uploading batch {uploadProgress + 1} of {uploadTotal}…</output>}
         {reading && <output className="block text-sm">Validating file…</output>}
         {drafts.length > 0 && <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg bg-muted p-3">
           <p className="min-w-0 flex-1 break-words text-sm">{fileName} · {drafts.length} questions ready for review{skipped.length ? ` · ${skipped.length} skipped` : ''}{repaired ? ' · JSON repaired' : ''}</p>
-          <button type="button" disabled={reading || busy} className="q-button min-h-11 border" onClick={() => setOpen(true)}>Resume review</button>
+          <button type="button" disabled={reading || busy} className="q-button q-button-secondary q-import-action" onClick={() => setOpen(true)}>Resume review</button>
         </div>}
         {message && !error && <output className="block space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm" dir="ltr">
           <strong className="block text-base text-emerald-700 dark:text-emerald-300">{message}</strong>
@@ -583,19 +587,20 @@ export function QuestionImportReview({
             {checking && !scanComplete ? <p className="font-semibold">Checking duplication · {scanProgress} / {drafts.length} questions</p> : scanComplete ? <>
               <p className="font-semibold">{duplicateSummary.bankMatches} imported questions have possible matches in this bank · {duplicateSummary.existing} existing or pending matches shown.</p>
               <p className="mt-1 text-sm text-muted-foreground">{duplicateSummary.fileMatches} questions also match earlier questions in this file · {duplicateSummary.unresolved} decisions remaining. Matches are possible duplicates; review before choosing.</p>
-              {duplicateSummary.unresolved > 0 && <button type="button" disabled={busy || checking} className="q-button mt-3 min-h-11 border" onClick={() => {
+              {duplicateSummary.unresolved > 0 && <button type="button" disabled={busy || checking} className="q-button q-button-secondary q-import-action q-import-compare mt-3" onClick={() => {
                 const nextIndex = reviewMatches.findIndex((list, i) => list.length && !excluded.includes(i) && !skippedExact.has(i) && !choices[i]);
                 if (nextIndex >= 0) { setIndex(nextIndex); setComparisonIndex(0); setComparison(true); }
-              }}>Review duplications</button>}
+              }}><Eye aria-hidden="true" className="size-4" />Review duplications</button>}
               <div className="mt-3 space-y-2">
-                <button type="button" disabled={busy || checking || uploadProgress > 0 || (skipExactDuplicates ? false : !exactSkipPlan.indexes.length && !dirty.length)} className="q-button min-h-11 border" onClick={() => skipExactDuplicates ? setSkipExactDuplicates(false) : void skipAllDuplication()}>
+                <button type="button" aria-pressed={skipExactDuplicates} disabled={busy || checking || uploadProgress > 0 || (skipExactDuplicates ? false : !exactSkipPlan.indexes.length && !dirty.length)} className="q-button q-button-secondary q-import-action q-import-skip" onClick={() => skipExactDuplicates ? setSkipExactDuplicates(false) : void skipAllDuplication()}>
+                  {skipExactDuplicates ? <Undo2 aria-hidden="true" className="size-4" /> : <ListFilter aria-hidden="true" className="size-4" />}
                   {skipExactDuplicates ? 'Undo skip all duplication' : 'Skip all duplication'}
                 </button>
                 <p className="text-sm text-muted-foreground">Skips matching question text, answer choices and correct answer. Existing bank questions stay available; one copy of each new question is kept.</p>
                 {skipExactDuplicates && <p className="text-sm font-semibold">{skippedExact.size} exact matches marked for skipping · {drafts.length - excluded.length - skippedExact.size} questions remaining. Matches are checked again when saving.</p>}
               </div>
             </> : <p>Questions are loaded. Complete the duplicate scan before saving.</p>}
-            {!checking && !scanComplete && <button type="button" className="q-button mt-3 min-h-11 border" onClick={() => void scan()}>Retry duplicate scan</button>}
+            {!checking && !scanComplete && <button type="button" disabled={busy} className="q-button q-button-secondary q-import-action mt-3" onClick={() => void scan()}><RotateCcw aria-hidden="true" className="size-4" />Retry duplicate scan</button>}
           </section>
           <label className="block text-sm font-semibold">Source name for this import
             <input value={sourceFile} disabled={busy || checking || uploadProgress > 0} maxLength={240} className="mt-1 min-h-11 w-full rounded-xl border bg-background px-3" onChange={event => {
@@ -697,31 +702,20 @@ export function QuestionImportReview({
             <input
               type="checkbox"
               checked={rightsConfirmed}
+              disabled={busy || uploadProgress > 0}
               onChange={(event) => setRightsConfirmed(event.target.checked)}
               className="mt-0.5 size-4"
             />
             <span>I confirm that I have the right to share this content.</span>
           </label>
-          <div className="grid grid-cols-2 gap-2 border-t pt-3">
-            <button
-              disabled={busy || checking || index === 0}
-              className="q-button min-h-11 border"
-              onClick={() => setIndex(index - 1)}
-            >
-              Previous
-            </button>
-            <button disabled={busy||checking} className="q-button min-h-11 border" onClick={()=>void next()}>
-              {checking?'Checking…':matches[index]?.length&&!excluded.includes(index)&&!skippedExact.has(index)?'Keep both':'Next'}
-            </button>
-            {matches[index]?.length>0&&!excluded.includes(index)&&!skippedExact.has(index)&&<button disabled={busy||checking} className="q-button col-span-2 min-h-11 border" onClick={()=>{setComparisonIndex(0);setComparison(true);}}>View the duplication</button>}
-            <button
-              disabled={busy || checking || !rightsConfirmed || !scanComplete || !sourceFile.trim()}
-              className="q-button col-span-2 min-h-11 whitespace-normal bg-primary text-primary-foreground"
-              onClick={() => void submit()}
-            >
-              {busy ? 'Uploading…' : uploadProgress > 0 ? 'Retry remaining batches' : index < drafts.length - 1 ? 'Save import' : 'Save import'}
-            </button>
-          </div>
+          <ImportReviewActions
+            busy={busy} checking={checking} stage={saveStage} completed={uploadProgress} total={uploadTotal}
+            previousDisabled={index === 0}
+            hasDuplication={!!matches[index]?.length && !excluded.includes(index) && !skippedExact.has(index)}
+            saveDisabled={!rightsConfirmed || !scanComplete || !sourceFile.trim()}
+            onPrevious={() => setIndex(index - 1)} onNext={() => void next()}
+            onCompare={() => {setComparisonIndex(0);setComparison(true);}} onSave={() => void submit()}
+          />
         </DialogContent>
       </Dialog>
       <Dialog open={comparison} onOpenChange={setComparison}>
@@ -733,10 +727,10 @@ export function QuestionImportReview({
           </div>
           {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
           <div className="grid gap-2 sm:grid-cols-2">
-            <button disabled={checking||busy} className="q-button min-h-11 bg-primary text-primary-foreground" onClick={()=>keepBoth()}>Keep both</button>
-            <button disabled={checking||busy} className="q-button min-h-11 border" onClick={()=>excludeQuestion(index)}>Delete new</button>
-            <button disabled={checking||busy} className="q-button min-h-11 border" onClick={()=>{setComparison(false);setDirty(current=>[...new Set([...current,index])]);}}>Edit new</button>
-            {matches[index]?.[comparisonIndex]?.canDelete && <button disabled={checking||busy} className="q-button min-h-11 border text-destructive" onClick={()=>void deleteOld(matches[index][comparisonIndex])}>Delete old</button>}
+            <button type="button" disabled={checking||busy} className="q-button q-button-secondary q-import-action q-import-keep" onClick={()=>keepBoth()}><CheckCheck aria-hidden="true" className="size-4" />Keep both</button>
+            <button type="button" disabled={checking||busy} className="q-button q-button-danger q-import-action" onClick={()=>excludeQuestion(index)}><Trash2 aria-hidden="true" className="size-4" />Delete new</button>
+            <button type="button" disabled={checking||busy} className="q-button q-button-secondary q-import-action" onClick={()=>{setComparison(false);setDirty(current=>[...new Set([...current,index])]);}}><Pencil aria-hidden="true" className="size-4" />Edit new</button>
+            {matches[index]?.[comparisonIndex]?.canDelete && <button type="button" disabled={checking||busy} className="q-button q-button-danger q-import-action" onClick={()=>void deleteOld(matches[index][comparisonIndex])}><Trash2 aria-hidden="true" className="size-4" />Delete old</button>}
           </div>
         </DialogContent>
       </Dialog>
