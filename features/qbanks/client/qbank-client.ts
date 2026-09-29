@@ -1,8 +1,49 @@
 import { api } from '@/lib/api-client';
-import type {
-  AppUser,
-  CollaborationState,
-} from '@/lib/medguard-types';
+import { rebasePendingCollaboration } from '@/lib/local-db';
+import { withoutQBank } from '../domain/bank-state';
+import { withStateSyncLock } from '@/lib/tab-sync';
+import type { AppUser, CollaborationState, QBank } from '@/lib/medguard-types';
+
+export async function createQBank(uid: string, bank: QBank): Promise<QBank> {
+  return withStateSyncLock(`collaboration:${uid}`, async () => {
+    const result = await api<{ ok: boolean; bank: QBank }>('/qbanks', {
+      method: 'POST',
+      expectedUserId: uid,
+      body: JSON.stringify({ bank }),
+    });
+    if (result.ok !== true || result.bank?.id !== bank.id)
+      throw new Error(
+        'The QBank creation was not confirmed. Keep these details and retry.',
+      );
+    await rebasePendingCollaboration(uid, (current) => ({
+      ...current,
+      qbanks: [
+        ...current.qbanks.filter((item) => item.id !== bank.id),
+        result.bank,
+      ],
+    }));
+    return result.bank;
+  });
+}
+
+export async function deleteQBank(uid: string, bankId: string): Promise<void> {
+  return withStateSyncLock(`collaboration:${uid}`, async () => {
+    const result = await api<{ ok: boolean; deletedId: string }>(
+      `/qbanks/${encodeURIComponent(bankId)}`,
+      {
+        method: 'DELETE',
+        expectedUserId: uid,
+      },
+    );
+    if (result.ok !== true || result.deletedId !== bankId)
+      throw new Error(
+        'The QBank deletion was not confirmed. Retry before leaving this page.',
+      );
+    await rebasePendingCollaboration(uid, (current) =>
+      withoutQBank(current, bankId),
+    );
+  });
+}
 
 async function upload(
   uid: string,
@@ -16,12 +57,14 @@ async function upload(
   form.append('qbankId', qbankId);
   form.append('questionId', questionId);
   const result = await api<{ url: string }>(`/media/${kind}`, {
-      method: 'POST',
-      expectedUserId: uid,
-      body: form,
-    });
+    method: 'POST',
+    expectedUserId: uid,
+    body: form,
+  });
   if (typeof result.url !== 'string' || !result.url.trim())
-    throw new Error('The image upload was not confirmed. Keep this draft and retry.');
+    throw new Error(
+      'The image upload was not confirmed. Keep this draft and retry.',
+    );
   return result.url;
 }
 
@@ -97,9 +140,9 @@ export async function previewCloudflareQBankInvitation(
   token: string,
 ): Promise<QBankLinkInvitation> {
   return (
-    await api<{ invitation: QBankLinkInvitation }>(
-      '/qbanks/invite-preview',
-      { method: 'POST', body: JSON.stringify({ qbankId, token }) },
-    )
+    await api<{ invitation: QBankLinkInvitation }>('/qbanks/invite-preview', {
+      method: 'POST',
+      body: JSON.stringify({ qbankId, token }),
+    })
   ).invitation;
 }

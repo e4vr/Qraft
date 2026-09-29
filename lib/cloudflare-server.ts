@@ -1,4 +1,5 @@
 import { auditStatement } from './platform-server';
+import { bankDeletionStatements } from '@/features/qbanks/server/bank-deletion';
 import { bankAccessState, bankAccessStates } from './qbank-access-repository';
 import { allocateQuestionIds } from './question-id-repository';
 import { env } from 'cloudflare:workers';
@@ -15,6 +16,7 @@ import {
   canAccessBank,
   canEditBank,
   canManageBank,
+  canDeleteBank,
   canReviewBank,
   hasAccessManagerRole,
   hasModeratorRole,
@@ -89,6 +91,10 @@ type RecordOperation = {
   collection: string;
   id: string;
   value?: unknown;
+};
+type CollaborationAuthorizationState = CollaborationState & {
+  shareLinkBankIds?: Record<string, string>;
+  deletedBanks?: Record<string, { id: string; ownerId: string }>;
 };
 type StoredRecord = {
   type: string;
@@ -1414,7 +1420,7 @@ function recordsToState(
       (bank) => !qbanks.some((stored) => stored.id === bank.id),
     ),
     ...qbanks,
-  ];
+  ].filter(bank => !values<{ id: string }>('qbankTombstones').some(deleted => deleted.id === bank.id));
   state.qbankFolders =
     values<CollaborationState['qbankFolders'][number]>('qbankFolders');
   state.memberships =
@@ -1601,7 +1607,12 @@ async function collaborationStateForOperations(
       ].map((row) => [`${row.collection}\u0000${row.id}`, row]),
     ).values(),
   ];
-  return recordsToState(rows, profiles);
+  const tombstones = await recordsByKeys([...qbankIds].map(id => ({ collection: 'qbankTombstones', id })));
+  return Object.assign(recordsToState([...rows, ...tombstones], profiles), {
+    shareLinkBankIds: Object.fromEntries(directRows.filter(row => row.collection === 'qbankShareLinks' && isRecord(row.value))
+      .map(row => [row.id, (row.value as { qbankId: string }).qbankId])),
+    deletedBanks: Object.fromEntries(tombstones.map(row => [row.id, row.value])),
+  }) as CollaborationAuthorizationState;
 }
 
 export async function updateOwnProfile(request: Request) {
@@ -1746,6 +1757,7 @@ export async function loadCollaboration(request: Request) {
     return json({ error: 'Approved account required.' }, 403);
   const catalogRows = await recordsByTypes([
     'qbanks',
+    'qbankTombstones',
     'qbankFolders',
     'qbankMemberships',
   ]);
@@ -1799,7 +1811,7 @@ export async function loadCollaboration(request: Request) {
   );
   const rows = [
     ...catalogRows.filter(
-      (row) => row.collection === 'qbanks' || row.collection === 'qbankFolders',
+      (row) => row.collection === 'qbanks' || row.collection === 'qbankTombstones' || row.collection === 'qbankFolders',
     ),
     ...scopedRows,
     ...invitedRows.filter(
@@ -1907,10 +1919,12 @@ export async function loadCollaboration(request: Request) {
 function bankIdForOperation(
   operation: RecordOperation,
   value: Record<string, unknown>,
-  state: CollaborationState,
+  state: CollaborationAuthorizationState,
 ) {
   if (operation.collection === 'qbanks') return operation.id;
-  if (typeof value.qbankId === 'string') return value.qbankId;
+  if (operation.collection === 'qbankShareLinks' && operation.type === 'delete')
+    return state.shareLinkBankIds?.[operation.id];
+  if (operation.type === 'set' && typeof value.qbankId === 'string') return value.qbankId;
   if (operation.collection === 'qbankMemberships')
     return state.memberships.find((item) => item.id === operation.id)?.qbankId;
   if (operation.collection === 'qbankInvitations')
@@ -2230,7 +2244,7 @@ function roleApplicationChangeAllowed(
 function recordAllowed(
   user: AppUser,
   operation: RecordOperation,
-  state: CollaborationState,
+  state: CollaborationAuthorizationState,
 ) {
   if (
     !operation.id ||
@@ -2260,17 +2274,19 @@ function recordAllowed(
     ? canAccessBank(user, existing, state.memberships)
     : false;
   if (operation.collection === 'qbanks') {
+    const tombstone = state.deletedBanks?.[operation.id];
+    if (tombstone) return operation.type === 'delete' && (isRoot || tombstone.ownerId === user.uid);
     if (operation.type === 'set' && !existing)
       return (
         value.id === operation.id &&
-        limits.canCreateQBank &&
-        (value.visibility !== 'private' || limits.canCreatePrivateQBank) &&
+        (isRoot || limits.canCreateQBank) &&
+        (isRoot || value.visibility !== 'private' || limits.canCreatePrivateQBank) &&
         value.ownerId === user.uid &&
         (isRoot || value.folderId === undefined) &&
         (value.essential !== true || isRoot)
       );
     if (!existing) return false;
-    if (operation.type === 'delete') return canManage && !existing.essential;
+    if (operation.type === 'delete') return canDeleteBank(user, existing);
     if (!canEdit) return false;
     const editorFieldsStayImmutable =
       canManage ||
@@ -2320,7 +2336,7 @@ function recordAllowed(
   if (operation.collection === 'questionProposals')
     return (
       (canAccess || canReview) &&
-      (state.proposals.some((item) => item.id === operation.id) ||
+      (isRoot || state.proposals.some((item) => item.id === operation.id) ||
         (value.type === 'new_question'
           ? limits.canAddQuestions
           : limits.canSuggestCorrections)) &&
@@ -2511,6 +2527,25 @@ export async function saveCollaboration(request: Request) {
   if (!Array.isArray(input.operations) || input.operations.length > 500)
     return json({ error: 'Invalid collaboration change set.' }, 400);
   const state = await collaborationStateForOperations(user, input.operations);
+  const deletedBanks = new Set(input.operations.filter(operation =>
+    operation.collection === 'qbanks' && operation.type === 'delete').map(operation => operation.id));
+  // The server owns cascading bank deletion. Old clients can still send child
+  // deletes, but those must not veto an authorized parent deletion.
+  input.operations = input.operations.filter(operation => {
+    if (operation.collection === 'qbanks') return true;
+    const bankId = bankIdForOperation(operation, isRecord(operation.value) ? operation.value : {}, state);
+    if (operation.type === 'delete' && bankId && deletedBanks.has(bankId)) return false;
+    const current = collaborationValue(state, operation.collection, operation.id);
+    if (operation.collection === 'qbankShareLinks')
+      return operation.type !== 'delete' || Boolean(state.shareLinkBankIds?.[operation.id]);
+    return operation.type === 'delete' ? current !== undefined : !sameJson(operation.value, current);
+  });
+  const authorizationState: CollaborationAuthorizationState = { ...state, qbanks: [...state.qbanks] };
+  for (const operation of input.operations) {
+    if (operation.collection === 'qbanks' && operation.type === 'set' &&
+        !state.qbanks.some(bank => bank.id === operation.id) && recordAllowed(user, operation, state))
+      authorizationState.qbanks.push(operation.value as QBank);
+  }
   if (!qbankFolderChangeSetValid(input.operations, state))
     return json(
       {
@@ -2581,14 +2616,18 @@ export async function saveCollaboration(request: Request) {
       }
     }
   }
-  if (
-    !input.operations.every(
-      (operation) =>
-        recordAllowed(user, operation, state) &&
-        reviewedQuestionWriteAllowed(user, operation, input.operations!),
-    )
-  )
-    return json({ error: 'One or more changes are not permitted.' }, 403);
+  const rejected = input.operations.filter(operation =>
+    (operation.type === 'set' && operation.collection !== 'qbanks' &&
+      deletedBanks.has(bankIdForOperation(operation, isRecord(operation.value) ? operation.value : {}, authorizationState) ?? '')) ||
+    !recordAllowed(user, operation, operation.collection === 'qbanks' ? state : authorizationState) ||
+    !reviewedQuestionWriteAllowed(user, operation, input.operations!));
+  if (rejected.length)
+    return json({ error: 'Some pending changes could not be saved. Your local copy is preserved.',
+      code: 'COLLABORATION_REJECTED', rejected: rejected.map(operation => ({
+        collection: operation.collection, id: operation.id,
+        reason: operation.collection === 'qbanks' && state.deletedBanks?.[operation.id]
+          ? 'This QBank has been deleted.' : 'Your current access does not permit this change.',
+      })) }, 403);
   if (!qbankMembershipChangeSetValid(input.operations, state))
     return json(
       { error: 'Each account can have only one membership per QBank.' },
@@ -2808,31 +2847,10 @@ export async function saveCollaboration(request: Request) {
     )
     .map((operation) => operation.id);
   if (deletedQBankIds.length) {
-    const encodedIds = JSON.stringify(deletedQBankIds);
-    statements.push(
-      env.DB.prepare("UPDATE media SET status='delete_pending',updated_at=? WHERE qbank_id IN (SELECT value FROM json_each(?)) AND status='ready'").bind(now, encodedIds),
-      env.DB.prepare(`DELETE FROM records WHERE
-        qbank_id IN (SELECT value FROM json_each(?)) OR
-        (type='qbankShareLinks' AND json_extract(payload,'$.qbankId') IN (SELECT value FROM json_each(?)))`).bind(
-        encodedIds,
-        encodedIds,
-      ),
-      env.DB.prepare(
-        'DELETE FROM qbank_classification_revisions WHERE qbank_id IN (SELECT value FROM json_each(?))',
-      ).bind(encodedIds),
-      env.DB.prepare(
-        'DELETE FROM classification_operations WHERE qbank_id IN (SELECT value FROM json_each(?))',
-      ).bind(encodedIds),
-      env.DB.prepare(
-        'DELETE FROM question_ids WHERE qbank_id IN (SELECT value FROM json_each(?))',
-      ).bind(encodedIds),
-      env.DB.prepare(
-        'DELETE FROM duplicate_pair_decisions WHERE qbank_id IN (SELECT value FROM json_each(?))',
-      ).bind(encodedIds),
-      env.DB.prepare(
-        'DELETE FROM duplicate_scan_runs WHERE qbank_id IN (SELECT value FROM json_each(?))',
-      ).bind(encodedIds),
-    );
+    for (const id of deletedQBankIds) {
+      const bank = state.qbanks.find(item => item.id === id);
+      if (bank) statements.push(...bankDeletionStatements(user, bank, now));
+    }
   }
   for (const proposalId of detectedProposalIds)
     statements.push(

@@ -45,6 +45,9 @@ function mutationTags(path: string, body: BodyInit | null | undefined) {
   if(path === '/platform/import-preview') return [];
   if (path === '/platform/import-settings') return ['import-status'];
   const tags = new Set(policyFor(path).tags);
+  if (path === '/qbanks' || path.startsWith('/qbanks/')) {
+    tags.add('collaboration'); tags.add('question-catalog'); tags.add('test-pool');
+  }
   let input: Record<string, unknown> = {};
   if (typeof body === 'string') {
     try { input = JSON.parse(body) as Record<string, unknown>; } catch { /* Non-JSON bodies are transactional only. */ }
@@ -115,6 +118,8 @@ async function network<T>(path: string, init: RequestInit, reason: RequestReason
       response.ok ? 502 : response.status, {},
       Number.isFinite(retryAfterMs) ? retryAfterMs : undefined);
   }
+  if (!response.ok)
+    payload.requestId ??= response.headers.get('x-request-id') ?? undefined;
   if (!response.ok)
     throw new ApiError(
       typeof payload.error === 'string' ? payload.error : `Request failed (${response.status}).`,

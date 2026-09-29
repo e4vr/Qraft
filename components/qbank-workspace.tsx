@@ -29,13 +29,15 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createQBank } from '@/features/qbanks/client/qbank-client';
 import { usePresentationEnvironment } from '@/features/presentation/presentation-context';
 import {
   bankRoleFor,
   canAccessBank,
   canEditBank,
   canManageBank,
+  canDeleteBank,
 } from '@/features/access/domain/access-policy';
 import {
   type AppUser,
@@ -109,6 +111,9 @@ export function QBankWorkspace({
   const { coarsePointer, mode: presentationMode } = usePresentationEnvironment();
   const handheld = presentationMode === 'handheld';
   const [creating, setCreating] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState('');
+  const createDraft = useRef<{ id: string; createdAt: string } | undefined>(undefined);
   const [search, setSearch] = useState('');
   const [name, setName] = useState('');
   const [shortName, setShortName] = useState('');
@@ -163,7 +168,7 @@ export function QBankWorkspace({
       ),
     [collaboration.invitations, user.email],
   );
-  const canCreate = hasFeature(user.effectivePlan ?? user.tier, 'createQBank', user.planLimits);
+  const canCreate = user.role === 'super_admin' || hasFeature(user.effectivePlan ?? user.tier, 'createQBank', user.planLimits);
   const sectionBanks = useMemo(() => {
     if (activeSection === 'mine')
       return accessible.filter(
@@ -352,11 +357,11 @@ export function QBankWorkspace({
     });
   }
 
-  function createBank(event: React.SyntheticEvent<HTMLFormElement>) {
+  async function createBank(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    const id = `${slug(shortName || name)}-${crypto.randomUUID().slice(0, 6)}`;
-    if (!name.trim() || !id || !canCreate) return;
-    const createdAt = nowIso();
+    if (!name.trim() || !canCreate || createBusy) return;
+    createDraft.current ??= { id: `${slug(shortName || name)}-${crypto.randomUUID()}`, createdAt: nowIso() };
+    const { id, createdAt } = createDraft.current;
     const bank: QBank = {
       id,
       name: name.trim(),
@@ -374,30 +379,25 @@ export function QBankWorkspace({
       archived: false,
       essential: user.role === 'super_admin' && essential,
     };
-    update((current) => ({
-      ...current,
-      qbanks: [...current.qbanks, bank],
-      auditLog: [
-        {
-          id: crypto.randomUUID(),
-          action: 'qbank_created',
-          entityType: 'qbank',
-          entityId: id,
-          actorId: user.uid,
-          actorName: user.displayName,
-          createdAt,
-          detail: `Created ${visibility} QBank ${bank.name}.`,
-        },
-        ...current.auditLog,
-      ],
-    }));
-    onSelect(id);
-    setCreating(false);
-    setName('');
-    setShortName('');
-    setDescription('');
-    setVisibility('private');
-    setEssential(false);
+    setCreateBusy(true);
+    setCreateError('');
+    try {
+      const saved = await createQBank(user.uid, bank);
+      confirmUpdate((current) => ({
+        ...current,
+        qbanks: [...current.qbanks.filter(item => item.id !== id), saved],
+      }));
+      onSelect(id);
+      setCreating(false);
+      setName('');
+      setShortName('');
+      setDescription('');
+      setVisibility('private');
+      setEssential(false);
+      createDraft.current = undefined;
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : 'Unable to create this QBank. Your details are preserved.');
+    } finally { setCreateBusy(false); }
   }
 
   function invite() {
@@ -745,7 +745,7 @@ export function QBankWorkspace({
                       collaboration.memberships,
                     );
                     const questions = questionCounts.get(bank.id) ?? 0;
-                    const editable = canEditBank(
+                    const editable = canDeleteBank(user, bank) || canEditBank(
                       user,
                       bank,
                       collaboration.memberships,
@@ -1162,7 +1162,7 @@ export function QBankWorkspace({
         className="sm:max-w-xl"
       >
           <form
-            onSubmit={createBank}
+            onSubmit={(event) => void createBank(event)}
             className="w-full"
           >
             <div className="space-y-4">
@@ -1253,9 +1253,11 @@ export function QBankWorkspace({
                 </label>
               )}
             </div>
+            {createError && <p role="alert" className="mt-4 text-sm text-red-600">{createError}</p>}
             <div className="mt-6 flex justify-end gap-2">
               <button
                 type="button"
+                disabled={createBusy}
                 onClick={() => setCreating(false)}
                 className="h-10 rounded-xl border px-4 text-xs font-bold"
               >
@@ -1263,10 +1265,11 @@ export function QBankWorkspace({
               </button>
               <button
                 type="submit"
+                disabled={createBusy}
                 className="inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-5 text-xs font-bold text-primary-foreground"
               >
                 <Check className="size-4" />
-                Create empty QBank
+                {createBusy ? 'Saving QBank…' : 'Create empty QBank'}
               </button>
             </div>
           </form>

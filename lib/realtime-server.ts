@@ -116,6 +116,11 @@ export async function notifyMutation(request: Request, response?: Response) {
       else if (operation.collection === 'sharedNotes') topics.add('shared-notes');
       else topics.add('collaboration');
     }
+  } else if (path[0] === 'qbanks') {
+    addBank(path[1] ?? (input.bank as { id?: string } | undefined)?.id);
+    channels.add('catalog');
+    topics.add('collaboration');
+    topics.add('question-catalog');
   } else if (path[0] === 'qbank-folders') {
     channels.add('catalog');
     topics.add('collaboration');

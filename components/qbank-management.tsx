@@ -11,12 +11,15 @@ import { QuestionId } from '@/components/question-tools';
 import { ReviewerSearch } from '@/components/reviewer-search';
 import { WorkspaceHeader } from '@/components/workspace-header';
 import { api } from '@/lib/api-client';
+import { deleteQBank } from '@/features/qbanks/client/qbank-client';
+import { withoutQBank } from '@/features/qbanks/domain/bank-state';
 import { saveDirectQuestionEdit } from '@/features/qbanks/client/direct-question-edit';
 import { uploadQuestionImage } from '@/lib/application-services';
 import {
   bankRoleFor,
   canEditBank,
   canManageBank,
+  canDeleteBank,
 } from '@/features/access/domain/access-policy';
 import {
   optionLabel,
@@ -113,9 +116,10 @@ export function QBankManagement({
     [bankId, collaboration.memberships],
   );
   const plan = user.effectivePlan ?? user.tier;
-  const canAddQuestions = hasFeature(plan, 'addQuestions', user.planLimits);
+  const canAddQuestions = user.role === 'super_admin' || hasFeature(plan, 'addQuestions', user.planLimits);
   const canImport = user.role === 'super_admin' || hasFeature(plan, 'jsonImport', user.planLimits);
   const canManageAccess = Boolean(bank && canManageBank(user, bank));
+  const canDelete = Boolean(bank && canDeleteBank(user, bank));
   const bankRole = bank
     ? bankRoleFor(user, bank, collaboration.memberships)
     : undefined;
@@ -129,6 +133,18 @@ export function QBankManagement({
     );
   }, [questions, search, specialtyFilter, topicFilter]);
 
+  if (bank && canDelete && !canEditBank(user, bank, collaboration.memberships))
+    return <main className="mx-auto max-w-xl space-y-4 p-6">
+      <button onClick={onBack}>Return to My QBanks</button>
+      <h1 className="text-xl font-bold">{bank.name}</h1>
+      <p>This Essential QBank can be edited by Superadmin. As its owner, you can delete it.</p>
+      {error && <p role="alert" className="text-destructive">{error}</p>}
+      {deleteOpen ? <>
+        <p>Delete this bank and all of its questions permanently?</p>
+        <button disabled={busy} onClick={() => void deleteBank()} className="rounded-xl bg-destructive p-3 text-destructive-foreground">{busy ? 'Deleting…' : 'Delete permanently'}</button>
+        <button disabled={busy} onClick={() => setDeleteOpen(false)}>Cancel</button>
+      </> : <button onClick={() => setDeleteOpen(true)} className="rounded-xl bg-destructive p-3 text-destructive-foreground">Delete QBank</button>}
+    </main>;
   if (!bank || !canEditBank(user, bank, collaboration.memberships))
     return (
       <main className="grid min-h-screen place-items-center p-6">
@@ -210,35 +226,12 @@ export function QBankManagement({
   }
 
   async function deleteBank() {
-    if (!canManageAccess) return;
+    if (!canDelete || busy) return;
     setBusy(true);
     setError('');
     try {
-      update((current) => ({
-        ...current,
-        qbanks: current.qbanks.filter((item) => item.id !== bankId),
-        memberships: current.memberships.filter((item) => item.qbankId !== bankId),
-        invitations: current.invitations.filter((item) => item.qbankId !== bankId),
-        proposals: current.proposals.filter((item) => item.qbankId !== bankId),
-        approvedQuestions: current.approvedQuestions.filter((item) => item.qbankId !== bankId),
-        specialties: current.specialties.filter((item) => item.qbankId !== bankId),
-        topics: current.topics.filter((item) => item.qbankId !== bankId),
-        answerStats: Object.fromEntries(Object.entries(current.answerStats).filter(([, item]) => item.qbankId !== bankId)),
-        sharedNotes: Object.fromEntries(Object.entries(current.sharedNotes).filter(([, item]) => item.qbankId !== bankId)),
-        auditLog: [
-          {
-            id: crypto.randomUUID(),
-            action: 'qbank_deleted',
-            entityType: 'qbank',
-            entityId: bankId,
-            actorId: user.uid,
-            actorName: user.displayName,
-            createdAt: new Date().toISOString(),
-            detail: `Deleted QBank ${bankName}.`,
-          },
-          ...current.auditLog,
-        ],
-      }));
+      await deleteQBank(user.uid, bankId);
+      confirmUpdate(current => withoutQBank(current, bankId));
       onDeleted();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to delete this QBank.');
@@ -575,7 +568,7 @@ export function QBankManagement({
                   )}
                 </div>
               </section>}
-              {canManageAccess && <section className="rounded-2xl border border-red-200 bg-red-50/60 p-6 dark:border-red-500/25 dark:bg-red-500/5">
+              {canDelete && <section className="rounded-2xl border border-red-200 bg-red-50/60 p-6 dark:border-red-500/25 dark:bg-red-500/5">
                 <h2 className="font-bold text-red-700 dark:text-red-300">Delete QBank</h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">Deletes the bank, its questions, invitations, access grants, statistics, and shared notes. Question IDs are never reused.</p>
                 <button onClick={() => setDeleteOpen(true)} className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl bg-red-600 px-4 text-sm font-bold text-white">

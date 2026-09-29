@@ -11,6 +11,7 @@ import { improvementsApiTests } from './improvements-api.mjs';
 import { saasApiTests } from './saas-api.mjs';
 import { directQuestionEditApiTests } from './direct-question-edit-api.mjs';
 import { serverEfficiencyApiTests } from './server-efficiency-api.mjs';
+import { qbankLifecycleApiTests } from './qbank-lifecycle-api.mjs';
 
 function decodeBase32(value) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -1565,7 +1566,7 @@ print(json.dumps(out))`,
     },
   );
   await t.test(
-    'Superadmin can hide, restore, and delete nonessential QBanks while essential QBanks stay protected',
+    'Superadmin can hide, restore and delete ordinary and Essential QBanks',
     async () => {
       const now = new Date().toISOString();
       const bank = {
@@ -1714,15 +1715,17 @@ print(json.dumps(out))`,
         0,
       );
 
+      const essentialBank = { ...bank, id: 'legacy-essential-deletion', ownerId: 'admin', createdById: 'admin', essential: true };
+      assert.equal((await call('admin', '/collaboration', { operations: [{ collection: 'qbanks', id: essentialBank.id, type: 'set', value: essentialBank }] }, 'PUT')).status, 200);
       const essentialDelete = await call(
         'admin',
         '/collaboration',
         {
-          operations: [{ collection: 'qbanks', id: 'smle-gs', type: 'delete' }],
+          operations: [{ collection: 'qbanks', id: essentialBank.id, type: 'delete' }],
         },
         'PUT',
       );
-      assert.equal(essentialDelete.status, 403);
+      assert.equal(essentialDelete.status, 200);
     },
   );
   await t.test(
@@ -3398,4 +3401,5 @@ print(json.dumps(out))`,
       }
     },
   );
+  await qbankLifecycleApiTests(t, { db, call });
 });

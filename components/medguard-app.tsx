@@ -26,7 +26,9 @@ import {
 } from '@/components/flashcards-workspace';
 import { openLiveChannels, subscribeLive } from '@/lib/realtime-client';
 import { createRefreshQueue } from '@/features/collaboration/client/refresh-queue';
-import { api, setApiCache } from '@/lib/api-client';
+import { ApiError, api, setApiCache } from '@/lib/api-client';
+import { COLLABORATION_SYNC_NOTICE, type CollaborationSyncNotice } from '@/features/collaboration/client/collaboration-client';
+import { loadRejectedCollaboration } from '@/lib/local-db';
 import { saveDirectQuestionEdit } from '@/features/qbanks/client/direct-question-edit';
 import { mergeLiveState } from '@/lib/merge-live-state';
 import { appStateFreshness, mergeAppStates } from '@/lib/merge-app-state';
@@ -4707,6 +4709,7 @@ function SettingsView({
   onThemeChange,
   onSaveDailyGoal,
   syncStatus,
+  syncIssue,
   onSync,
   onAccountDeleted,
   collaboration,
@@ -4718,6 +4721,7 @@ function SettingsView({
   onThemeChange: (theme: LocalTheme) => void;
   onSaveDailyGoal: (dailyGoal: number) => Promise<void>;
   syncStatus: SyncStatus;
+  syncIssue: string;
   onSync: () => void;
   onAccountDeleted: () => void;
   collaboration: CollaborationState;
@@ -4737,6 +4741,7 @@ function SettingsView({
   const dataSize = useMemo(() => stateBytes(state), [state]);
   const [dailyGoalBusy, setDailyGoalBusy] = useState(false);
   const [dailyGoalMessage, setDailyGoalMessage] = useState('');
+  const [draftDownloadError, setDraftDownloadError] = useState('');
   useEffect(() => {
     let active = true;
     void api<{ termsUrl: string; privacyUrl: string }>('/platform/legal-links')
@@ -4844,7 +4849,7 @@ function SettingsView({
             {
               {
                 syncing: 'Synchronizing saved changes…',
-                synced: 'All saved changes are synchronized.',
+                synced: syncIssue ? 'Some changes still need attention; see details below.' : 'All saved changes are synchronized.',
                 local: 'Saved on this device and waiting to synchronize.',
                 offline:
                   'Saved on this device. Synchronization will resume online.',
@@ -4855,6 +4860,15 @@ function SettingsView({
               ? ` · Last manual sync ${new Date(state.lastSyncAt).toLocaleString()}`
               : ''}
           </div>
+          {syncIssue && <p role="alert" className="mt-3 text-sm text-destructive">{syncIssue}</p>}
+          <button type="button" className="mt-3 text-sm underline" onClick={() => {
+            setDraftDownloadError('');
+            void loadRejectedCollaboration(user.uid).then(drafts => {
+              const url = URL.createObjectURL(new Blob([JSON.stringify(drafts, null, 2)], { type: 'application/json' }));
+              const link = document.createElement('a'); link.href = url; link.download = 'qraft-unsynchronized-drafts.json'; link.click(); URL.revokeObjectURL(url);
+            }).catch(() => setDraftDownloadError('Unable to download the preserved drafts. Retry on this device.'));
+          }}>Download a copy of changes needing review</button>
+          {draftDownloadError && <p role="alert" className="mt-2 text-sm text-destructive">{draftDownloadError}</p>}
         </section>
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
           <h2 className="font-bold">Appearance</h2>
@@ -5869,6 +5883,13 @@ export default function MedGuardApp({
     section: 'settings' | 'structure' | 'questions';
   }>();
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('syncing');
+  const [syncIssue, setSyncIssue] = useState('');
+  const reportSyncError = useCallback((error: unknown) => {
+    const reference = error instanceof ApiError && typeof error.payload.requestId === 'string'
+      ? ` Reference: ${error.payload.requestId}.` : '';
+    setSyncIssue(`${error instanceof Error ? error.message : 'Unable to synchronize. Your changes remain on this device.'}${reference}`);
+    setSyncStatus('error');
+  }, []);
   const online = useSyncExternalStore(
     subscribeConnection,
     () => navigator.onLine,
@@ -5919,6 +5940,8 @@ export default function MedGuardApp({
     initialCollaborationState(),
   );
   const collaborationWriteInFlight = useRef(false);
+  const collaborationRetryAt = useRef(0);
+  const collaborationRetryCount = useRef(0);
   const collaborationRefreshDeferred = useRef(false);
   const requestCollaborationRefresh = useRef<(() => void) | undefined>(undefined);
   const liveSnapshot = useRef({ collaboration, user });
@@ -5967,6 +5990,25 @@ export default function MedGuardApp({
     lastSavedCollaboration.current = updater(lastSavedCollaboration.current);
     setCollaboration(updater);
   };
+  const synchronizationUid = user?.uid;
+  useEffect(() => {
+    if (!synchronizationUid) return;
+    let active = true;
+    void loadRejectedCollaboration(synchronizationUid).then(drafts => {
+      if (active) setSyncIssue(drafts.length ? 'Some earlier changes need review. A copy is preserved on this device and can be downloaded from Settings.' : '');
+    }).catch(error => { if (active) reportSyncError(error); });
+    const synchronized = (event: Event) => {
+      const notice = (event as CustomEvent<CollaborationSyncNotice>).detail;
+      if (notice.uid !== synchronizationUid) return;
+      lastSavedCollaboration.current = notice.confirmed;
+      setCollaboration(current => mergeLiveState(notice.local, current, notice.confirmed));
+      void loadRejectedCollaboration(synchronizationUid).then(drafts => {
+        if (active) setSyncIssue(drafts.length ? 'Some changes need review. Other changes were synchronized. Download the preserved drafts from Settings.' : '');
+      }).catch(error => { if (active) reportSyncError(error); });
+    };
+    window.addEventListener(COLLABORATION_SYNC_NOTICE, synchronized);
+    return () => { active = false; window.removeEventListener(COLLABORATION_SYNC_NOTICE, synchronized); };
+  }, [synchronizationUid, reportSyncError]);
   const replaceCollaborationFromServer = useCallback(
     (next: CollaborationState) => {
       lastSavedCollaboration.current = next;
@@ -6616,12 +6658,12 @@ export default function MedGuardApp({
       }
       if (stateSnapshot.current === snapshot) stateDirty.current = false;
       setSyncStatus('synced');
-    } catch {
-      setSyncStatus('error');
+    } catch (error) {
+      reportSyncError(error);
     } finally {
       stateSyncInFlight.current = false;
     }
-  }, []);
+  }, [reportSyncError]);
 
   const flashcardCrudVersion = useMemo(
     () => JSON.stringify([state.flashcardDecks, state.flashcards]),
@@ -6732,12 +6774,18 @@ export default function MedGuardApp({
     if (collaborationSaveTimer.current)
       window.clearTimeout(collaborationSaveTimer.current);
     const previous = lastSavedCollaboration.current;
+    let cancelled = false;
     const queued = Promise.all([
       saveLocalCollaboration(collaboration, user.uid),
       queueCollaborationState(user.uid, collaboration, previous),
     ]);
     void queued.catch(() => setSyncStatus('error'));
     const persist = () => {
+      if (cancelled || liveSnapshot.current.user?.uid !== user.uid) return;
+      if (Date.now() < collaborationRetryAt.current) {
+        collaborationSaveTimer.current = window.setTimeout(persist, collaborationRetryAt.current - Date.now());
+        return;
+      }
       if (collaborationWriteInFlight.current) {
         collaborationSaveTimer.current = window.setTimeout(persist, 100);
         return;
@@ -6749,10 +6797,21 @@ export default function MedGuardApp({
         void queued
           .then(() => flushPendingCollaborationState(user.uid))
           .then((synced) => {
+            if (liveSnapshot.current.user?.uid !== user.uid) return;
             if (synced) lastSavedCollaboration.current = synced;
+            collaborationRetryCount.current = 0;
+            collaborationRetryAt.current = 0;
             setSyncStatus('synced');
           })
-          .catch(() => setSyncStatus('error'))
+          .catch((error: unknown) => {
+            if (liveSnapshot.current.user?.uid !== user.uid) return;
+            reportSyncError(error);
+            if (error instanceof ApiError && (error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500)) {
+              const delay = Math.max(error.retryAfterMs ?? 0, Math.min(60_000, 1000 * 2 ** Math.min(++collaborationRetryCount.current, 6)));
+              collaborationRetryAt.current = Date.now() + delay;
+              if (!cancelled) collaborationSaveTimer.current = window.setTimeout(persist, delay);
+            }
+          })
           .finally(() => {
             collaborationWriteInFlight.current = false;
             if (collaborationRefreshDeferred.current) requestCollaborationRefresh.current?.();
@@ -6763,11 +6822,12 @@ export default function MedGuardApp({
     };
     collaborationSaveTimer.current = window.setTimeout(persist, 150);
     return () => {
+      cancelled = true;
       if (collaborationSaveTimer.current)
         window.clearTimeout(collaborationSaveTimer.current);
       collaborationSaveTimer.current = undefined;
     };
-  }, [collaboration, user, collaborationHydrated]);
+  }, [collaboration, user, collaborationHydrated, reportSyncError]);
 
   const liveChannels = JSON.stringify(
     user
@@ -6980,7 +7040,7 @@ export default function MedGuardApp({
     setSyncStatus('syncing');
     try {
       const next = { ...state, lastSyncAt: new Date().toISOString() };
-      const [remote] = await Promise.all([
+      const [remote, confirmed] = await Promise.all([
         saveCloudState(user.uid, next),
         saveCollaborationState(
           collaboration,
@@ -6988,18 +7048,22 @@ export default function MedGuardApp({
           user.uid,
         ),
       ]);
+      if (liveSnapshot.current.user?.uid !== user.uid) return;
       const synchronized = remote ? mergeAppStates(next, remote) : next;
+      const localCollaboration = mergeLiveState(collaboration, liveSnapshot.current.collaboration, confirmed);
       await Promise.all([
         saveLocalState(user.uid, synchronized),
-        saveLocalCollaboration(collaboration, user.uid),
+        saveLocalCollaboration(localCollaboration, user.uid),
       ]);
-      lastSavedCollaboration.current = collaboration;
+      lastSavedCollaboration.current = confirmed;
       stateDirty.current = false;
       cloudStateSnapshot.current = synchronized;
       setStateRaw(synchronized);
+      const drafts = await loadRejectedCollaboration(user.uid);
+      setSyncIssue(drafts.length ? 'Some changes need review. Download the preserved drafts from Settings.' : '');
       setSyncStatus('synced');
-    } catch {
-      setSyncStatus('error');
+    } catch (error) {
+      reportSyncError(error);
     }
   }
 
@@ -7478,6 +7542,10 @@ export default function MedGuardApp({
           />
         }
       >
+        {syncIssue && view !== 'test' && view !== 'settings' && <output className="flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+          <span>{syncIssue}</span>
+          <button type="button" className="shrink-0 underline" onClick={() => setView('settings')}>Open Settings</button>
+        </output>}
         {portal === 'app' && announcement.enabled && announcement.content && (
           <output className="q-announcement flex min-h-10 items-center justify-center gap-3 bg-gradient-to-r from-primary via-cyan-600 to-teal-600 px-4 py-2 text-center text-xs font-bold text-white shadow-sm sm:text-sm">
             <span>{announcement.content}</span>
@@ -7723,6 +7791,7 @@ export default function MedGuardApp({
             onSaveDailyGoal={persistDailyGoal}
             syncStatus={syncStatus}
             onSync={() => void manualSync()}
+            syncIssue={syncIssue}
             collaboration={collaboration}
             user={user}
             updateCollaboration={(updater) => setCollaboration(updater)}

@@ -1,6 +1,7 @@
 import { normalizeCollaborationState, type AppState, type CollaborationState, type QBankSpecialty, type QBankTopic } from './medguard-types';
 import type { PreformedLocalAttempt } from './preformed-test-types';
 import { coalesceStateCheckpoints } from '@/features/state/domain/checkpoint-outbox';
+import { mergeLiveState } from './merge-live-state';
 import { preformedAttemptKey, preformedCodeKey } from '@/features/exams/domain/preformed-attempt-scope';
 import {
   coalesceCollaborationSync,
@@ -206,6 +207,64 @@ export async function loadCollaborationSyncOutbox(
   return readValue<CollaborationSyncSnapshot>(`collaboration-outbox:${uid}`);
 }
 
+export async function rebasePendingCollaboration(
+  uid: string, patch: (state: CollaborationState) => CollaborationState,
+): Promise<void> {
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(STORE, 'readwrite');
+    const store = transaction.objectStore(STORE);
+    const key = `collaboration-outbox:${uid}`;
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const current = request.result as CollaborationSyncSnapshot | undefined;
+      if (current) store.put({ ...current, id: crypto.randomUUID(), base: patch(current.base), state: patch(current.state) }, key);
+    };
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error); };
+  });
+}
+
+export async function acknowledgeCollaborationSync(
+  operation: CollaborationSyncSnapshot, confirmed: CollaborationState,
+): Promise<void> {
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(STORE, 'readwrite');
+    const store = transaction.objectStore(STORE);
+    const key = `collaboration-outbox:${operation.uid}`;
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const current = request.result as CollaborationSyncSnapshot | undefined;
+      if (!current) return;
+      if (current.id === operation.id) store.delete(key);
+      else store.put({ ...current, base: confirmed,
+        state: mergeLiveState(operation.state, current.state, confirmed) }, key);
+    };
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error); };
+  });
+}
+
+export async function preserveRejectedCollaboration(
+  operation: CollaborationSyncSnapshot, details: unknown,
+): Promise<void> {
+  await updateValue<Array<{ snapshot: CollaborationSyncSnapshot; details: unknown; failures?: unknown[] }>>(
+    `collaboration-rejected:${operation.uid}`, current => {
+      const drafts = current ?? [];
+      const existing = drafts.find(item => item.snapshot.id === operation.id);
+      if (!existing) return [...drafts, { snapshot: operation, details }];
+      return drafts.map(item => item !== existing ? item : {
+        ...item, failures: [...(item.failures ?? []), details],
+      });
+    },
+  );
+}
+
+export async function loadRejectedCollaboration(uid: string) {
+  return (await readValue<unknown[]>(`collaboration-rejected:${uid}`)) ?? [];
+}
+
 export async function removeCollaborationSync(
   uid: string,
   operationId: string,
@@ -256,6 +315,7 @@ export async function forgetLocalUser(uid: string): Promise<void> {
     store.delete(`state:${uid}`);
     store.delete(`collaboration:${uid}`);
     store.delete(`collaboration-outbox:${uid}`);
+    store.delete(`collaboration-rejected:${uid}`);
     store.delete(`state-outbox:${uid}`);
     const cursor = store.openCursor();
     cursor.onsuccess = () => {

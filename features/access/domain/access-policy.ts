@@ -82,9 +82,14 @@ export function canAccessBank(
 }
 
 export function canManageBank(user: AppUser, bank: QBank): boolean {
+  if (user.role === 'super_admin') return true;
   if (bank.essential || bank.id === 'smle-gs')
-    return user.role === 'super_admin';
+    return false;
   return bank.ownerId === user.uid;
+}
+
+export function canDeleteBank(user: AppUser, bank: QBank): boolean {
+  return user.role === 'super_admin' || bank.ownerId === user.uid;
 }
 
 export function canEditBank(

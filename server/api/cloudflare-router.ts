@@ -1,4 +1,5 @@
 import { deleteOwnAccount } from '@/lib/account-deletion-server';
+import { createQBank, deleteQBank } from '@/features/qbanks/server/lifecycle-service';
 import {
   beginMfa,
   changeOwnPassword,
@@ -72,6 +73,7 @@ async function routeGet(request: Request): Promise<Response> {
 
 async function routePost(request: Request): Promise<Response> {
   const [scope, action] = cloudflarePathParts(request);
+  if (scope === 'qbanks' && !action) return createQBank(request);
   if (scope === 'platform' && action === 'monitoring') return monitoringApi(request);
   if (scope === 'platform' && action === 'account-block') return operationsApi(request, action);
   if (scope === 'preformed' && action)
@@ -119,6 +121,7 @@ async function routePut(request: Request): Promise<Response> {
 
 async function routeDelete(request: Request): Promise<Response> {
   const [scope, action] = cloudflarePathParts(request);
+  if (scope === 'qbanks' && action) return deleteQBank(request, action);
   if (scope === 'preformed' && action)
     return preformedTestApi(request, action);
   if (scope === 'qbank-folders' && action)

@@ -665,7 +665,7 @@ export function normalizeCollaborationState(
 ): CollaborationState {
   const base = initialCollaborationState();
   if (!input) return base;
-  const qbanks = (input.qbanks?.length ? input.qbanks : base.qbanks).map(
+  const qbanks = (input.qbanks ?? base.qbanks).map(
     (bank) => ({
       ...bank,
       ownerId: bank.ownerId ?? bank.createdById,
