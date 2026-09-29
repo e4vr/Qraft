@@ -220,51 +220,51 @@ export async function collectMonitoring(
         (storage?.max?.payloadSize ?? 0) + (storage?.max?.metadataSize ?? 0);
     if (data.r2OperationsAdaptiveGroups.length >= 721) snapshot.limited = true;
   });
-  await safe('User Analytics', async () => {
-    if (
-      env.QRAFT_TELEMETRY_ENABLED !== 'true' ||
-      !env.QRAFT_USAGE ||
-      !/^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(env.MONITORING_DATASET ?? '')
-    )
-      throw new Error();
-    const sums = USAGE_KEYS.map(
-      (key, index) => `SUM(double${index + 1} * _sample_interval) AS ${key}`,
-    ).join(',');
-    const where = `FROM ${env.MONITORING_DATASET} WHERE timestamp >= toDateTime('${from.slice(0, 19).replace('T', ' ')}') AND timestamp <= toDateTime('${to.slice(0, 19).replace('T', ' ')}')`;
-    const daily = await cfRequest(
-      `SELECT toDate(timestamp) AS date, COUNT(DISTINCT index1) AS activeUsers, ${sums} ${where} GROUP BY date ORDER BY date LIMIT 31 FORMAT JSON`,
-      true,
-    );
-    for (const row of daily.data ?? []) {
-      const day = days.get(String(row.date));
-      if (day) {
-        day.activeUsers = Number(row.activeUsers);
-        day.usage = Object.fromEntries(
-          USAGE_KEYS.map((key) => [key, Number(row[key] ?? 0)]),
-        ) as ReturnType<typeof emptyUsage>;
-      }
-    }
-    const users = await cfRequest(
-      `SELECT index1 AS telemetryId, SUM(_sample_interval) AS events, ${sums} ${where} GROUP BY telemetryId ORDER BY events DESC LIMIT 1001 FORMAT JSON`,
-      true,
-    );
-    snapshot.users = (users.data ?? []).slice(0, 1000).map(
-      (row: Record<string, unknown>) =>
-        ({
-          telemetryId: String(row.telemetryId),
-          events: Number(row.events),
-          ...Object.fromEntries(
+  if (env.QRAFT_TELEMETRY_ENABLED === 'true')
+    await safe('User Analytics', async () => {
+      if (
+        !env.QRAFT_USAGE ||
+        !/^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(env.MONITORING_DATASET ?? '')
+      )
+        throw new Error();
+      const sums = USAGE_KEYS.map(
+        (key, index) => `SUM(double${index + 1} * _sample_interval) AS ${key}`,
+      ).join(',');
+      const where = `FROM ${env.MONITORING_DATASET} WHERE timestamp >= toDateTime('${from.slice(0, 19).replace('T', ' ')}') AND timestamp <= toDateTime('${to.slice(0, 19).replace('T', ' ')}')`;
+      const daily = await cfRequest(
+        `SELECT toDate(timestamp) AS date, COUNT(DISTINCT index1) AS activeUsers, ${sums} ${where} GROUP BY date ORDER BY date LIMIT 31 FORMAT JSON`,
+        true,
+      );
+      for (const row of daily.data ?? []) {
+        const day = days.get(String(row.date));
+        if (day) {
+          day.activeUsers = Number(row.activeUsers);
+          day.usage = Object.fromEntries(
             USAGE_KEYS.map((key) => [key, Number(row[key] ?? 0)]),
-          ),
-        }) as UsageUser,
-    );
-    snapshot.limited ||= (users.data?.length ?? 0) >= 1001;
-    const active = await cfRequest(
-      `SELECT COUNT(DISTINCT index1) AS activeUsers ${where} FORMAT JSON`,
-      true,
-    );
-    snapshot.activeUsers = Number(active.data?.[0]?.activeUsers ?? 0);
-  });
+          ) as ReturnType<typeof emptyUsage>;
+        }
+      }
+      const users = await cfRequest(
+        `SELECT index1 AS telemetryId, SUM(_sample_interval) AS events, ${sums} ${where} GROUP BY telemetryId ORDER BY events DESC LIMIT 1001 FORMAT JSON`,
+        true,
+      );
+      snapshot.users = (users.data ?? []).slice(0, 1000).map(
+        (row: Record<string, unknown>) =>
+          ({
+            telemetryId: String(row.telemetryId),
+            events: Number(row.events),
+            ...Object.fromEntries(
+              USAGE_KEYS.map((key) => [key, Number(row[key] ?? 0)]),
+            ),
+          }) as UsageUser,
+      );
+      snapshot.limited ||= (users.data?.length ?? 0) >= 1001;
+      const active = await cfRequest(
+        `SELECT COUNT(DISTINCT index1) AS activeUsers ${where} FORMAT JSON`,
+        true,
+      );
+      snapshot.activeUsers = Number(active.data?.[0]?.activeUsers ?? 0);
+    });
   snapshot.days = [...days.values()];
   return snapshot;
 }
@@ -277,6 +277,12 @@ async function responseSnapshot(period: number) {
   const snapshot = row.payload
     ? (JSON.parse(row.payload) as MonitoringSnapshot)
     : null;
+  // Older snapshots treated intentionally disabled collection as an upstream
+  // failure. Keep genuine provider failures while correcting cached coverage.
+  if (snapshot && env.QRAFT_TELEMETRY_ENABLED !== 'true')
+    snapshot.unavailable = snapshot.unavailable.filter(
+      (reason) => !reason.startsWith('User Analytics:'),
+    );
   if (snapshot?.users.length) {
     // Identity joins are bounded and resolved at read time. Deleted accounts disappear immediately.
     const identities = await env.DB.prepare(

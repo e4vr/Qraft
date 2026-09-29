@@ -155,6 +155,30 @@ void test('health detects exhaustion, daily free-tier pressure, missing and stal
     'Attention',
   );
   assert.equal(systemHealth(null).status, 'Attention');
+  assert.deepEqual(
+    systemHealth(
+      {
+        ...snapshot,
+        unavailable: ['D1: unavailable for the current token, plan or period.'],
+      },
+      now,
+    ).reasons,
+    ['Monitoring sources unavailable: D1.'],
+  );
+  assert.deepEqual(systemHealth({ ...snapshot, limited: true }, now).reasons, [
+    'The monitoring snapshot was truncated. Some results may be missing.',
+  ]);
+  assert.deepEqual(
+    systemHealth({ ...snapshot, to: '2020-01-01T00:00:00Z' }, now).reasons,
+    [
+      'The monitoring snapshot is more than one hour old. Sync Cloudflare to update it.',
+    ],
+  );
+  assert.equal(systemHealth(snapshot, 'invalid').status, 'Attention');
+  assert.equal(
+    systemHealth({ ...snapshot, to: 'invalid' }, now).status,
+    'Attention',
+  );
 });
 void test('timed block expires exactly; malformed legacy expirations fail closed', () => {
   assert.equal(

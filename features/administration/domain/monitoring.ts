@@ -234,16 +234,31 @@ export function systemHealth(
       'At least one day reaches 80% of a Workers/D1 free allowance.',
     );
   }
-  if (
-    snapshot.unavailable.length ||
-    snapshot.limited ||
-    !refreshedAt ||
-    Date.now() - Date.parse(refreshedAt) > 3_600_000 ||
-    Date.now() - Date.parse(snapshot.to) > 3_600_000
-  ) {
+  if (snapshot.unavailable.length) {
     if (status === 'Healthy') status = 'Attention';
     reasons.push(
-      'Monitoring is incomplete, truncated or more than one hour old.',
+      `Monitoring sources unavailable: ${snapshot.unavailable.map((reason) => reason.split(':')[0]).join(', ')}.`,
+    );
+  }
+  if (snapshot.limited) {
+    if (status === 'Healthy') status = 'Attention';
+    reasons.push(
+      'The monitoring snapshot was truncated. Some results may be missing.',
+    );
+  }
+  const observationTimes = [
+    Date.parse(refreshedAt ?? ''),
+    Date.parse(snapshot.to),
+  ];
+  if (observationTimes.some((time) => !Number.isFinite(time))) {
+    if (status === 'Healthy') status = 'Attention';
+    reasons.push(
+      'The snapshot has no valid observation time. Sync Cloudflare to update it.',
+    );
+  } else if (observationTimes.some((time) => Date.now() - time > 3_600_000)) {
+    if (status === 'Healthy') status = 'Attention';
+    reasons.push(
+      'The monitoring snapshot is more than one hour old. Sync Cloudflare to update it.',
     );
   }
   if (!reasons.length)

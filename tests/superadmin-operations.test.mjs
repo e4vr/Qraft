@@ -40,6 +40,7 @@ void test('superadmin operations enforce authorization, money, maintenance and b
         MONITORING_WORKER_NAME: 'test-app',
         MONITORING_D1_ID: 'test-database',
         MONITORING_R2_BUCKET: 'test-bucket',
+        QRAFT_TELEMETRY_ENABLED: 'false',
       },
       outboundService: async (request) => {
         upstreamCalls++;
@@ -450,6 +451,8 @@ void test('superadmin operations enforce authorization, money, maintenance and b
       const dashboard = await call('admin', '/platform/monitoring?period=7');
       assert.equal(dashboard.data.budget.used, 7);
       assert.equal(upstreamCalls, 4);
+      assert.deepEqual(dashboard.data.snapshot.unavailable, []);
+      assert.equal(dashboard.data.telemetry, false);
       assert.equal(dashboard.data.snapshot.queries[0].executions, 8);
       assert.equal(
         dashboard.data.snapshot.days.at(-1).infrastructure.cpuP99Ms,
@@ -472,6 +475,51 @@ void test('superadmin operations enforce authorization, money, maintenance and b
         429,
       );
       assert.equal(upstreamCalls, 4);
+    },
+  );
+  await t.test(
+    'disabled user collection corrects old snapshots while preserving real infrastructure failures',
+    async () => {
+      const snapshot = {
+        format: 'qraft-monitoring-v1',
+        from: now,
+        to: now,
+        days: [
+          {
+            date: now.slice(0, 10),
+            infrastructure: { workerRequests: 100, workerErrors: 0 },
+          },
+        ],
+        users: [],
+        queries: [],
+        sampled: true,
+        limited: false,
+        unavailable: [
+          'User Analytics: unavailable for the current token, plan or period.',
+        ],
+      };
+      const store = async () =>
+        db
+          .prepare(
+            "UPDATE monitoring_snapshots SET payload=?,refreshed_at=?,source='cloudflare' WHERE period=1",
+          )
+          .bind(JSON.stringify(snapshot), now)
+          .run();
+      await store();
+      const disabled = await call('admin', '/platform/monitoring?period=1');
+      assert.equal(disabled.data.health.status, 'Healthy');
+      assert.deepEqual(disabled.data.snapshot.unavailable, []);
+      assert.equal(disabled.data.snapshot.activeUsers, undefined);
+      snapshot.unavailable.push(
+        'Workers: unavailable for the current token, plan or period.',
+      );
+      await store();
+      const failed = await call('admin', '/platform/monitoring?period=1');
+      assert.equal(failed.data.health.status, 'Attention');
+      assert.deepEqual(failed.data.health.reasons, [
+        'Monitoring sources unavailable: Workers.',
+      ]);
+      assert.equal(failed.data.snapshot.unavailable.length, 1);
     },
   );
   await t.test(
