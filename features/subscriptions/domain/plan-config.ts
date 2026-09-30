@@ -1,5 +1,10 @@
-export const PLAN_ORDER = ['free', 'lite', 'pro', 'unlimited'] as const;
+export const PLAN_ORDER = ['free', 'full_monthly', 'full_quarterly'] as const;
 export type PlanId = (typeof PLAN_ORDER)[number];
+export const PAID_PLAN_IDS = ['full_monthly', 'full_quarterly'] as const;
+export const PLAN_DURATION_MONTHS: Record<PlanId, number> = { free: 0, full_monthly: 1, full_quarterly: 3 };
+export function planDurationLabel(plan: PlanId): string {
+  return plan === 'free' ? 'Lifetime trial' : PLAN_DURATION_MONTHS[plan] === 1 ? '1 month' : '3 months';
+}
 
 export type PlanFeature =
   | 'createQBank'
@@ -9,11 +14,12 @@ export type PlanFeature =
   | 'uploadImages'
   | 'privateNotes'
   | 'flashcards'
+  | 'readyTests'
   | 'contribute';
 
 export type PlanLimits = {
   name: string;
-  priceSarYear: number;
+  priceSarPeriod: number;
   monthlyExamLimit: number | null;
   lifetimeExamLimit: number | null;
   maxQuestionsPerExam: number;
@@ -28,8 +34,9 @@ export type PlanLimits = {
   maxImageStorageBytes: number;
   canUsePrivateNotes: boolean;
   canUseFlashcards: boolean;
-  maxFlashcardDecks: number;
-  maxFlashcards: number;
+  maxFlashcardDecks: number | null;
+  maxFlashcards: number | null;
+  canCreateReadyTests: boolean;
   canContribute: boolean;
   canSuggestCorrections: boolean;
   fairUse: boolean;
@@ -41,8 +48,8 @@ const UNLIMITED_IMAGE_STORAGE = Number.MAX_SAFE_INTEGER;
 
 export const PLAN_LIMITS: Record<PlanId, PlanLimits> = {
   free: {
-    name: 'Free',
-    priceSarYear: 0,
+    name: 'Free trial',
+    priceSarPeriod: 0,
     monthlyExamLimit: null,
     lifetimeExamLimit: 2,
     maxQuestionsPerExam: 15,
@@ -59,60 +66,15 @@ export const PLAN_LIMITS: Record<PlanId, PlanLimits> = {
     canUseFlashcards: false,
     maxFlashcardDecks: 0,
     maxFlashcards: 0,
+    canCreateReadyTests: false,
     canContribute: true,
     canSuggestCorrections: true,
     fairUse: false,
   },
-  lite: {
-    name: 'Lite',
-    priceSarYear: 15,
-    monthlyExamLimit: 30,
-    lifetimeExamLimit: null,
-    maxQuestionsPerExam: 50,
-    canCreateQBank: false,
-    canCreatePrivateQBank: false,
-    canAddQuestions: true,
-    canUseJsonImport: false,
-    jsonImportDailyLimit: 0,
-    jsonQuestionsPerImport: 0,
-    maxPendingReviewQuestions: 0,
-    canUploadImages: true,
-    maxImageStorageBytes: UNLIMITED_IMAGE_STORAGE,
-    canUsePrivateNotes: false,
-    canUseFlashcards: false,
-    maxFlashcardDecks: 0,
-    maxFlashcards: 0,
-    canContribute: true,
-    canSuggestCorrections: true,
-    fairUse: false,
-  },
-  pro: {
-    name: 'Pro',
-    priceSarYear: 50,
-    monthlyExamLimit: 250,
-    lifetimeExamLimit: null,
-    maxQuestionsPerExam: 200,
-    canCreateQBank: true,
-    canCreatePrivateQBank: true,
-    canAddQuestions: true,
-    canUseJsonImport: true,
-    jsonImportDailyLimit: 3,
-    jsonQuestionsPerImport: 75,
-    maxPendingReviewQuestions: 300,
-    canUploadImages: true,
-    maxImageStorageBytes: UNLIMITED_IMAGE_STORAGE,
-    canUsePrivateNotes: true,
-    canUseFlashcards: true,
-    maxFlashcardDecks: 3,
-    maxFlashcards: 2_000,
-    canContribute: true,
-    canSuggestCorrections: true,
-    fairUse: true,
-  },
-  unlimited: {
-    name: 'Unlimited',
-    priceSarYear: 99,
-    monthlyExamLimit: 1_000,
+  full_monthly: {
+    name: 'Qraft Full Access',
+    priceSarPeriod: 100,
+    monthlyExamLimit: null,
     lifetimeExamLimit: null,
     maxQuestionsPerExam: 500,
     canCreateQBank: true,
@@ -126,8 +88,33 @@ export const PLAN_LIMITS: Record<PlanId, PlanLimits> = {
     maxImageStorageBytes: UNLIMITED_IMAGE_STORAGE,
     canUsePrivateNotes: true,
     canUseFlashcards: true,
-    maxFlashcardDecks: 25,
-    maxFlashcards: 20_000,
+    maxFlashcardDecks: null,
+    maxFlashcards: null,
+    canCreateReadyTests: true,
+    canContribute: true,
+    canSuggestCorrections: true,
+    fairUse: true,
+  },
+  full_quarterly: {
+    name: 'Qraft Full Access',
+    priceSarPeriod: 230,
+    monthlyExamLimit: null,
+    lifetimeExamLimit: null,
+    maxQuestionsPerExam: 500,
+    canCreateQBank: true,
+    canCreatePrivateQBank: true,
+    canAddQuestions: true,
+    canUseJsonImport: true,
+    jsonImportDailyLimit: 5,
+    jsonQuestionsPerImport: 150,
+    maxPendingReviewQuestions: 1_000,
+    canUploadImages: true,
+    maxImageStorageBytes: UNLIMITED_IMAGE_STORAGE,
+    canUsePrivateNotes: true,
+    canUseFlashcards: true,
+    maxFlashcardDecks: null,
+    maxFlashcards: null,
+    canCreateReadyTests: true,
     canContribute: true,
     canSuggestCorrections: true,
     fairUse: true,
@@ -146,39 +133,18 @@ export const CONTRIBUTION_CREDITS = {
 
 export const REWARD_CATALOG = [
   {
-    id: 'lite-month',
-    plan: 'lite',
-    credits: 150,
-    duration: 1,
-    durationUnit: 'month',
-  },
-  {
-    id: 'pro-month',
-    plan: 'pro',
+    id: 'full-access-month',
+    plan: 'full_monthly',
     credits: 300,
     duration: 1,
     durationUnit: 'month',
   },
   {
-    id: 'unlimited-month',
-    plan: 'unlimited',
+    id: 'full-access-quarter',
+    plan: 'full_quarterly',
     credits: 700,
-    duration: 1,
+    duration: 3,
     durationUnit: 'month',
-  },
-  {
-    id: 'pro-year',
-    plan: 'pro',
-    credits: 3_000,
-    duration: 1,
-    durationUnit: 'year',
-  },
-  {
-    id: 'unlimited-year',
-    plan: 'unlimited',
-    credits: 7_000,
-    duration: 1,
-    durationUnit: 'year',
   },
 ] as const satisfies readonly {
   id: string;
@@ -201,7 +167,7 @@ export function isPlanId(value: unknown): value is PlanId {
 }
 
 export function getPlanLimits(plan: PlanId): PlanLimits {
-  return PLAN_LIMITS[plan];
+  return PLAN_LIMITS[plan] ?? PLAN_LIMITS.free;
 }
 
 export function highestPlan(
@@ -224,6 +190,7 @@ export function hasFeature(plan: PlanId, feature: PlanFeature, override?: PlanLi
     uploadImages: limits.canUploadImages,
     privateNotes: limits.canUsePrivateNotes,
     flashcards: limits.canUseFlashcards,
+    readyTests: limits.canCreateReadyTests,
     contribute: limits.canContribute,
   }[feature];
 }

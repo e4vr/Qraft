@@ -14,8 +14,8 @@ export const POLICY_NUMBERS = {
     max: 5_000,
     nullable: false,
   },
-  maxFlashcardDecks: { label: 'Flashcard decks', max: 500, nullable: false },
-  maxFlashcards: { label: 'Flashcards', max: 5_000, nullable: false },
+  maxFlashcardDecks: { label: 'Flashcard decks', max: 500, nullable: true },
+  maxFlashcards: { label: 'Flashcards', max: 5_000, nullable: true },
 } as const;
 export const POLICY_FEATURES = {
   canCreateQBank: 'Create QBanks',
@@ -24,6 +24,7 @@ export const POLICY_FEATURES = {
   canUseJsonImport: 'Imports',
   canUsePrivateNotes: 'Private notes',
   canUseFlashcards: 'Flashcards',
+  canCreateReadyTests: 'Create Ready Tests',
   canContribute: 'Contributions',
   canSuggestCorrections: 'Suggest corrections',
 } as const;
@@ -84,7 +85,7 @@ export function validatePlanPolicy(
     (!next.jsonImportDailyLimit || !next.jsonQuestionsPerImport)
   )
     throw new Error('Enabled imports need non-zero limits.');
-  if (next.canUseFlashcards && (!next.maxFlashcards || !next.maxFlashcardDecks))
+  if (next.canUseFlashcards && (next.maxFlashcards === 0 || next.maxFlashcardDecks === 0))
     throw new Error('Enabled flashcards need non-zero limits.');
   return result;
 }

@@ -89,6 +89,22 @@ export async function directQuestionEditApiTests(t, { db, call }) {
       assert.equal((await read('sharedQuestions', questionId)).revision, current.revision + 1);
       assert.equal((await db.prepare("SELECT count(*) n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='superadmin_question_edited' AND json_extract(payload,'$.entityId')=?").bind(questionId).first()).n, 4);
     });
+    await t.test('source metadata is persisted separately and an omitted page clears the previous page', async () => {
+      const current = await read('sharedQuestions', questionId);
+      const nextPayload = { ...payload, sourceFile: 'Unified bank.pdf', sourcePage: 12, sourceReference: 'Unified bank.pdf - p.12' };
+      const withPage = await save('admin', { ...body, qbankId: 'smle-gs', baseRevision: current.revision, payload: nextPayload });
+      assert.equal(withPage.status, 200);
+      assert.equal(withPage.data.question.sourceFile, 'Unified bank.pdf');
+      assert.equal(withPage.data.question.sourcePage, 12);
+      const withoutPage = { ...nextPayload, sourcePage: undefined, sourceReference: 'Unified bank.pdf' };
+      const cleared = await save('admin', { ...body, qbankId: 'smle-gs', baseRevision: withPage.data.question.revision, payload: withoutPage });
+      assert.equal(cleared.status, 200);
+      assert.equal(Object.hasOwn(cleared.data.question, 'sourcePage'), false);
+      assert.equal(cleared.data.question.sourceReference, 'Unified bank.pdf');
+      assert.equal(cleared.data.question.questionId, question.questionId);
+      assert.equal((await save('admin', { ...body, qbankId: 'smle-gs', baseRevision: cleared.data.question.revision, payload: { ...withoutPage, sourcePage: 0 } })).status, 400);
+      assert.equal(Object.hasOwn(await read('sharedQuestions', questionId), 'sourcePage'), false);
+    });
   } finally {
     await db.prepare('UPDATE sessions SET verified=1 WHERE user_id=?').bind('admin').run();
     await db.prepare('DELETE FROM contribution_reviews WHERE proposal_id IN (?,?)').bind(proposal.id, 'direct-edit-reject').run();

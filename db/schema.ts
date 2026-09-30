@@ -172,7 +172,7 @@ export const discountCodes = sqliteTable(
     maxUses: integer('max_uses'),
     perUser: integer('per_user'),
     uses: integer('uses').notNull().default(0),
-    allowedPlans: text('allowed_plans').notNull().default('["lite","pro","unlimited"]'),
+    allowedPlans: text('allowed_plans').notNull().default('["full_monthly","full_quarterly"]'),
     updatedAt: text('updated_at').notNull(),
   },
   (table) => [uniqueIndex('idx_discount_codes_code').on(table.code)],
@@ -180,7 +180,7 @@ export const discountCodes = sqliteTable(
 
 export const accountPlanOverrides = sqliteTable('account_plan_overrides', {
   userId: text('user_id').primaryKey().references(() => profiles.uid, { onDelete: 'cascade' }),
-  plan: text('plan', { enum: ['free', 'lite', 'pro', 'unlimited'] }).notNull(),
+  plan: text('plan', { enum: ['free', 'full_monthly', 'full_quarterly'] }).notNull(),
   expiresAt: text('expires_at'),
   reason: text('reason').notNull().default(''),
   updatedBy: text('updated_by').notNull(),
@@ -194,7 +194,7 @@ export const subscriptions = sqliteTable(
       .primaryKey()
       .references(() => profiles.uid),
     status: text('status').notNull(),
-    plan: text('plan').notNull().default('pro'),
+    plan: text('plan').notNull().default('full_monthly'),
     startsAt: text('starts_at'),
     expiresAt: text('expires_at'),
     method: text('method').notNull(),
@@ -218,7 +218,7 @@ export const subscriptionEvents = sqliteTable(
     codeId: text('code_id'),
     code: text('code'),
     action: text('action').notNull(),
-    plan: text('plan').notNull().default('pro'),
+    plan: text('plan').notNull().default('full_monthly'),
     original: integer('original').notNull(),
     discount: integer('discount').notNull(),
     final: integer('final').notNull(),
@@ -564,7 +564,7 @@ export const jsonImportAttempts = sqliteTable(
 
 export const planPrices = sqliteTable('plan_prices', {
   plan: text('plan').primaryKey(),
-  priceSarYear: integer('price_sar_year').notNull(),
+  priceSarPeriod: integer('price_sar_period').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
 

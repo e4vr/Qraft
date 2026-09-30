@@ -138,12 +138,12 @@ print(json.dumps(out))`,
   for (const uid of [
     'admin',
     'free',
-    'lite',
+    'trial',
     'other',
-    'pro',
-    'pro-limit',
-    'pro-pending',
-    'unlimited',
+    'monthly',
+    'monthly-limit',
+    'monthly-pending',
+    'quarterly',
     'moderator',
     'reviewer',
     'reviewer2',
@@ -161,11 +161,11 @@ print(json.dumps(out))`,
       tier:
         uid === 'free'
           ? 'free'
-          : uid === 'pro' || uid === 'pro-limit' || uid === 'pro-pending'
-            ? 'pro'
-            : uid === 'unlimited'
-              ? 'unlimited'
-              : 'lite',
+          : uid === 'monthly' || uid === 'monthly-limit' || uid === 'monthly-pending'
+            ? 'full_monthly'
+            : uid === 'quarterly'
+              ? 'full_quarterly'
+              : 'free',
       status: 'approved',
       role: uid === 'admin' ? 'super_admin' : 'student',
       platformRoles:
@@ -284,25 +284,25 @@ print(json.dumps(out))`,
         future = new Date(Date.now() + 86400000 * 365).toISOString();
       await db
         .prepare(
-          "UPDATE profiles SET profile_json=json_set(profile_json,'$.tier','unlimited') WHERE uid=?",
+          "UPDATE profiles SET profile_json=json_set(profile_json,'$.tier','full_quarterly') WHERE uid=?",
         )
         .bind(uid)
         .run();
       await db
         .prepare(
-          "INSERT INTO subscriptions(user_id,status,method,paid,updated_at,plan,expires_at) VALUES(?,'active','manual',9900,?,'unlimited',?)",
+          "INSERT INTO subscriptions(user_id,status,method,paid,updated_at,plan,expires_at) VALUES(?,'active','manual',9900,?,'full_quarterly',?)",
         )
         .bind(uid, now, future)
         .run();
       await db
         .prepare(
-          "INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,expires_at,source) VALUES('override-gift',?,'unlimited',1,'year','active',?,?,'admin')",
+          "INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,expires_at,source) VALUES('override-gift',?,'full_quarterly',1,'year','active',?,?,'admin')",
         )
         .bind(uid, now, future)
         .run();
       await db
         .prepare(
-          "INSERT INTO admin_plan_entitlements(id,user_id,plan,reason,granted_by,created_at) VALUES('override-old-admin',?,'unlimited','test','admin',?)",
+          "INSERT INTO admin_plan_entitlements(id,user_id,plan,reason,granted_by,created_at) VALUES('override-old-admin',?,'full_quarterly','test','admin',?)",
         )
         .bind(uid, now)
         .run();
@@ -317,7 +317,7 @@ print(json.dumps(out))`,
           ).status,
           403,
         );
-      for (const plan of ['free', 'lite', 'pro', 'unlimited', 'free']) {
+      for (const plan of ['free', 'full_monthly', 'full_quarterly', 'free']) {
         const changed = await call('admin', '/platform/subscriptions', {
           operation: 'override',
           userId: uid,
@@ -353,7 +353,7 @@ print(json.dumps(out))`,
           await call('admin', '/platform/subscriptions', {
             operation: 'override',
             userId: uid,
-            plan: 'pro',
+            plan: 'full_monthly',
             expires_at: '2020-01-01',
           })
         ).status,
@@ -363,7 +363,7 @@ print(json.dumps(out))`,
       // A gift activated after assignment must not bypass the assignment either.
       await db
         .prepare(
-          "INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,source) VALUES('override-new-gift',?,'unlimited',1,'year','available',?,'admin')",
+          "INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,source) VALUES('override-new-gift',?,'full_quarterly',1,'year','available',?,'admin')",
         )
         .bind(uid, now)
         .run();
@@ -377,7 +377,7 @@ print(json.dumps(out))`,
         .prepare('SELECT plan,paid FROM subscriptions WHERE user_id=?')
         .bind(uid)
         .first();
-      assert.equal(billing.plan, 'unlimited');
+      assert.equal(billing.plan, 'full_quarterly');
       assert.equal(billing.paid, 9900);
       assert.equal(
         (
@@ -395,7 +395,7 @@ print(json.dumps(out))`,
         )
         .bind(uid)
         .first();
-      assert.equal(logged.n, 5);
+      assert.equal(logged.n, 4);
       await db
         .prepare(
           "UPDATE account_plan_overrides SET expires_at='2020-01-01' WHERE user_id=?",
@@ -404,7 +404,7 @@ print(json.dumps(out))`,
         .run();
       assert.equal(
         (await call(uid, '/auth/session')).data.user.tier,
-        'unlimited',
+        'full_quarterly',
       );
     },
   );
@@ -490,7 +490,7 @@ print(json.dumps(out))`,
         per_user: null,
         starts_at: '2030-01-01T00:00:00+14:00',
         expires_at: '2029-12-31T12:00:00Z',
-        allowedPlans: ['pro'],
+        allowedPlans: ['full_monthly'],
       });
       assert.equal(coupon.status, 200, JSON.stringify(coupon));
       const storedCoupon = await db
@@ -505,7 +505,7 @@ print(json.dumps(out))`,
       const subscription = await call('admin', '/platform/subscriptions', {
         operation: 'activate',
         userId: 'manual-member',
-        plan: 'pro',
+        plan: 'full_monthly',
         expires_at: 'Wed, 02 Jan 2030 00:00:00 GMT',
         paid: 5000,
       });
@@ -527,15 +527,15 @@ print(json.dumps(out))`,
   );
 
   await t.test('R2 uploads are private, hashed, and deduplicated', async () => {
-    const first = await uploadImage('pro');
+    const first = await uploadImage('monthly');
     assert.equal(first.status, 201);
     const uploaded = await first.json();
     assert.match(uploaded.url, /^\/api\/cloudflare\/media\/notes\//);
-    const duplicate = await uploadImage('pro', 'renamed.png');
+    const duplicate = await uploadImage('monthly', 'renamed.png');
     assert.equal(duplicate.status, 200);
     assert.equal((await duplicate.json()).duplicate, true);
     const asset = await mf.dispatchFetch(`https://qraft.test${uploaded.url}`, {
-      headers: { cookie: '__Host-qraft_session=fixture-pro' },
+      headers: { cookie: '__Host-qraft_session=fixture-monthly' },
     });
     assert.equal(asset.status, 200);
     assert.equal(asset.headers.get('content-type'), 'image/png');
@@ -548,7 +548,7 @@ print(json.dumps(out))`,
       .prepare("UPDATE counters SET value=1024 WHERE id='r2-storage-bytes'")
       .run();
     assert.equal(
-      (await uploadImage('pro', 'storage-limit.png', 'different')).status,
+      (await uploadImage('monthly', 'storage-limit.png', 'different')).status,
       413,
     );
     await db
@@ -556,19 +556,19 @@ print(json.dumps(out))`,
       .bind(storage.value)
       .run();
     assert.equal(
-      (await uploadImage('pro', 'new.png', 'different')).status,
+      (await uploadImage('monthly', 'new.png', 'different')).status,
       429,
     );
     assert.equal(
       (
         await mf.dispatchFetch(`https://qraft.test${uploaded.url}`, {
-          headers: { cookie: '__Host-qraft_session=fixture-lite' },
+          headers: { cookie: '__Host-qraft_session=fixture-trial' },
         })
       ).status,
       429,
     );
     const rows = await db
-      .prepare("SELECT provider,file_hash FROM media WHERE owner_id='pro'")
+      .prepare("SELECT provider,file_hash FROM media WHERE owner_id='monthly'")
       .all();
     assert.equal(rows.results.length, 1);
     assert.equal(rows.results[0].provider, 'r2');
@@ -593,21 +593,21 @@ print(json.dumps(out))`,
         .prepare(
           'UPDATE profiles SET password_hash=?,password_salt=? WHERE uid=?',
         )
-        .bind(passwordHash, salt, 'lite')
+        .bind(passwordHash, salt, 'trial')
         .run();
       await db
         .prepare(
           'INSERT INTO sessions(token_hash,user_id,expires_at,verified,created_at) VALUES(?,?,?,1,?)',
         )
         .bind(
-          createHash('sha256').update('another-lite-session').digest('hex'),
-          'lite',
+          createHash('sha256').update('another-trial-session').digest('hex'),
+          'trial',
           Math.floor(Date.now() / 1000) + 3600,
           new Date().toISOString(),
         )
         .run();
       const updated = await call(
-        'lite',
+        'trial',
         '/auth/profile',
         { displayName: 'Updated Learner', phone: '+966 55 123 4567' },
         'PUT',
@@ -619,7 +619,7 @@ print(json.dumps(out))`,
         (
           await db
             .prepare('SELECT profile_json FROM profiles WHERE uid=?')
-            .bind('lite')
+            .bind('trial')
             .first()
         ).profile_json,
       );
@@ -627,7 +627,7 @@ print(json.dumps(out))`,
       assert.equal(
         (
           await call(
-            'lite',
+            'trial',
             '/auth/password',
             {
               currentPassword: 'wrong-password',
@@ -639,7 +639,7 @@ print(json.dumps(out))`,
         401,
       );
       const changed = await call(
-        'lite',
+        'trial',
         '/auth/password',
         { currentPassword, newPassword: 'replacement-password-456' },
         'PUT',
@@ -647,7 +647,7 @@ print(json.dumps(out))`,
       assert.equal(changed.status, 200, JSON.stringify(changed));
       const account = await db
         .prepare('SELECT password_hash,password_salt FROM profiles WHERE uid=?')
-        .bind('lite')
+        .bind('trial')
         .first();
       assert.equal(
         account.password_hash,
@@ -663,7 +663,7 @@ print(json.dumps(out))`,
         (
           await db
             .prepare('SELECT count(*) AS count FROM sessions WHERE user_id=?')
-            .bind('lite')
+            .bind('trial')
             .first()
         ).count,
         1,
@@ -738,7 +738,7 @@ print(json.dumps(out))`,
           200,
         );
         assert.equal(
-          (await save([profileOp(uid, { tier: 'pro' })])).status,
+          (await save([profileOp(uid, { tier: 'full_monthly' })])).status,
           403,
         );
         for (const kind of ['emails', 'universityIds']) {
@@ -851,11 +851,11 @@ print(json.dumps(out))`,
   await t.test(
     'Lite cannot administer discounts or subscriptions',
     async () => {
-      assert.equal((await call('lite', '/platform/discounts')).status, 403);
+      assert.equal((await call('trial', '/platform/discounts')).status, 403);
       assert.equal(
         (
-          await call('lite', '/platform/subscriptions', {
-            userId: 'lite',
+          await call('trial', '/platform/subscriptions', {
+            userId: 'trial',
             expires_at: '2099-01-01',
           })
         ).status,
@@ -894,12 +894,12 @@ print(json.dumps(out))`,
     },
   );
   await t.test(
-    'Pro monthly exam limit is enforced at exactly 250 starts',
+    'Full Access has no monthly exam quota after 250 starts',
     async () => {
       const now = new Date().toISOString();
       await db
         .prepare(`INSERT INTO test_registry(user_id,test_id,question_count,started_at)
-        SELECT 'pro-limit','pro-limit-'||value,1,? FROM json_each(?)`)
+        SELECT 'monthly-limit','monthly-limit-'||value,1,? FROM json_each(?)`)
         .bind(
           now,
           JSON.stringify(Array.from({ length: 249 }, (_, index) => index)),
@@ -907,19 +907,18 @@ print(json.dumps(out))`,
         .run();
       assert.equal(
         (
-          await call('pro-limit', '/platform/exam-start', {
+          await call('monthly-limit', '/platform/exam-start', {
             testId: randomUUID(),
             questionCount: 200,
           })
         ).status,
         201,
       );
-      const blocked = await call('pro-limit', '/platform/exam-start', {
+      const blocked = await call('monthly-limit', '/platform/exam-start', {
         testId: randomUUID(),
         questionCount: 1,
       });
-      assert.equal(blocked.status, 403);
-      assert.match(blocked.data.error, /monthly/i);
+      assert.equal(blocked.status, 201);
     },
   );
   await t.test('Free redemption is atomic and idempotent', async () => {
@@ -938,16 +937,16 @@ print(json.dumps(out))`,
       ).status,
       200,
     );
-    const quote = await call('lite', '/platform/quote', { code: 'FREE' });
+    const quote = await call('trial', '/platform/quote', { code: 'FREE' });
     assert.equal(quote.data.final, 0);
     const requestId = randomUUID();
-    const first = await call('lite', '/platform/checkout', {
+    const first = await call('trial', '/platform/checkout', {
       code: 'FREE',
       requestId,
     });
     assert.equal(first.data.upgraded, true, JSON.stringify(first));
     assert.equal(
-      (await call('lite', '/platform/checkout', { code: 'FREE', requestId }))
+      (await call('trial', '/platform/checkout', { code: 'FREE', requestId }))
         .data.upgraded,
       true,
     );
@@ -955,63 +954,63 @@ print(json.dumps(out))`,
       (await call('other', '/platform/quote', { code: 'FREE' })).status,
       400,
     );
-    assert.equal((await call('lite', '/auth/session')).data.user.tier, 'pro');
+    assert.equal((await call('trial', '/auth/session')).data.user.tier, 'full_monthly');
   });
   await t.test(
     'Credit rewards are atomic, activate separately, and fall back to the paid plan',
     async () => {
       const adjustment = await call('admin', '/platform/economy-admin', {
         operation: 'adjust-credits',
-        userId: 'lite',
+        userId: 'trial',
         amount: 700,
         reason: 'Reward integration fixture',
         requestId: randomUUID(),
       });
       assert.equal(adjustment.status, 200, JSON.stringify(adjustment));
       assert.equal(
-        (await call('lite', '/platform/contributions')).data.creditsBalance,
+        (await call('trial', '/platform/contributions')).data.creditsBalance,
         700,
       );
       const requestId = randomUUID();
-      const redemption = await call('lite', '/platform/rewards', {
+      const redemption = await call('trial', '/platform/rewards', {
         operation: 'redeem',
-        rewardId: 'unlimited-month',
+        rewardId: 'full-access-quarter',
         requestId,
       });
       assert.equal(redemption.status, 201, JSON.stringify(redemption));
-      const repeated = await call('lite', '/platform/rewards', {
+      const repeated = await call('trial', '/platform/rewards', {
         operation: 'redeem',
-        rewardId: 'unlimited-month',
+        rewardId: 'full-access-quarter',
         requestId,
       });
       assert.equal(repeated.status, 200);
       assert.equal(repeated.data.duplicate, true);
       assert.equal(
-        (await call('lite', '/platform/contributions')).data.creditsBalance,
+        (await call('trial', '/platform/contributions')).data.creditsBalance,
         0,
       );
-      const activation = await call('lite', '/platform/rewards', {
+      const activation = await call('trial', '/platform/rewards', {
         operation: 'activate',
         passId: redemption.data.pass.id,
       });
       assert.equal(activation.status, 200, JSON.stringify(activation));
-      assert.equal(activation.data.effectivePlan, 'unlimited');
+      assert.equal(activation.data.effectivePlan, 'full_quarterly');
       const paid = await db
         .prepare('SELECT plan,status FROM subscriptions WHERE user_id=?')
-        .bind('lite')
+        .bind('trial')
         .first();
-      assert.deepEqual(paid, { plan: 'pro', status: 'active' });
+      assert.deepEqual(paid, { plan: 'full_monthly', status: 'active' });
       await db
         .prepare(
           "UPDATE reward_passes SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
         )
         .bind(redemption.data.pass.id)
         .run();
-      assert.equal((await call('lite', '/auth/session')).data.user.tier, 'pro');
+      assert.equal((await call('trial', '/auth/session')).data.user.tier, 'full_monthly');
       assert.deepEqual(
         await db
           .prepare('SELECT plan,status FROM subscriptions WHERE user_id=?')
-          .bind('lite')
+          .bind('trial')
           .first(),
         paid,
       );
@@ -1028,12 +1027,12 @@ print(json.dumps(out))`,
       assert.match(r.data.url, /wa\.me\/966537043984/);
       assert.equal(
         (await call('other', '/auth/session')).data.user.tier,
-        'lite',
+        'free',
       );
     },
   );
   await t.test(
-    'Lite limits are enforced and previous saved state remains intact',
+    'Free trial limits are enforced and previous saved state remains intact',
     async () => {
       const state = {
         version: 1,
@@ -1061,14 +1060,14 @@ print(json.dumps(out))`,
           await call(
             'other',
             '/state',
-            { state: { ...state, tests: [make('oversized', 51)] } },
+            { state: { ...state, tests: [make('oversized', 16)] } },
             'PUT',
           )
         ).status,
         403,
       );
-      for (let i = 0; i < 30; i++) {
-        state.tests.push(make(`test-${i}`, 30));
+      for (let i = 0; i < 2; i++) {
+        state.tests.push(make(`test-${i}`, 15));
       }
       assert.equal(
         (await call('other', '/state', { state }, 'PUT')).status,
@@ -1082,7 +1081,7 @@ print(json.dumps(out))`,
         ],
       };
       assert.equal(
-        (await call('lite', '/state', { state: duplicateTitles }, 'PUT'))
+        (await call('trial', '/state', { state: duplicateTitles }, 'PUT'))
           .status,
         409,
       );
@@ -1090,12 +1089,12 @@ print(json.dumps(out))`,
         'other',
         '/state',
         {
-          state: { ...state, tests: [...state.tests, make('thirty-first', 1)] },
+          state: { ...state, tests: [...state.tests, make('third-test', 1)] },
         },
         'PUT',
       );
       assert.equal(denied.status, 403, JSON.stringify(denied));
-      assert.equal((await call('other', '/state')).data.state.tests.length, 30);
+      assert.equal((await call('other', '/state')).data.state.tests.length, 2);
       await call('other', '/state', { state: { ...state, tests: [] } }, 'PUT');
       assert.equal(
         (
@@ -1117,10 +1116,10 @@ print(json.dumps(out))`,
         (
           await call('other', '/platform/exam-start', {
             testId: randomUUID(),
-            questionCount: 50,
+            questionCount: 15,
           })
         ).status,
-        201,
+        403,
       );
     },
   );
@@ -1130,9 +1129,9 @@ print(json.dumps(out))`,
       const moderator = (await call('moderator', '/auth/session')).data.user;
       const reviewer = (await call('reviewer', '/auth/session')).data.user;
       const accessManager = (await call('access', '/auth/session')).data.user;
-      assert.equal(moderator.effectivePlan, 'lite');
-      assert.equal(reviewer.effectivePlan, 'lite');
-      assert.equal(accessManager.effectivePlan, 'lite');
+      assert.equal(moderator.effectivePlan, 'free');
+      assert.equal(reviewer.effectivePlan, 'free');
+      assert.equal(accessManager.effectivePlan, 'free');
       assert.equal(moderator.isAdmin, true);
       assert.equal(reviewer.isAdmin, false);
       assert.equal(accessManager.isAdmin, true);
@@ -1164,7 +1163,7 @@ print(json.dumps(out))`,
           'PUT',
         );
       assert.equal(
-        (await updateProfile({ ...member, tier: 'pro' })).status,
+        (await updateProfile({ ...member, tier: 'full_monthly' })).status,
         403,
       );
       assert.equal(
@@ -1184,7 +1183,7 @@ print(json.dumps(out))`,
             .first()
         ).profile_json,
       );
-      assert.equal(savedMember.tier, 'lite');
+      assert.equal(savedMember.tier, 'free');
       assert.deepEqual(savedMember.platformRoles, ['reviewer']);
     },
   );
@@ -1198,12 +1197,12 @@ print(json.dumps(out))`,
         shortName: 'EDITOR',
         description: 'Before editor update',
         createdAt: now,
-        createdById: 'lite',
-        createdByName: 'lite',
+        createdById: 'trial',
+        createdByName: 'trial',
         archived: false,
         essential: false,
-        ownerId: 'lite',
-        ownerName: 'lite',
+        ownerId: 'trial',
+        ownerName: 'trial',
         visibility: 'private',
         shareEnabled: false,
         reviewerIds: [],
@@ -1215,8 +1214,8 @@ print(json.dumps(out))`,
         userId: 'editor',
         userName: 'editor',
         role: 'editor',
-        grantedById: 'lite',
-        grantedByName: 'lite',
+        grantedById: 'trial',
+        grantedByName: 'trial',
         createdAt: now,
       };
       const viewerMembership = {
@@ -1225,12 +1224,12 @@ print(json.dumps(out))`,
         userId: 'other',
         userName: 'other',
         role: 'viewer',
-        grantedById: 'lite',
-        grantedByName: 'lite',
+        grantedById: 'trial',
+        grantedByName: 'trial',
         createdAt: now,
       };
       for (const [type, id, ownerId, value] of [
-        ['qbanks', bank.id, 'lite', bank],
+        ['qbanks', bank.id, 'trial', bank],
         ['qbankMemberships', editorMembership.id, 'editor', editorMembership],
         ['qbankMemberships', viewerMembership.id, 'other', viewerMembership],
       ]) {
@@ -1257,8 +1256,8 @@ print(json.dumps(out))`,
         userId: 'reviewer2',
         userName: 'reviewer2',
         role: 'reviewer',
-        grantedById: 'lite',
-        grantedByName: 'lite',
+        grantedById: 'trial',
+        grantedByName: 'trial',
         createdAt: now,
       };
       await db
@@ -1288,15 +1287,15 @@ print(json.dumps(out))`,
         qbankId: bank.id,
         email: 'manual-member@example.test',
         role: 'editor',
-        invitedById: 'lite',
-        invitedByName: 'lite',
+        invitedById: 'trial',
+        invitedByName: 'trial',
         createdAt: now,
         status: 'pending',
       };
       assert.equal(
         (
           await call(
-            'lite',
+            'trial',
             '/collaboration',
             {
               operations: [
@@ -1355,8 +1354,8 @@ print(json.dumps(out))`,
                     userId: 'manual-member',
                     userName: 'manual-member',
                     role: 'editor',
-                    grantedById: 'lite',
-                    grantedByName: 'lite',
+                    grantedById: 'trial',
+                    grantedByName: 'trial',
                     createdAt: acceptedAt,
                     inviteId: invitation.id,
                   },
@@ -1462,7 +1461,7 @@ print(json.dumps(out))`,
       assert.equal(
         (
           await call(
-            'lite',
+            'trial',
             '/collaboration',
             {
               operations: [
@@ -1486,7 +1485,7 @@ print(json.dumps(out))`,
       assert.equal(
         (
           await call(
-            'lite',
+            'trial',
             '/collaboration',
             {
               operations: [
@@ -1514,10 +1513,10 @@ print(json.dumps(out))`,
         shortName: 'CREATED',
         description: 'Before update',
         createdAt: now,
-        createdById: 'pro',
-        createdByName: 'pro',
-        ownerId: 'pro',
-        ownerName: 'pro',
+        createdById: 'monthly',
+        createdByName: 'monthly',
+        ownerId: 'monthly',
+        ownerName: 'monthly',
         visibility: 'private',
         shareEnabled: false,
         reviewerIds: [],
@@ -1526,7 +1525,7 @@ print(json.dumps(out))`,
         essential: false,
       };
       const create = await call(
-        'pro',
+        'monthly',
         '/collaboration',
         {
           operations: [
@@ -1537,7 +1536,7 @@ print(json.dumps(out))`,
       );
       assert.equal(create.status, 200, JSON.stringify(create.data));
       assert.equal(
-        (await call('pro', '/collaboration')).data.collaboration.qbanks.find(
+        (await call('monthly', '/collaboration')).data.collaboration.qbanks.find(
           (item) => item.id === bank.id,
         )?.name,
         bank.name,
@@ -1549,7 +1548,7 @@ print(json.dumps(out))`,
         description: 'After update',
       };
       const edit = await call(
-        'pro',
+        'monthly',
         '/collaboration',
         {
           operations: [
@@ -1560,7 +1559,7 @@ print(json.dumps(out))`,
       );
       assert.equal(edit.status, 200, JSON.stringify(edit.data));
       const reloaded = (
-        await call('pro', '/collaboration')
+        await call('monthly', '/collaboration')
       ).data.collaboration.qbanks.find((item) => item.id === bank.id);
       assert.equal(reloaded?.name, updated.name);
       assert.equal(reloaded?.description, updated.description);
@@ -1576,10 +1575,10 @@ print(json.dumps(out))`,
         shortName: 'ADMIN',
         description: 'Managed from the Superadmin workspace',
         createdAt: now,
-        createdById: 'pro',
-        createdByName: 'pro',
-        ownerId: 'pro',
-        ownerName: 'pro',
+        createdById: 'monthly',
+        createdByName: 'monthly',
+        ownerId: 'monthly',
+        ownerName: 'monthly',
         visibility: 'public',
         shareEnabled: false,
         reviewerIds: [],
@@ -1588,7 +1587,7 @@ print(json.dumps(out))`,
         essential: false,
       };
       const create = await call(
-        'pro',
+        'monthly',
         '/collaboration',
         {
           operations: [
@@ -1844,7 +1843,7 @@ print(json.dumps(out))`,
     async () => {
       const id = `forged-audit-${randomUUID()}`;
       const forged = await call(
-        'lite',
+        'trial',
         '/collaboration',
         {
           operations: [
@@ -1854,11 +1853,11 @@ print(json.dumps(out))`,
               id,
               value: {
                 id,
-                actorId: 'lite',
+                actorId: 'trial',
                 actorName: 'System',
                 action: 'subscription_plan_overridden',
                 entityType: 'account',
-                entityId: 'lite',
+                entityId: 'trial',
                 createdAt: new Date().toISOString(),
                 detail: 'forged',
               },
@@ -1900,18 +1899,18 @@ print(json.dumps(out))`,
         .run();
       const forged = {
         format: 'qraft-personal-backup-v1',
-        ownerId: 'pro',
+        ownerId: 'monthly',
         exportedAt: now,
         records: [
           {
             type: 'qbanks',
             id,
             qbank_id: id,
-            owner_id: 'pro',
+            owner_id: 'monthly',
             payload: {
               ...original,
               name: 'Overwritten bank',
-              ownerId: 'pro',
+              ownerId: 'monthly',
             },
             updated_at: now,
           },
@@ -1919,7 +1918,7 @@ print(json.dumps(out))`,
         flashcards: null,
       };
       const response = await call(
-        'pro',
+        'monthly',
         '/platform/personal-backup',
         forged,
         'PUT',
@@ -1945,18 +1944,18 @@ print(json.dumps(out))`,
         .prepare("DELETE FROM records WHERE type='qbanks' AND id=?")
         .bind(id)
         .run();
-      const exported = await call('pro', '/platform/personal-backup');
+      const exported = await call('monthly', '/platform/personal-backup');
       assert.equal(exported.status, 200, JSON.stringify(exported));
       assert.equal(exported.data.signatureVersion, 'hmac-sha256-v1');
       assert.match(exported.data.signature, /^[a-f0-9]{64}$/);
       const restored = await call(
-        'pro',
+        'monthly',
         '/platform/personal-backup',
         exported.data,
         'PUT',
       );
       assert.equal(restored.status, 200, JSON.stringify(restored));
-      await db.prepare("DELETE FROM app_states WHERE user_id='pro'").run();
+      await db.prepare("DELETE FROM app_states WHERE user_id='monthly'").run();
     },
   );
   await t.test(
@@ -2004,7 +2003,7 @@ print(json.dumps(out))`,
         status: 'active',
       };
       const duplicateTests = await call(
-        'pro',
+        'monthly',
         '/state',
         { state: emptyState({ tests: [test, { ...test }] }) },
         'PUT',
@@ -2022,7 +2021,7 @@ print(json.dumps(out))`,
       };
       const deckB = { ...deckA, id: 'cycle-b', name: 'B', parentId: 'cycle-a' };
       const cyclicDecks = await call(
-        'pro',
+        'monthly',
         '/state',
         { state: emptyState({ flashcardDecks: [deckA, deckB] }) },
         'PUT',
@@ -2030,7 +2029,7 @@ print(json.dumps(out))`,
       assert.equal(cyclicDecks.status, 400, JSON.stringify(cyclicDecks));
       assert.equal(
         await db
-          .prepare("SELECT user_id FROM app_states WHERE user_id='pro'")
+          .prepare("SELECT user_id FROM app_states WHERE user_id='monthly'")
           .first(),
         null,
       );
@@ -2057,7 +2056,7 @@ print(json.dumps(out))`,
         ],
       });
       const result = await call(
-        'pro',
+        'monthly',
         '/state/exam',
         {
           ...state,
@@ -2070,7 +2069,7 @@ print(json.dumps(out))`,
       assert.equal(result.status, 400, JSON.stringify(result));
       assert.equal(
         await db
-          .prepare("SELECT user_id FROM app_states WHERE user_id='pro'")
+          .prepare("SELECT user_id FROM app_states WHERE user_id='monthly'")
           .first(),
         null,
       );
@@ -2125,21 +2124,21 @@ print(json.dumps(out))`,
       );
       assert.equal(
         (await call('reviewer', '/auth/session')).data.user.effectivePlan,
-        'lite',
+        'free',
       );
-      assert.equal((await call('pro', '/state', { state }, 'PUT')).status, 200);
+      assert.equal((await call('monthly', '/state', { state }, 'PUT')).status, 200);
       assert.equal(
-        (await call('pro', '/state')).data.state.flashcards.length,
+        (await call('monthly', '/state')).data.state.flashcards.length,
         1,
       );
       assert.equal(
-        (await call('lite', '/state')).data.state?.flashcards?.length ?? 0,
+        (await call('trial', '/state')).data.state?.flashcards?.length ?? 0,
         0,
       );
       assert.equal(
         (
           await call(
-            'pro',
+            'monthly',
             '/state',
             {
               state: {
@@ -2207,7 +2206,7 @@ print(json.dumps(out))`,
           },
         );
       assert.equal((await connect('other', 'admin')).status, 403);
-      assert.equal((await connect('other', 'user:lite')).status, 403);
+      assert.equal((await connect('other', 'user:trial')).status, 403);
       assert.equal((await connect('other', 'bank:missing')).status, 403);
       assert.equal(
         (await connect('other', 'user:other', 'https://evil.test')).status,
@@ -2277,7 +2276,7 @@ print(json.dumps(out))`,
         .digest('hex');
       assert.equal(
         (
-          await call('pro', '/platform/import', {
+          await call('monthly', '/platform/import', {
             qbankId: 'smle-gs',
             requestId: randomUUID(),
             fileName: 'invalid.json',
@@ -2294,7 +2293,7 @@ print(json.dumps(out))`,
         fileHash: createHash('sha256').update('fixture-import').digest('hex'),
         questions: [payload],
       };
-      const first = await call('pro', '/platform/import', request);
+      const first = await call('monthly', '/platform/import', request);
       assert.equal(first.status, 200, JSON.stringify(first));
       assert.equal(first.data.successful, 1);
       assert.equal(
@@ -2302,10 +2301,10 @@ print(json.dumps(out))`,
         'Fixture.pdf - p.12',
       );
       assert.equal(
-        (await call('pro', '/platform/import', request)).data.proposals[0].id,
+        (await call('monthly', '/platform/import', request)).data.proposals[0].id,
         first.data.proposals[0].id,
       );
-      const partial = await call('pro', '/platform/import', {
+      const partial = await call('monthly', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: 'gemini-output.txt',
@@ -2322,8 +2321,8 @@ print(json.dumps(out))`,
         partial.data.proposals[0].payload.sourceReference,
         'Scan.pdf - p.4',
       );
-      await db.prepare("INSERT INTO import_policies VALUES('pro',75,5,?)").bind(new Date().toISOString()).run();
-      const duplicateName = await call('pro', '/platform/import', {
+      await db.prepare("INSERT INTO import_policies VALUES('monthly',75,5,?)").bind(new Date().toISOString()).run();
+      const duplicateName = await call('monthly', '/platform/import', {
         ...request,
         requestId: randomUUID(),
         fileHash: createHash('sha256').update('different').digest('hex'),
@@ -2331,7 +2330,7 @@ print(json.dumps(out))`,
       assert.equal(duplicateName.status, 200, JSON.stringify(duplicateName));
       assert.equal(duplicateName.data.successful, 1);
       assert.equal(duplicateName.data.skippedDuplicates, 0);
-      const duplicateHash = await call('pro', '/platform/import', {
+      const duplicateHash = await call('monthly', '/platform/import', {
         ...request,
         requestId: randomUUID(),
         fileName: 'renamed.json',
@@ -2355,7 +2354,7 @@ print(json.dumps(out))`,
         stem: `Daily limit fixture ${index} with distinct clinical wording`,
         topic: 'Daily import quota',
       });
-      const third = await call('pro', '/platform/import', {
+      const third = await call('monthly', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: 'daily-third.json',
@@ -2363,7 +2362,7 @@ print(json.dumps(out))`,
         questions: [dailyPayload(3)],
       });
       assert.equal(third.status, 200, JSON.stringify(third));
-      const fourth = await call('pro', '/platform/import', {
+      const fourth = await call('monthly', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: 'daily-fourth.json',
@@ -2380,7 +2379,7 @@ print(json.dumps(out))`,
       const now = new Date().toISOString();
       await db
         .prepare(`INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at)
-          SELECT 'questionProposals','pending-limit-'||value,'smle-gs','pro-pending',
+          SELECT 'questionProposals','pending-limit-'||value,'smle-gs','monthly-pending',
             json_object(
               'id','pending-limit-'||value,
               'status','pending',
@@ -2389,7 +2388,7 @@ print(json.dumps(out))`,
           FROM json_each(?)`)
         .bind(
           now,
-          JSON.stringify(Array.from({ length: 300 }, (_, index) => index)),
+          JSON.stringify(Array.from({ length: 1_000 }, (_, index) => index)),
         )
         .run();
       const request = (suffix) => ({
@@ -2413,7 +2412,7 @@ print(json.dumps(out))`,
         ],
       });
       const queueBlocked = await call(
-        'pro-pending',
+        'monthly-pending',
         '/platform/import',
         request('pending-full'),
       );
@@ -2421,18 +2420,18 @@ print(json.dumps(out))`,
       assert.match(queueBlocked.data.error, /submission queue is full/i);
       await db
         .prepare(
-          "DELETE FROM records WHERE type='questionProposals' AND owner_id='pro-pending'",
+          "DELETE FROM records WHERE type='questionProposals' AND owner_id='monthly-pending'",
         )
         .run();
       const suspended = await call('admin', '/platform/economy-admin', {
         operation: 'suspend-json',
-        userId: 'pro-pending',
+        userId: 'monthly-pending',
         reason: 'Import suspension integration fixture',
         days: 7,
       });
       assert.equal(suspended.status, 200);
       const suspensionBlocked = await call(
-        'pro-pending',
+        'monthly-pending',
         '/platform/import',
         request('suspended-import'),
       );
@@ -2440,7 +2439,7 @@ print(json.dumps(out))`,
       assert.match(suspensionBlocked.data.error, /suspended until/i);
       assert.equal(
         (
-          await call('pro-pending', '/platform/exam-start', {
+          await call('monthly-pending', '/platform/exam-start', {
             testId: randomUUID(),
             questionCount: 10,
           })
@@ -2595,7 +2594,7 @@ print(json.dumps(out))`,
         sourceReference: `Source ${index}`,
         images: [],
       });
-      const imported = await call('unlimited', '/platform/import', {
+      const imported = await call('quarterly', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: 'bulk-150.json',
@@ -2626,7 +2625,7 @@ print(json.dumps(out))`,
       assert.equal(approval.data.reviewerCompletedDelta, 150);
       assert.equal(approval.data.updatedProposals.length, 150);
       assert.equal(approval.data.updatedQuestions.length, 150);
-      const rejectedImport = await call('unlimited', '/platform/import', {
+      const rejectedImport = await call('quarterly', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: 'bulk-rejected.json',
@@ -2721,7 +2720,7 @@ print(json.dumps(out))`,
           `${question.options[2]} now`,
         ],
       };
-      const imported = await call('unlimited', '/platform/import', {
+      const imported = await call('quarterly', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: `duplicate-${marker}.json`,
@@ -2752,7 +2751,7 @@ print(json.dumps(out))`,
       });
       assert.equal(blockedBulk.status, 409);
       const selfReview = await call(
-        'unlimited',
+        'quarterly',
         '/platform/duplicate-resolve',
         {
           proposalId: duplicate.id,
@@ -2803,7 +2802,7 @@ print(json.dumps(out))`,
       assert.equal(medicalReview.data.reviewed, 2);
 
       const canonicalId = medicalReview.data.updatedQuestions[0].id;
-      const rejectedImport = await call('unlimited', '/platform/import', {
+      const rejectedImport = await call('quarterly', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: `duplicate-reject-${marker}.json`,
@@ -2859,7 +2858,7 @@ print(json.dumps(out))`,
         (
           await db
             .prepare(
-              "SELECT count(*) AS value FROM json_import_suspensions WHERE user_id='unlimited' AND created_by='system'",
+              "SELECT count(*) AS value FROM json_import_suspensions WHERE user_id='quarterly' AND created_by='system'",
             )
             .first()
         ).value,
@@ -2883,7 +2882,7 @@ print(json.dumps(out))`,
         stem: `Stale duplicate case ${staleMarker}`,
         topic: staleMarker,
       };
-      const staleImport = await call('unlimited', '/platform/import', {
+      const staleImport = await call('quarterly', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: `duplicate-stale-${staleMarker}.json`,
@@ -2968,7 +2967,7 @@ print(json.dumps(out))`,
       // Earlier import tests already consumed this fixture account's daily quota.
       await db
         .prepare('UPDATE imported_files SET uploaded_at=? WHERE user_id=?')
-        .bind(new Date(Date.now() - 86_400_000).toISOString(), 'unlimited')
+        .bind(new Date(Date.now() - 86_400_000).toISOString(), 'quarterly')
         .run();
       const makePair = async (marker) => {
         const question = {
@@ -2983,7 +2982,7 @@ print(json.dumps(out))`,
           sourceReference: 'Linked review source',
           images: [],
         };
-        const imported = await call('unlimited', '/platform/import', {
+        const imported = await call('quarterly', '/platform/import', {
           qbankId: 'smle-gs',
           requestId: randomUUID(),
           fileName: `linked-${marker}.json`,
@@ -3140,11 +3139,11 @@ print(json.dumps(out))`,
           },
           'PUT',
         );
-      assert.equal((await save('lite', { lite: 0 })).status, 200);
-      assert.equal((await save('other', { lite: 0, other: 1 })).status, 200);
-      assert.equal((await save('lite', { lite: 2, other: 1 })).status, 200);
-      assert.equal((await save('lite', { lite: 1, other: 2 })).status, 403);
-      assert.equal((await save('lite', { lite: 99, other: 1 })).status, 403);
+      assert.equal((await save('trial', { trial: 0 })).status, 200);
+      assert.equal((await save('other', { trial: 0, other: 1 })).status, 200);
+      assert.equal((await save('trial', { trial: 2, other: 1 })).status, 200);
+      assert.equal((await save('trial', { trial: 1, other: 2 })).status, 403);
+      assert.equal((await save('trial', { trial: 99, other: 1 })).status, 403);
     },
   );
   await t.test(
@@ -3158,7 +3157,7 @@ print(json.dumps(out))`,
       });
       assert.equal(r.status, 200, JSON.stringify(r));
       const id = r.data.id;
-      assert.equal((await call('lite', `/contact?id=${id}`)).status, 404);
+      assert.equal((await call('trial', `/contact?id=${id}`)).status, 404);
       assert.equal(
         (
           await call('other', '/contact', {
@@ -3300,7 +3299,7 @@ print(json.dumps(out))`,
       assert.equal(created.status, 200);
       const id = created.data.id;
       assert.equal(
-        (await call('lite', '/contact', { id }, 'DELETE')).status,
+        (await call('trial', '/contact', { id }, 'DELETE')).status,
         404,
       );
       assert.equal((await call('other', `/contact?id=${id}`)).status, 200);
@@ -3337,13 +3336,13 @@ print(json.dumps(out))`,
       assert.equal(audit.total, 2);
     },
   );
-  await t.test('Expired Pro becomes Lite and expiry is audited', async () => {
+  await t.test('Expired Full Access returns to Free trial and expiry is audited', async () => {
     await db
       .prepare(
-        "UPDATE subscriptions SET starts_at='2019-01-01T00:00:00.000Z', expires_at='2020-01-01T00:00:00.000Z' WHERE user_id='lite'",
+        "UPDATE subscriptions SET starts_at='2019-01-01T00:00:00.000Z', expires_at='2020-01-01T00:00:00.000Z' WHERE user_id='trial'",
       )
       .run();
-    assert.equal((await call('lite', '/auth/session')).data.user.tier, 'lite');
+    assert.equal((await call('trial', '/auth/session')).data.user.tier, 'free');
     assert.equal(
       (
         await db

@@ -19,7 +19,7 @@ import {
 import { bankAccessState } from '@/lib/qbank-access-repository';
 import { json } from '@/server/http/response';
 import { getPlanLimits } from '@/features/subscriptions/domain/plan-config';
-import { compactSourceReference } from '@/lib/question-import';
+import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 import { ImportDuplicateIndex } from '@/features/imports/domain/import-duplicate-index';
 import { exactImportIdentity } from '@/features/imports/domain/exact-import-duplicates';
 export { ImportDuplicateIndex };
@@ -170,15 +170,7 @@ export async function importPreview(
             ...finding,
             payload: {
               ...candidate.fullPayload,
-              sourceReference:
-                candidate.fullPayload.sourceReference ||
-                (candidate.fullPayload.sourceFile &&
-                candidate.fullPayload.sourcePage
-                  ? compactSourceReference(
-                      candidate.fullPayload.sourceFile,
-                      candidate.fullPayload.sourcePage,
-                    )
-                  : ''),
+              sourceReference: readQuestionSource(candidate.fullPayload).sourceReference,
             },
             canDelete:
               canEditBank(user, bank, state.memberships) ||

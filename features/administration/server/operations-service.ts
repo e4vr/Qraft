@@ -6,6 +6,7 @@ import { json } from '@/server/http/response';
 import { auditStatement } from '@/lib/platform-server';
 import {
   PLAN_ORDER,
+  PAID_PLAN_IDS,
   PLAN_LIMITS,
   isPlanId,
 } from '@/features/subscriptions/domain/plan-config';
@@ -33,7 +34,7 @@ export function maintenanceActive(settings: SiteOperations, now = Date.now()) {
 }
 export async function planCatalog() {
   const rows = await env.DB.prepare(
-    'SELECT plan,coalesce(price_halalas,price_sar_year*100) AS price,policy_json,updated_at FROM plan_prices',
+    'SELECT plan,coalesce(price_halalas,price_sar_period*100) AS price,policy_json,updated_at FROM plan_prices',
   ).all<{
     plan: string;
     price: number;
@@ -48,7 +49,7 @@ export async function planCatalog() {
         ...PLAN_LIMITS[id],
         description: '',
         ...(row?.policy_json ? JSON.parse(row.policy_json) : {}),
-        price: row?.price ?? PLAN_LIMITS[id].priceSarYear * 100,
+        price: row?.price ?? PLAN_LIMITS[id].priceSarPeriod * 100,
       };
     }),
   };
@@ -157,7 +158,7 @@ export async function operationsApi(request: Request, action: string) {
     return json(await siteOperations());
   }
   if (action === 'plan-pricing') {
-    if (!Array.isArray(input.plans) || ![3, 4].includes(input.plans.length))
+    if (!Array.isArray(input.plans) || ![2, 3].includes(input.plans.length))
       return json(
         {
           error:
@@ -181,7 +182,7 @@ export async function operationsApi(request: Request, action: string) {
           (plan.id === 'free' && plan.price !== 0) ||
           plan.price > 10_000_000,
       ) ||
-      !['lite', 'pro', 'unlimited'].every((id) =>
+      !PAID_PLAN_IDS.every((id) =>
         plans.some((plan) => plan.id === id),
       )
     )
@@ -216,7 +217,7 @@ export async function operationsApi(request: Request, action: string) {
     await env.DB.batch([
       ...plans.map((plan) =>
         env.DB.prepare(
-          'UPDATE plan_prices SET price_halalas=?,price_sar_year=?,policy_json=coalesce(?,policy_json),updated_at=? WHERE plan=?',
+          'UPDATE plan_prices SET price_halalas=?,price_sar_period=?,policy_json=coalesce(?,policy_json),updated_at=? WHERE plan=?',
         ).bind(
           plan.price,
           Number(plan.price) / 100,

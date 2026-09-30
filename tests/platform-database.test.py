@@ -17,7 +17,7 @@ class PlatformDatabaseTests(unittest.TestCase):
         for path in sorted((ROOT / 'drizzle').glob('*.sql')):
             self.db.executescript(path.read_text(encoding='utf-8'))
         for uid in ['one', 'two', 'admin']:
-            profile = json.dumps(dict(uid=uid, email=uid+'@example.test', displayName=uid, tier='lite', role='super_admin' if uid=='admin' else 'student', status='approved', platformRoles=[]))
+            profile = json.dumps(dict(uid=uid, email=uid+'@example.test', displayName=uid, tier='free', role='super_admin' if uid=='admin' else 'student', status='approved', platformRoles=[]))
             self.db.execute(
                 'INSERT INTO profiles(uid,email,password_hash,password_salt,profile_json,totp_secret,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
                 (uid,uid+'@example.test','unused','unused',profile,None,'2026-01-01','2026-01-01'),
@@ -34,8 +34,8 @@ class PlatformDatabaseTests(unittest.TestCase):
             list(args.values()),
         )
 
-    def redeem(self, user='one', event='event1', final=0, discount=5000, admin=None):
-        self.db.execute('INSERT INTO subscription_events(id,user_id,email,name,admin_id,code_id,code,action,original,discount,final,status,starts_at,expires_at,created_at,detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (event,user,user+'@example.test',user,admin,'code1','FREE','discount_redeemed',5000,discount,final,'success','2026-09-05T00:00:00Z','2027-09-05T00:00:00Z','2026-09-05T00:00:00Z','test'))
+    def redeem(self, user='one', event='event1', final=0, discount=10000, admin=None):
+        self.db.execute('INSERT INTO subscription_events(id,user_id,email,name,admin_id,code_id,code,action,original,discount,final,status,starts_at,expires_at,created_at,detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (event,user,user+'@example.test',user,admin,'code1','FREE','discount_redeemed',10000,discount,final,'success','2026-09-05T00:00:00Z','2027-09-05T00:00:00Z','2026-09-05T00:00:00Z','test'))
 
     def test_seed_preserved(self):
         self.assertEqual(self.db.execute('SELECT count(*) FROM question_registry').fetchone()[0],217)
@@ -48,7 +48,7 @@ class PlatformDatabaseTests(unittest.TestCase):
     def test_redemption_is_atomic_and_cannot_exceed_cap(self):
         self.code()
         self.redeem()
-        self.assertEqual(self.db.execute("SELECT plan FROM subscriptions WHERE user_id='one'").fetchone()[0],'pro')
+        self.assertEqual(self.db.execute("SELECT plan FROM subscriptions WHERE user_id='one'").fetchone()[0],'full_monthly')
         self.assertEqual(self.db.execute("SELECT expires_at FROM subscriptions WHERE user_id='one'").fetchone()[0],'2027-09-05T00:00:00Z')
         with self.assertRaises(sqlite3.IntegrityError): self.redeem('two','event2')
         self.assertEqual(self.db.execute('SELECT uses FROM discount_codes').fetchone()[0],1)
@@ -69,13 +69,13 @@ class PlatformDatabaseTests(unittest.TestCase):
 
     def test_server_price_change_invalidates_stale_quote(self):
         self.code()
-        self.db.execute("UPDATE plan_prices SET price_sar_year=20 WHERE plan='pro'")
+        self.db.execute("UPDATE plan_prices SET price_sar_period=20 WHERE plan='full_monthly'")
         with self.assertRaises(sqlite3.IntegrityError): self.redeem()
 
     def test_fixed_discount_uses_current_plan_price(self):
         self.code(kind='fixed',amount=500,max_uses=None)
-        self.redeem(final=4500,discount=500)
-        self.assertEqual(self.db.execute("SELECT paid FROM subscriptions WHERE user_id='one'").fetchone()[0],4500)
+        self.redeem(final=9500,discount=500)
+        self.assertEqual(self.db.execute("SELECT paid FROM subscriptions WHERE user_id='one'").fetchone()[0],9500)
 
     def test_registry_keeps_idempotent_test_identity(self):
         for i in range(3):

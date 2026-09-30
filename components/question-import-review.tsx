@@ -13,6 +13,7 @@ import { planExactImportSkip } from '@/features/imports/domain/exact-import-dupl
 import {
   parseQuestionImportReport,
   buildQuestionPrompt,
+  questionJsonExample,
   importedSourceReference,
   type SkippedImportedQuestion,
   type QuestionPromptSettings,
@@ -63,11 +64,11 @@ function splitImport(
 
 export function QuestionImportReview({
   bankId,
-  unlimited = false,
+  adminImportPrivileges = false,
   onImported,
 }: {
   bankId: string;
-  unlimited?: boolean;
+  adminImportPrivileges?: boolean;
   onImported: (result: { proposals: QuestionProposal[]; specialties: QBankSpecialty[]; topics: QBankTopic[]; classificationRevision?: number }) => void;
 }) {
   const [drafts, setDrafts] = useState<QuestionProposalPayload[]>([]),
@@ -91,7 +92,7 @@ export function QuestionImportReview({
   const [checking,setChecking]=useState(false);
   const [limits,setLimits]=useState({questionsPerImport:150,importsPerDay:5});
   const [importPolicy, setImportPolicy] = useState<ImportSettings>(DEFAULT_IMPORT_SETTINGS);
-  const [adminImport, setAdminImport] = useState(unlimited);
+  const [adminImport, setAdminImport] = useState(adminImportPrivileges);
   const [scanComplete, setScanComplete] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const chunkChoices=useRef<ImportChoice[][]>([]);
@@ -408,7 +409,7 @@ export function QuestionImportReview({
           }),
         });
         onImported({ proposals: result.proposals, specialties: result.specialties ?? [], topics: result.topics ?? [], classificationRevision: result.classificationRevision });
-        if (!unlimited) setSkipped(result.skipped);
+        if (!adminImportPrivileges) setSkipped(result.skipped);
         importedCount.current += result.successful;
         flaggedCount.current += result.flaggedDuplicates ?? 0;
         skippedDuplicateCount.current += result.skippedDuplicates ?? 0;
@@ -525,8 +526,9 @@ export function QuestionImportReview({
           <h3 className="font-semibold">Prepare content with AI</h3>
           <p className="mt-1 text-sm text-muted-foreground" dir="auto">Choose your settings, copy the prompt into your AI tool with your file, then upload the resulting JSON here for review. Qraft does not send your file to an AI service.</p>
           <p className="mt-2 text-sm text-muted-foreground" dir="auto">The prompt asks for a specialty and topic for each question. Qraft reads these from the JSON so you can review and edit them before submitting.</p>
+          <p className="mt-2 text-sm text-muted-foreground" dir="auto">The original source name is required and stays the same across its questions. The page is a separate optional field; omit it when unknown.</p>
         </div>
-        {!lecture && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">The prompt asks the AI to convert the bank using text extraction or OCR, correct spelling in context, complete four plausible options, and include the question number, page and explanation.</p>}
+        {!lecture && <p className="rounded-lg bg-muted p-3 text-sm" dir="auto">The prompt asks the AI to convert the bank using text extraction or OCR, correct spelling in context, complete four plausible options, and include the source name and explanation. Original question numbers and pages are included only when known.</p>}
         {lecture && <div className="grid min-w-0 gap-4 sm:grid-cols-2">
           <label className="min-w-0 text-sm font-semibold">Question type
             <select className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" value={settings.kind} onChange={e => setSettings(s => ({ ...s, kind: e.target.value as QuestionPromptSettings['kind'] }))}>
@@ -569,6 +571,11 @@ export function QuestionImportReview({
           <summary className="min-h-11 cursor-pointer py-3">Preview AI prompt</summary>
           <textarea aria-label="Generated AI prompt" readOnly dir="ltr" value={prompt} className="min-h-48 w-full min-w-0 rounded-xl border bg-muted p-3 text-xs" />
         </details>
+        {optionsValid && <details className="min-w-0 text-sm">
+          <summary className="min-h-11 cursor-pointer py-3">Preview final JSON format</summary>
+          <p className="mb-3 text-sm text-muted-foreground">Both example questions use the same source. Only the first includes a known page. Replace the example content with questions from your file.</p>
+          <textarea aria-label="Final JSON format example" readOnly dir="ltr" value={questionJsonExample(lecture ? Number(optionsText) : 4)} className="min-h-72 w-full min-w-0 rounded-xl border bg-muted p-3 font-mono text-xs" />
+        </details>}
       </section>
       </>}
       </div>
@@ -606,7 +613,7 @@ export function QuestionImportReview({
             <input value={sourceFile} disabled={busy || checking || uploadProgress > 0} maxLength={240} className="mt-1 min-h-11 w-full rounded-xl border bg-background px-3" onChange={event => {
               const name = event.target.value;
               setSourceFile(name);
-              const renamed = drafts.map(question => ({ ...question, sourceFile: name, sourceReference: importedSourceReference(name, question.sourcePage ?? 0, question.originalQuestionNumber) }));
+              const renamed = drafts.map(question => ({ ...question, sourceFile: name, sourceReference: importedSourceReference(name, question.sourcePage, question.originalQuestionNumber) }));
               setDrafts(renamed);
               setMatches(current => withLocalImportMatches(renamed, current, excluded));
             }} />
@@ -687,8 +694,14 @@ export function QuestionImportReview({
                 </label>
               ))}
               <div className="rounded-xl bg-muted p-3 text-sm" dir="auto">
-                <span className="font-semibold">Source · Brief reference</span>
-                <input aria-label="Question source name" maxLength={240} className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" value={draft.sourceFile ?? ''} onChange={event => edit({ sourceFile: event.target.value, sourceReference: importedSourceReference(event.target.value, draft.sourcePage ?? 0, draft.originalQuestionNumber) })} />
+                <span className="font-semibold">Source file name · required</span>
+                <input required aria-label="Question source name" maxLength={240} className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" value={draft.sourceFile ?? ''} onChange={event => edit({ sourceFile: event.target.value, sourceReference: importedSourceReference(event.target.value, draft.sourcePage, draft.originalQuestionNumber) })} />
+                <label className="mt-3 block font-semibold">Source page · optional
+                  <input aria-label="Question source page" type="number" min={1} max={100000} step={1} className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3 font-normal" value={draft.sourcePage ?? ''} placeholder="Leave empty if unknown" onChange={event => {
+                    const page = event.target.value === '' ? undefined : Number(event.target.value);
+                    edit({ sourcePage: page, sourceReference: importedSourceReference(draft.sourceFile ?? '', page, draft.originalQuestionNumber) });
+                  }} />
+                </label>
                 <p className="mt-1 break-words">{draft.sourceReference}</p>
               </div>
             </fieldset>

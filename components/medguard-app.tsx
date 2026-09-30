@@ -1,4 +1,7 @@
 'use client';
+import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
+import { QuestionEditDialog } from '@/components/question-edit-dialog';
+import { QuestionSourceFields } from '@/components/question-source-fields';
 import { DeleteAccount } from '@/components/delete-account';
 import { stateBytes, STATE_WARNING_BYTES, STATE_BUDGET_BYTES } from '@/features/state/domain/state-budget';
 
@@ -42,6 +45,7 @@ import {
   nextTestTitle,
   normalizedTestTitle,
 } from '@/features/exams/domain/exam-presenters';
+import { filterHistoryTests, groupHistoryTests, sortHistoryTests, type HistoryMonth } from '@/features/exams/domain/test-history';
 import { groupQuestionsByQBankClassification } from '@/features/progress/domain/qbank-classification';
 import { mergeRanges } from '@/features/exams/domain/highlight-ranges';
 import {
@@ -64,6 +68,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CalendarDays,
   CircleAlert,
   Clock3,
   ClipboardList,
@@ -98,6 +103,7 @@ import {
   RotateCcw,
   Save,
   ScanSearch,
+  Search,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -1311,7 +1317,7 @@ function AppSidebar({
                 </span>
                 {locked && (
                   <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-bold text-muted-foreground">
-                    <LockKeyhole className="size-3" /> Pro
+                    <LockKeyhole className="size-3" /> Full Access
                   </span>
                 )}
                 {item.id === 'flashcards' && dueFlashcardCount > 0 && (
@@ -1355,13 +1361,13 @@ function AppSidebar({
             <CircleAlert className="size-4" />
             Contact Us
           </button>
-          {(user.effectivePlan ?? user.tier) !== 'unlimited' && (
+          {user.role !== 'super_admin' && (
             <button
               onClick={() => navigate('subscribe')}
               className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-semibold text-amber-700 dark:text-amber-300"
             >
               <Sparkles className="size-4" />
-              Subscribe
+              Subscription
             </button>
           )}
           <div className="my-3 border-t" />
@@ -2353,6 +2359,7 @@ function TestView({
   const [proposedOptions, setProposedOptions] = useState<string[]>([]);
   const [proposedExplanation, setProposedExplanation] = useState('');
   const [proposedSource, setProposedSource] = useState('');
+  const [proposedSourcePage, setProposedSourcePage] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
   const [noteImagesDraft, setNoteImagesDraft] = useState<
     QuestionProgress['noteImages']
@@ -2926,18 +2933,11 @@ function TestView({
     setProposedOptions([...question.options]);
     setSuggestedAnswer(question.answer);
     setProposedExplanation(question.explanation ?? sharedNote?.content ?? '');
-    setProposedSource(question.sourceReference ?? question.sourceFile ?? '');
+    setProposedSource(readQuestionSource(question).sourceFile);
+    setProposedSourcePage(String(readQuestionSource(question).sourcePage ?? ''));
     setEditKinds(['typo_formatting']);
     setReportMessage('');
     setReportOpen(true);
-  }
-
-  function toggleEditKind(kind: ProposalEditKind) {
-    setEditKinds((current) =>
-      current.includes(kind)
-        ? current.filter((item) => item !== kind)
-        : [...current, kind],
-    );
   }
 
   async function submitReport() {
@@ -2953,6 +2953,9 @@ function TestView({
       proposedOptions.some((item) => !item.trim())
     )
       return;
+    let source: ReturnType<typeof validateQuestionSource>;
+    try { source = validateQuestionSource({ sourceFile: proposedSource, sourcePage: proposedSourcePage, originalQuestionNumber: readQuestionSource(question).originalQuestionNumber }); }
+    catch (error) { setReportError(error instanceof Error ? error.message : 'Invalid source.'); return; }
     const proposedAt = new Date().toISOString();
     const currentSnapshot = {
       stem: question.stem,
@@ -2961,7 +2964,7 @@ function TestView({
       specialty: question.specialty,
       topic: question.topic,
       explanation: question.explanation ?? sharedNote?.content ?? '',
-      sourceReference: question.sourceReference ?? question.sourceFile ?? '',
+      ...readQuestionSource(question),
       images: question.images ?? [],
     };
     if (user.role === 'super_admin') {
@@ -2971,7 +2974,7 @@ function TestView({
         const saved = await saveDirectQuestionEdit(user.uid, qbankId, question, {
           ...currentSnapshot,
           stem: proposedStem.trim(), options: proposedOptions.map(item => item.trim()),
-          answer: suggestedAnswer, explanation: proposedExplanation.trim(), sourceReference: proposedSource.trim(),
+          answer: suggestedAnswer, explanation: proposedExplanation.trim(), ...source,
         });
         confirmUpdate(current => ({ ...current, approvedQuestions: current.approvedQuestions.map(item => item.id === saved.id ? saved : item) }));
         setReportOpen(false);
@@ -2990,7 +2993,7 @@ function TestView({
         specialty: question.specialty,
         topic: question.topic,
         explanation: proposedExplanation.trim(),
-        sourceReference: proposedSource.trim(),
+        ...source,
         images: question.images ?? [],
       };
       return {
@@ -3605,7 +3608,7 @@ function TestView({
                       {(question.sourceReference || question.sourceFile) && (
                         <p className="mt-5 border-t pt-4 text-xs leading-6 text-muted-foreground">
                           <strong className="text-foreground">Source:</strong>{' '}
-                          {question.sourceReference || question.sourceFile}
+                          {readQuestionSource(question).sourceReference}
                         </p>
                       )}
                       <p className="mt-5 rounded-xl bg-primary/5 p-3 text-sm leading-6 text-muted-foreground">
@@ -3952,204 +3955,26 @@ function TestView({
         }}
       />
       {reportOpen && (
-        <div className="q-safe-overlay fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-sm">
-          <div className="mx-auto my-6 w-full max-w-4xl rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-bold">{user.role === 'super_admin' ? 'Edit question' : 'Suggest edit'}</h3>
-                <p className="text-xs text-muted-foreground">
-                  Question {question.number} · {user.role === 'super_admin' ? 'Changes apply immediately' : 'Suggest Edit → Review → Approve / Reject'}
-                </p>
-              </div>
-              <button onClick={() => setReportOpen(false)} aria-label="Close">
-                <X className="size-5" />
-              </button>
-            </div>
-            <fieldset className="mt-5">
-              <legend className="text-sm font-semibold">
-                What kind of change are you proposing?
-              </legend>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {(
-                  [
-                    ['question_text', 'Question text'],
-                    ['options', 'Options'],
-                    ['correct_answer', 'Correct answer'],
-                    ['explanation', 'Explanation'],
-                    ['source', 'Source'],
-                    ['typo_formatting', 'Typo / formatting'],
-                    ['duplicate', 'Duplicate question'],
-                    ['outdated_guideline', 'Outdated guideline'],
-                  ] as Array<[ProposalEditKind, string]>
-                ).map(([kind, label]) => (
-                  <button
-                    type="button"
-                    key={kind}
-                    onClick={() => toggleEditKind(kind)}
-                    className={cx(
-                      'rounded-full border px-3 py-2 text-xs font-bold',
-                      editKinds.includes(kind)
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'bg-card',
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </fieldset>
-            <div className="mt-5 grid gap-4 lg:grid-cols-2">
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold">
-                  Proposed question text
-                </span>
-                <textarea
-                  required
-                  value={proposedStem}
-                  onChange={(event) => setProposedStem(event.target.value)}
-                  className="min-h-32 w-full rounded-xl border bg-card p-3 text-sm"
-                />
-              </label>
-              <div className="space-y-2">
-                <span className="block text-sm font-semibold">
-                  Proposed options
-                </span>
-                {proposedOptions.map((option, index) => (
-                  <div key={index} className="flex items-center gap-2">
-                    <input
-                      value={option}
-                      onChange={(event) =>
-                        setProposedOptions((current) =>
-                          current.map((item, i) =>
-                            i === index ? event.target.value : item,
-                          ),
-                        )
-                      }
-                      className="h-10 min-w-0 flex-1 rounded-xl border bg-card px-3 text-sm"
-                      aria-label={`Proposed option ${optionLabel(index)}`}
-                    />
-                    <button
-                      type="button"
-                      aria-label={`Remove proposed option ${optionLabel(index)}`}
-                      disabled={proposedOptions.length <= 2}
-                      onClick={() => {
-                        setProposedOptions((current) =>
-                          current.filter((_, itemIndex) => itemIndex !== index),
-                        );
-                        setSuggestedAnswer((current) =>
-                          current === undefined
-                            ? current
-                            : current === index
-                              ? 0
-                              : current > index
-                                ? current - 1
-                                : current,
-                        );
-                      }}
-                      className="grid size-10 shrink-0 place-items-center rounded-xl border text-red-600 disabled:opacity-30 dark:text-red-300"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  disabled={proposedOptions.length >= 10}
-                  onClick={() =>
-                    setProposedOptions((current) => [...current, ''])
-                  }
-                  className="inline-flex h-10 items-center gap-2 rounded-xl border border-dashed px-4 text-sm font-bold text-primary disabled:opacity-40"
-                >
-                  <Plus className="size-4" />
-                  Add option
-                </button>
-              </div>
-            </div>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <label>
-                <span className="mb-1.5 block text-sm font-semibold">
-                  Proposed correct answer
-                </span>
-                <select
-                  value={suggestedAnswer ?? ''}
-                  onChange={(event) =>
-                    setSuggestedAnswer(Number(event.target.value))
-                  }
-                  className="h-11 w-full rounded-xl border bg-card px-3 text-sm"
-                >
-                  {proposedOptions.map((option, index) => (
-                    <option key={index} value={index}>
-                      {optionLabel(index)}. {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span className="mb-1.5 block text-sm font-semibold">
-                  Source{' '}
-                  <strong className="text-red-600 dark:text-red-300">
-                    required
-                  </strong>
-                </span>
-                <input
-                  required
-                  value={proposedSource}
-                  onChange={(event) => setProposedSource(event.target.value)}
-                  className="h-11 w-full rounded-xl border bg-card px-3 text-sm"
-                  placeholder="Guideline, textbook, DOI, or URL"
-                />
-              </label>
-            </div>
-            <label className="mt-4 block">
-              <span className="mb-1.5 block text-sm font-semibold">
-                Explanation{' '}
-                <span className="text-orange-600 dark:text-orange-400">optional</span>
-              </span>
-              <textarea
-                value={proposedExplanation}
-                onChange={(event) => setProposedExplanation(event.target.value)}
-                className="min-h-28 w-full rounded-xl border bg-card p-3 text-sm"
-                placeholder="Explain the medically correct change."
-              />
-              {!proposedExplanation.trim() && <p className="mt-2 text-sm text-orange-600 dark:text-orange-400">Adding an explanation helps learners. You can save without one; an empty field removes the existing explanation.</p>}
-            </label>
-            <label className="mt-4 block">
-              <span className="mb-1.5 block text-sm font-semibold">
-                {user.role === 'super_admin' ? 'Reason for the change' : 'Why should this change be made?'}
-              </span>
-              <textarea
-                required
-                value={reportMessage}
-                onChange={(event) => setReportMessage(event.target.value)}
-                className="min-h-20 w-full rounded-xl border bg-card p-3 text-sm"
-                placeholder={user.role === 'super_admin' ? 'Describe your correction.' : 'Give the reviewer enough context to decide.'}
-              />
-            </label>
-            <div className="mt-4 rounded-xl bg-amber-50 p-3 text-sm leading-6 text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
-              {user.role === 'super_admin' ? 'Your changes apply immediately without review. Existing proposals stay pending and can replace these changes when accepted.' : 'An authorized reviewer will see a field-by-field comparison before deciding.'}
-            </div>
-            {reportError && <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-300">{reportError}</p>}
-            <div className="mt-5 flex justify-end gap-2">
-              <SecondaryButton onClick={() => setReportOpen(false)}>
-                Cancel
-              </SecondaryButton>
-              <PrimaryButton
-                tone="contribute"
-                onClick={submitReport}
-                disabled={
-                  reportBusy ||
-                  !reportMessage.trim() ||
-                  !proposedStem.trim() ||
-                  !proposedSource.trim() ||
-                  !editKinds.length
-                }
-              >
-                <Save className="size-4" />
-                {reportBusy ? 'Saving…' : user.role === 'super_admin' ? 'Save changes now' : 'Submit for review'}
-              </PrimaryButton>
-            </div>
-          </div>
-        </div>
+        <QuestionEditDialog
+          open={reportOpen}
+          onClose={() => setReportOpen(false)}
+          questionNumber={question.number}
+          immediate={user.role === 'super_admin'}
+          busy={reportBusy}
+          error={reportError}
+          onSubmit={submitReport}
+          draft={{ stem: proposedStem, options: proposedOptions, answer: suggestedAnswer, explanation: proposedExplanation, sourceFile: proposedSource, sourcePage: proposedSourcePage, rationale: reportMessage, kinds: editKinds }}
+          onChange={changes => {
+            if (changes.stem !== undefined) setProposedStem(changes.stem);
+            if (changes.options !== undefined) setProposedOptions(changes.options);
+            if ('answer' in changes) setSuggestedAnswer(changes.answer);
+            if (changes.explanation !== undefined) setProposedExplanation(changes.explanation);
+            if (changes.sourceFile !== undefined) setProposedSource(changes.sourceFile);
+            if (changes.sourcePage !== undefined) setProposedSourcePage(changes.sourcePage);
+            if (changes.rationale !== undefined) setReportMessage(changes.rationale);
+            if (changes.kinds !== undefined) setEditKinds(changes.kinds);
+          }}
+        />
       )}
     </main>
   );
@@ -4167,17 +3992,110 @@ function HistoryView({
   onDelete: (id: string) => void;
 }) {
   const [deleteId, setDeleteId] = useState<string>();
-  const tests = useMemo(
-    () =>
-      [...state.tests].sort(
-        (a, b) =>
-          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-      ),
-    [state.tests],
-  );
+  const [search, setSearch] = useState('');
+  const [historyNow, setHistoryNow] = useState(() => new Date());
+  useEffect(() => {
+    const refreshDate = () => setHistoryNow(new Date());
+    // A returning tab re-evaluates calendar boundaries without any server work.
+    window.addEventListener('focus', refreshDate);
+    const tomorrow = new Date();
+    tomorrow.setHours(24, 0, 0, 0);
+    const timer = window.setTimeout(refreshDate, tomorrow.getTime() - Date.now());
+    return () => {
+      window.removeEventListener('focus', refreshDate);
+      window.clearTimeout(timer);
+    };
+  }, [historyNow]);
+  const tests = useMemo(() => sortHistoryTests(state.tests), [state.tests]);
+  const groups = useMemo(() => groupHistoryTests(tests, historyNow), [tests, historyNow]);
+  const matchingTests = useMemo(() => filterHistoryTests(tests, search), [tests, search]);
+  const searching = search.trim().length > 0;
   const questionsById = useMemo(
     () => new Map(questions.map((question) => [question.id, question])),
     [questions],
+  );
+  const renderTest = (test: TestSession) => {
+    const isCompleted = test.status === 'completed';
+    const answered = Object.keys(test.answers).length;
+    const correct = test.questionIds.filter((id) => {
+      const question = questionsById.get(id);
+      return question && test.answers[id] === question.answer;
+    }).length;
+    const score = answered
+      ? Math.round((correct / answered) * 100)
+      : 0;
+    return (
+      <article
+        key={test.id}
+        className="flex flex-col gap-4 rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border sm:flex-row sm:items-center"
+      >
+        <div
+          className={cx(
+            'grid size-12 shrink-0 place-items-center rounded-2xl',
+            !isCompleted
+              ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/12 dark:text-amber-200'
+              : score >= 70
+                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200'
+                : 'bg-blue-50 text-blue-700 dark:bg-blue-500/12 dark:text-blue-200',
+          )}
+        >
+          <FileText className="size-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-bold">{test.title}</h3>
+            <span
+              className={cx(
+                'rounded-full px-2 py-0.5 text-xs font-bold uppercase',
+                !isCompleted
+                  ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/12 dark:text-amber-200'
+                  : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200',
+              )}
+            >
+              {isCompleted ? 'Completed' : 'Not completed'}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {Number.isFinite(Date.parse(test.startedAt)) ? formatDate(test.startedAt) : 'Date unavailable'} · {test.mode} · {answered}/
+            {test.questionIds.length} answered
+          </p>
+        </div>
+        <div className="flex items-center justify-between gap-3 sm:justify-end">
+          <div className="text-right">
+            <strong className="block text-xl">
+              {!isCompleted
+                ? `${test.currentIndex + 1}/${test.questionIds.length}`
+                : `${score}%`}
+            </strong>
+            <span className="text-xs text-muted-foreground">
+              {!isCompleted ? 'position' : 'score'}
+            </span>
+          </div>
+          <SecondaryButton onClick={() => onOpen(test)}>
+            {!isCompleted ? 'Resume' : 'Review'}
+            <ArrowRight className="size-4" />
+          </SecondaryButton>
+          <IconButton
+            label={`Delete ${test.title}`}
+            onClick={() => setDeleteId(test.id)}
+          >
+            <Trash2 className="size-4" />
+          </IconButton>
+        </div>
+      </article>
+    );
+
+  };
+  const renderMonth = (month: HistoryMonth<TestSession>) => (
+    <details key={month.key} className="q-history-stack">
+      <summary className="q-history-stack-summary">
+        <span className="q-history-stack-icon"><CalendarDays className="size-5" /></span>
+        <strong className="min-w-0 flex-1">{month.label}</strong>
+        <span className="q-history-stack-count">{month.tests.length} test{month.tests.length === 1 ? '' : 's'}</span>
+        <ChevronDown className="q-history-stack-chevron size-4 shrink-0" />
+      </summary>
+      <div className="q-history-stack-body">{month.tests.map(renderTest)}</div>
+    </details>
   );
   const selectedTest = tests.find((test) => test.id === deleteId);
   return (
@@ -4188,93 +4106,68 @@ function HistoryView({
         openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
       />
       <div className="mx-auto max-w-5xl p-4 sm:p-7">
-        {tests.length === 0 ? (
-          <div className="grid min-h-[55vh] place-items-center rounded-2xl border border-dashed bg-card/60">
-            <div className="max-w-sm text-center">
-              <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-primary/10 text-primary">
-                <BookOpenCheck className="size-6" />
+        <search className="q-history-search mb-5">
+          <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <label htmlFor="history-search" className="sr-only">Search previous tests by name, mode, status or date</label>
+          <input id="history-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search tests by name, mode or date…" aria-controls="history-results" autoComplete="off" />
+          <output className="q-history-search-count" aria-live="polite">{searching ? `${matchingTests.length} of ${tests.length}` : `${tests.length} test${tests.length === 1 ? '' : 's'}`}</output>
+          {search && <button type="button" onClick={() => setSearch('')} className="q-history-search-clear" aria-label="Clear test search" title="Clear search"><X className="size-4" /></button>}
+        </search>
+        <div id="history-results">
+          {tests.length === 0 ? (
+            <div className="grid min-h-[55vh] place-items-center rounded-2xl border border-dashed bg-card/60">
+              <div className="max-w-sm text-center">
+                <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-primary/10 text-primary">
+                  <BookOpenCheck className="size-6" />
+                </div>
+                <h2 className="mt-4 font-bold">No tests yet</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Create your first test to start building a review history.
+                </p>
               </div>
-              <h2 className="mt-4 font-bold">No tests yet</h2>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Create your first test to start building a review history.
-              </p>
             </div>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {tests.map((test) => {
-              const isCompleted = test.status === 'completed';
-              const answered = Object.keys(test.answers).length;
-              const correct = test.questionIds.filter((id) => {
-                const question = questionsById.get(id);
-                return question && test.answers[id] === question.answer;
-              }).length;
-              const score = answered
-                ? Math.round((correct / answered) * 100)
-                : 0;
-              return (
-                <article
-                  key={test.id}
-                  className="flex flex-col gap-4 rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border sm:flex-row sm:items-center"
-                >
-                  <div
-                    className={cx(
-                      'grid size-12 shrink-0 place-items-center rounded-2xl',
-                      !isCompleted
-                        ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/12 dark:text-amber-200'
-                        : score >= 70
-                          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200'
-                          : 'bg-blue-50 text-blue-700 dark:bg-blue-500/12 dark:text-blue-200',
-                    )}
-                  >
-                    <FileText className="size-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-bold">{test.title}</h3>
-                      <span
-                        className={cx(
-                          'rounded-full px-2 py-0.5 text-xs font-bold uppercase',
-                          !isCompleted
-                            ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/12 dark:text-amber-200'
-                            : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/12 dark:text-emerald-200',
-                        )}
-                      >
-                        {isCompleted ? 'Completed' : 'Not completed'}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {formatDate(test.startedAt)} · {test.mode} · {answered}/
-                      {test.questionIds.length} answered
-                    </p>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 sm:justify-end">
-                    <div className="text-right">
-                      <strong className="block text-xl">
-                        {!isCompleted
-                          ? `${test.currentIndex + 1}/${test.questionIds.length}`
-                          : `${score}%`}
-                      </strong>
-                      <span className="text-xs text-muted-foreground">
-                        {!isCompleted ? 'position' : 'score'}
-                      </span>
-                    </div>
-                    <SecondaryButton onClick={() => onOpen(test)}>
-                      {!isCompleted ? 'Resume' : 'Review'}
-                      <ArrowRight className="size-4" />
-                    </SecondaryButton>
-                    <IconButton
-                      label={`Delete ${test.title}`}
-                      onClick={() => setDeleteId(test.id)}
-                    >
-                      <Trash2 className="size-4" />
-                    </IconButton>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        )}
+          ) : matchingTests.length === 0 ? (
+            <div className="rounded-2xl border border-dashed bg-card/60 px-6 py-12 text-center">
+              <Search className="mx-auto size-6 text-muted-foreground" />
+              <h2 className="mt-3 font-bold">No matching tests</h2>
+              <p className="mt-2 text-sm text-muted-foreground">Try another name, mode or date.</p>
+              <button type="button" className="mt-4 text-sm font-semibold text-primary underline underline-offset-4" onClick={() => setSearch('')}>Clear search</button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {searching ? (
+                matchingTests.map(renderTest)
+              ) : (
+                <>
+                  {groups.recent.length > 0 && (
+                    <section className="space-y-3" aria-labelledby="history-recent-title">
+                      <h2 id="history-recent-title" className="q-history-section-title">Last month <span>{groups.recent.length}</span></h2>
+                      {groups.recent.map(renderTest)}
+                    </section>
+                  )}
+                  {groups.months.map(renderMonth)}
+                  {groups.years.map((year) => (
+                    <details key={year.key} className="q-history-stack q-history-year">
+                      <summary className="q-history-stack-summary">
+                        <span className="q-history-stack-icon"><Layers3 className="size-5" /></span>
+                        <span className="min-w-0 flex-1"><strong>{year.label}</strong><small>{year.months.length} month{year.months.length === 1 ? '' : 's'}</small></span>
+                        <span className="q-history-stack-count">{year.count} test{year.count === 1 ? '' : 's'}</span>
+                        <ChevronDown className="q-history-stack-chevron size-4 shrink-0" />
+                      </summary>
+                      <div className="q-history-stack-body">{year.months.map(renderMonth)}</div>
+                    </details>
+                  ))}
+                  {groups.undated.length > 0 && (
+                    <section className="space-y-3" aria-labelledby="history-undated-title">
+                      <h2 id="history-undated-title" className="q-history-section-title">Date unavailable</h2>
+                      {groups.undated.map(renderTest)}
+                    </section>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       {selectedTest && (
         <div className="q-safe-overlay fixed inset-0 z-[70] grid place-items-center bg-slate-950/60 p-4">
@@ -5091,7 +4984,9 @@ function QuestionManager({
   const [topic, setTopic] = useState(questions[0]?.topic ?? 'General');
   const [rationale, setRationale] = useState('');
   const [explanation, setExplanation] = useState('');
-  const [sourceReference, setSourceReference] = useState('');
+  const [sourceFile, setSourceFile] = useState('');
+  const [sourcePage, setSourcePage] = useState('');
+  const [sourceError, setSourceError] = useState('');
   function resetComposer() {
     setStem('');
     setOptions(['', '', '', '']);
@@ -5100,7 +4995,7 @@ function QuestionManager({
     setTopic(questions[0]?.topic ?? 'General');
     setRationale('');
     setExplanation('');
-    setSourceReference('');
+    setSourceFile(''); setSourcePage(''); setSourceError('');
   }
 
   function startNewContribution() {
@@ -5118,7 +5013,8 @@ function QuestionManager({
     setTopic(proposal.payload.topic);
     setRationale(proposal.rationale);
     setExplanation(proposal.payload.explanation);
-    setSourceReference(proposal.payload.sourceReference);
+    const source = readQuestionSource(proposal.payload);
+    setSourceFile(source.sourceFile); setSourcePage(String(source.sourcePage ?? '')); setSourceError('');
     setOpen(true);
   }
 
@@ -5131,9 +5027,13 @@ function QuestionManager({
       answer >= options.length ||
       options.some((option) => !option.trim()) ||
       ((!editingProposal || editingProposal.type === 'new_question') && !explanation.trim()) ||
-      !sourceReference.trim()
+      !sourceFile.trim()
     )
       return;
+    let source: ReturnType<typeof validateQuestionSource>;
+    try { source = validateQuestionSource({ sourceFile, sourcePage, originalQuestionNumber: editingProposal ? readQuestionSource(editingProposal.payload).originalQuestionNumber : undefined }); }
+    catch (error) { setSourceError(error instanceof Error ? error.message : 'Invalid source.'); return; }
+    setSourceError('');
     const proposedAt = new Date().toISOString();
     const payload = {
       stem: stem.trim(),
@@ -5142,7 +5042,7 @@ function QuestionManager({
       specialty: specialty.trim() || 'General',
       topic: topic.trim() || 'General',
       explanation: explanation.trim(),
-      sourceReference: sourceReference.trim(),
+      ...source,
       images: editingProposal?.payload.images ?? [],
     };
     if (editingProposal) {
@@ -5239,7 +5139,7 @@ function QuestionManager({
     setAnswer(0);
     setRationale('');
     setExplanation('');
-    setSourceReference('');
+    setSourceFile(''); setSourcePage(''); setSourceError('');
     setEditingProposal(undefined);
     setOpen(false);
   }
@@ -5447,21 +5347,8 @@ function QuestionManager({
             />
             {editingProposal?.type === 'question_edit' && !explanation.trim() && <p className="mt-2 text-sm text-orange-600 dark:text-orange-400">Adding an explanation helps learners. Saving empty removes the existing explanation when accepted.</p>}
           </label>
-          <label className="mt-4 block">
-            <span className="mb-1.5 block text-sm font-semibold">
-              Source{' '}
-              <strong className="text-red-600 dark:text-red-300">
-                required
-              </strong>
-            </span>
-            <input
-              required
-              value={sourceReference}
-              onChange={(event) => setSourceReference(event.target.value)}
-              className="h-11 w-full rounded-xl border bg-card px-3 text-sm"
-              placeholder="Guideline, textbook, DOI, or URL"
-            />
-          </label>
+          <div className="mt-4"><QuestionSourceFields sourceFile={sourceFile} sourcePage={sourcePage} onChange={source => { setSourceFile(source.sourceFile); setSourcePage(source.sourcePage); }} /></div>
+          {sourceError && <p role="alert" className="mt-2 text-sm text-destructive">{sourceError}</p>}
           <label className="mt-4 block">
             <span className="mb-1.5 block text-sm font-semibold">
               Reviewer context
@@ -5531,7 +5418,7 @@ function QuestionManager({
               Add Manually{' '}
               {hasFeature(user.effectivePlan ?? user.tier, 'addQuestions', user.planLimits)
                 ? ''
-                : '· Pro'}
+                : '· Full Access'}
             </PrimaryButton>
           </div>
         }
@@ -5541,7 +5428,7 @@ function QuestionManager({
           <DialogTitle>Import</DialogTitle>
           <QuestionImportReview
             bankId={activeQBankId}
-            unlimited={user.role === 'super_admin'}
+            adminImportPrivileges={user.role === 'super_admin'}
             onImported={(result) =>
               confirmUpdate((current) => ({
                 ...current,
@@ -7505,7 +7392,7 @@ export default function MedGuardApp({
             onNavigate={setView}
             onMore={() => setMobileOpen(true)}
             showReview={showReview}
-            showSubscribe={(user.effectivePlan ?? user.tier) !== 'unlimited'}
+            showSubscribe={user.role !== 'super_admin'}
           />
         }
         navigation={

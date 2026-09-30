@@ -25,10 +25,10 @@ export async function getEffectiveEntitlement(
       "SELECT plan,expires_at FROM subscriptions WHERE user_id=? AND status IN ('active','manually_activated') AND (expires_at IS NULL OR expires_at>?) LIMIT 1",
     ).bind(profile.uid, now),
     env.DB.prepare(
-      "SELECT plan,expires_at FROM reward_passes WHERE user_id=? AND status='active' AND expires_at>? ORDER BY CASE plan WHEN 'unlimited' THEN 3 WHEN 'pro' THEN 2 WHEN 'lite' THEN 1 ELSE 0 END DESC LIMIT 1",
+      "SELECT plan,expires_at FROM reward_passes WHERE user_id=? AND status='active' AND expires_at>? ORDER BY CASE plan WHEN 'full_quarterly' THEN 2 WHEN 'full_monthly' THEN 1 ELSE 0 END DESC LIMIT 1",
     ).bind(profile.uid, now),
     env.DB.prepare(
-      "SELECT plan,expires_at FROM admin_plan_entitlements WHERE user_id=? AND active=1 AND (expires_at IS NULL OR expires_at>?) ORDER BY CASE plan WHEN 'unlimited' THEN 3 WHEN 'pro' THEN 2 WHEN 'lite' THEN 1 ELSE 0 END DESC LIMIT 1",
+      "SELECT plan,expires_at FROM admin_plan_entitlements WHERE user_id=? AND active=1 AND (expires_at IS NULL OR expires_at>?) ORDER BY CASE plan WHEN 'full_quarterly' THEN 2 WHEN 'full_monthly' THEN 1 ELSE 0 END DESC LIMIT 1",
     ).bind(profile.uid, now),
     env.DB.prepare(
       'SELECT plan,expires_at FROM account_plan_overrides WHERE user_id=? AND (expires_at IS NULL OR expires_at>?)',

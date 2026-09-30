@@ -14,6 +14,7 @@ import { api } from '@/lib/api-client';
 import { deleteQBank } from '@/features/qbanks/client/qbank-client';
 import { withoutQBank } from '@/features/qbanks/domain/bank-state';
 import { saveDirectQuestionEdit } from '@/features/qbanks/client/direct-question-edit';
+import { readQuestionSource, validateQuestionSource, questionSourceKey, questionSourceOptions } from '@/features/qbanks/domain/question-source';
 import { uploadQuestionImage } from '@/lib/application-services';
 import {
   bankRoleFor,
@@ -34,6 +35,7 @@ import { cn } from '@/lib/utils';
 import { hasFeature } from '@/features/subscriptions/domain/plan-config';
 import { openUpgrade } from '@/components/subscription-workspace';
 import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 
 type Section = 'settings' | 'structure' | 'questions' | 'import';
 
@@ -47,7 +49,8 @@ interface QuestionDraft {
   specialty: string;
   topic: string;
   explanation: string;
-  sourceReference: string;
+  sourceFile: string;
+  sourcePage: string;
   images: NoteImage[];
 }
 
@@ -58,7 +61,8 @@ const emptyDraft = (): QuestionDraft => ({
   specialty: 'General',
   topic: 'General',
   explanation: '',
-  sourceReference: '',
+  sourceFile: '',
+  sourcePage: '',
   images: [],
 });
 
@@ -102,6 +106,8 @@ export function QBankManagement({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [specialtyFilter, setSpecialtyFilter] = useState('');
   const [topicFilter, setTopicFilter] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('');
+  const sources = useMemo(() => questionSourceOptions(questions), [questions]);
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
   const [bulkSpecialty, setBulkSpecialty] = useState('');
   const [bulkTopic, setBulkTopic] = useState('');
@@ -129,9 +135,10 @@ export function QBankManagement({
     return questions.filter((question) =>
       (!specialtyFilter || question.specialtyId === specialtyFilter) &&
       (!topicFilter || question.topicId === topicFilter) &&
+      (!sourceFilter || (questionSourceKey(question) || '__missing-source__') === sourceFilter) &&
       (!raw || `${question.questionId} ${question.stem} ${question.specialty} ${question.topic}`.toLowerCase().includes(raw) || question.questionId.includes(padded)),
     );
-  }, [questions, search, specialtyFilter, topicFilter]);
+  }, [questions, search, specialtyFilter, topicFilter, sourceFilter]);
 
   if (bank && canDelete && !canEditBank(user, bank, collaboration.memberships))
     return <main className="mx-auto max-w-xl space-y-4 p-6">
@@ -252,7 +259,8 @@ export function QBankManagement({
             specialty: question.specialty,
             topic: question.topic,
             explanation: question.explanation ?? '',
-            sourceReference: question.sourceReference ?? question.sourceFile,
+            sourceFile: readQuestionSource(question).sourceFile,
+            sourcePage: String(readQuestionSource(question).sourcePage ?? ''),
             images: [...(question.images ?? [])],
           }
         : emptyDraft(),
@@ -328,18 +336,19 @@ export function QBankManagement({
 
   async function saveQuestion(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!editing || !draft.stem.trim() || draft.options.length < 2 || draft.options.length > 10 || draft.answer >= draft.options.length || draft.options.some((item) => !item.trim()) || (editing === 'new' && !draft.explanation.trim()) || !draft.sourceReference.trim()) return;
+    if (!editing || !draft.stem.trim() || draft.options.length < 2 || draft.options.length > 10 || draft.answer >= draft.options.length || draft.options.some((item) => !item.trim()) || (editing === 'new' && !draft.explanation.trim()) || !draft.sourceFile.trim()) return;
     setBusy(true);
     setError('');
     try {
       const existing = editing === 'new' ? undefined : editing;
+      const source = validateQuestionSource({ sourceFile: draft.sourceFile, sourcePage: draft.sourcePage, originalQuestionNumber: existing ? readQuestionSource(existing).originalQuestionNumber : undefined });
       const classification = await ensureQuestionClassification(draft.specialty, draft.topic, existing ? [existing.id] : []);
       const contentChanged = !existing ||
         existing.stem !== draft.stem.trim() ||
         JSON.stringify(existing.options) !== JSON.stringify(draft.options.map((item) => item.trim())) ||
         existing.answer !== draft.answer ||
         (existing.explanation ?? '') !== draft.explanation.trim() ||
-        (existing.sourceReference ?? existing.sourceFile) !== draft.sourceReference.trim() ||
+        readQuestionSource(existing).sourceReference !== source.sourceReference ||
         JSON.stringify(existing.images ?? []) !== JSON.stringify(draft.images) ||
         imageFiles.length > 0;
       if (existing && !contentChanged) {
@@ -365,7 +374,7 @@ export function QBankManagement({
         topicId: classification.topic.id,
         topic: classification.topic.name,
         explanation: draft.explanation.trim(),
-        sourceReference: draft.sourceReference.trim(),
+        ...source,
         images: [...draft.images, ...uploaded],
       };
       if (existing && user.role === 'super_admin') {
@@ -398,7 +407,7 @@ export function QBankManagement({
               specialtyId: classification.specialty.id,
               topicId: classification.topic.id,
               explanation: existing.explanation ?? '',
-              sourceReference: existing.sourceReference ?? existing.sourceFile,
+              ...readQuestionSource(existing),
               images: existing.images ?? [],
             } : undefined,
             payload,
@@ -656,10 +665,10 @@ export function QBankManagement({
               </label>
               <button onClick={() => (canAddQuestions ? openQuestion() : openUpgrade())} className={cn('q-button', canAddQuestions ? 'q-button-contribute' : 'border')}>
                 {canAddQuestions ? <Plus className="size-4" /> : <LockKeyhole className="size-4" />}
-                {canAddQuestions ? 'Add question manually' : 'Add questions · Pro'}
+                {canAddQuestions ? 'Add question manually' : 'Add questions · Full Access'}
               </button>
             </div>
-            <div className="mb-5 grid gap-3 sm:grid-cols-2">
+            <div className="mb-5 grid gap-3 sm:grid-cols-3">
               <select value={specialtyFilter} onChange={(event) => { setSpecialtyFilter(event.target.value); setTopicFilter(''); }} className="h-11 rounded-xl border bg-card px-3 text-sm">
                 <option value="">All specialties</option>
                 {bankSpecialties.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -668,6 +677,14 @@ export function QBankManagement({
                 <option value="">All topics</option>
                 {bankTopics.filter((item) => !specialtyFilter || item.specialtyId === specialtyFilter).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
+              <select aria-label="Filter questions by source" value={sourceFilter} onChange={event => setSourceFilter(event.target.value)} className="h-11 min-w-0 rounded-xl border bg-card px-3 text-sm">
+                <option value="">All sources</option>
+                {sources.map(source => <option key={source.key} value={source.key || '__missing-source__'}>{source.name} ({source.count})</option>)}
+              </select>
+            </div>
+            <div className="mb-3 flex items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span>{filteredQuestions.length} of {questions.length} questions</span>
+              {(sourceFilter || specialtyFilter || topicFilter || search) && <button type="button" className="underline" onClick={() => { setSourceFilter(''); setSpecialtyFilter(''); setTopicFilter(''); setSearch(''); }}>Clear filters</button>}
             </div>
             {selectedQuestionIds.length > 0 && (
               <section className="mb-5 rounded-2xl border border-primary/30 bg-primary/5 p-4">
@@ -702,6 +719,7 @@ export function QBankManagement({
                           <span className="text-xs text-muted-foreground">
                             Revision {question.revision} · {question.images?.length ?? 0} images
                           </span>
+                          <span className="block truncate text-xs text-muted-foreground">Source: {readQuestionSource(question).sourceReference || 'Unspecified source'}</span>
                           {(question.writtenByName || question.reviewedByName) && (
                             <span className="block text-xs text-muted-foreground">
                               Written by {question.writtenByName ?? 'Qraft'} · Reviewed by {question.reviewedByName ?? 'Pending'}
@@ -727,7 +745,7 @@ export function QBankManagement({
         {section === 'import' && (
           <section className="min-w-0 rounded-2xl bg-card p-3 ring-1 ring-border sm:p-6">
             <h2 className="mb-4 text-lg font-bold">Import</h2>
-            <QuestionImportReview bankId={bankId} unlimited={user.role === 'super_admin'} onImported={result=>confirmUpdate(current=>({
+            <QuestionImportReview bankId={bankId} adminImportPrivileges={user.role === 'super_admin'} onImported={result=>confirmUpdate(current=>({
               ...current,
               proposals:[...result.proposals,...current.proposals.filter(p=>!result.proposals.some(n=>n.id===p.id))],
               specialties:[...current.specialties,...result.specialties.filter(item=>!current.specialties.some(existing=>existing.id===item.id))],
@@ -739,153 +757,138 @@ export function QBankManagement({
       </div>
 
       {editing && (
-        <div className="q-safe-overlay fixed inset-0 z-50 overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-sm">
-          <form onSubmit={(event) => void saveQuestion(event)} className="mx-auto my-6 w-full max-w-4xl rounded-2xl bg-card p-5 shadow-2xl ring-1 ring-border sm:p-7">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-primary">{editing === 'new' ? 'New question' : `Question ID ${editing.questionId}`}</p>
-                <h2 className="mt-1 text-xl font-bold">{editing === 'new' ? 'Add question manually' : 'Edit question'}</h2>
-              </div>
-              <button type="button" onClick={() => setEditing(undefined)} className="grid size-10 place-items-center rounded-xl border" aria-label="Close question editor">
-                <X className="size-5" />
-              </button>
-            </div>
-            <label className="mt-5 block">
-              <span className="mb-1.5 block text-sm font-bold">Question text</span>
-              <textarea dir="auto" required value={draft.stem} onChange={(event) => setDraft({ ...draft, stem: event.target.value })} className="min-h-32 w-full rounded-xl border bg-card p-3" />
-            </label>
-            <div className="mt-4 space-y-2">
-              {draft.options.map((option, index) => (
-                <div key={index} className="flex min-w-0 items-start gap-2">
-                  <label className="flex min-h-11 shrink-0 cursor-pointer items-center gap-1 rounded-xl border px-2">
-                  <input aria-label={`Mark option ${optionLabel(index)} as correct`} type="radio" name="correct-answer" checked={draft.answer === index} onChange={() => setDraft({ ...draft, answer: index })} className="size-4 accent-primary" />
-                  <span className="text-sm font-bold">{optionLabel(index)}</span>
-                  </label>
-                  <textarea
-                    dir="auto"
-                    aria-label={`Option ${optionLabel(index)}`}
-                    required
-                    value={option}
-                    onChange={(event) =>
-                      setDraft({
-                        ...draft,
-                        options: draft.options.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)),
-                      })
-                    }
-                    className="min-h-11 min-w-0 flex-1 rounded-xl border bg-card p-3"
-                  />
-                  <button
-                    type="button"
-                    aria-label={`Remove option ${optionLabel(index)}`}
-                    disabled={draft.options.length <= 2}
-                    onClick={() =>
-                      setDraft({
-                        ...draft,
-                        options: draft.options.filter((_, itemIndex) => itemIndex !== index),
-                        answer: draft.answer === index ? 0 : draft.answer > index ? draft.answer - 1 : draft.answer,
-                      })
-                    }
-                    className="grid size-11 shrink-0 place-items-center rounded-xl border text-red-600 disabled:cursor-not-allowed disabled:opacity-30 dark:text-red-300"
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
+        <Dialog open onOpenChange={open => { if (!open && !busy) setEditing(undefined); }}>
+          <DialogContent showCloseButton={false} className="q-question-editor flex h-[min(860px,calc(100dvh-2rem))] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl bg-card p-0 sm:max-w-4xl">
+            <form onSubmit={event => void saveQuestion(event)} className="flex min-h-0 flex-1 flex-col">
+              <header className="flex shrink-0 items-start justify-between gap-4 border-b px-4 py-4 sm:px-6">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">{editing === 'new' ? 'New question' : `Question ID ${editing.questionId}`}</p>
+                  <DialogTitle className="mt-1 text-xl font-bold leading-tight">{editing === 'new' ? 'Add question manually' : 'Edit question'}</DialogTitle>
+                  <DialogDescription className="mt-1.5 truncate text-sm">{bankName} · {editing !== 'new' && user.role === 'super_admin' ? 'Changes are saved immediately.' : 'Submitted questions are reviewed before publishing.'}</DialogDescription>
                 </div>
-              ))}
-              <button
-                type="button"
-                disabled={draft.options.length >= 10}
-                onClick={() => setDraft({ ...draft, options: [...draft.options, ''] })}
-                className="inline-flex h-10 items-center gap-2 rounded-xl border border-dashed px-4 text-sm font-bold text-primary disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Plus className="size-4" />
-                Add option
-              </button>
-            </div>
-            <div className="mt-4">
-              <ClassificationFields
-                specialties={bankSpecialties}
-                topics={bankTopics}
-                specialty={draft.specialty}
-                topic={draft.topic}
-                onChange={(classification) => setDraft({ ...draft, ...classification })}
-                disabled={busy}
-              />
-            </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <label>
-                <span className="mb-1.5 block text-sm font-bold">Explanation</span>
-                <textarea required={editing === 'new'} value={draft.explanation} onChange={(event) => setDraft({ ...draft, explanation: event.target.value })} className="min-h-28 w-full rounded-xl border bg-card p-3" />
-                {editing !== 'new' && !draft.explanation.trim() && <p className="mt-2 text-sm text-orange-600 dark:text-orange-400">Explanation is optional. Adding one helps learners; saving empty removes the existing explanation.</p>}
-              </label>
-              <label>
-                <span className="mb-1.5 block text-sm font-bold">Source</span>
-                <textarea required value={draft.sourceReference} onChange={(event) => setDraft({ ...draft, sourceReference: event.target.value })} className="min-h-28 w-full rounded-xl border bg-card p-3" />
-              </label>
-            </div>
-            <section className="mt-5 rounded-xl border p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h3 className="font-bold">Question images</h3>
-                  <p className="text-xs text-muted-foreground">Up to 5 new images, 10 MB each.</p>
-                </div>
-                <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border px-4 text-sm font-bold">
-                  <ImagePlus className="size-4" />
-                  Add images
-                  <input type="file" accept="image/*" multiple className="sr-only" onChange={(event) => setImageFiles(Array.from(event.target.files ?? []).slice(0, 5))} />
-                </label>
-              </div>
-              {draft.images.length > 0 && (
-                <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                  {draft.images.map((image) => (
-                    <figure key={image.id} className="overflow-hidden rounded-xl border">
-                      <img src={image.url} alt={image.caption || image.name} className="aspect-video w-full object-contain" />
-                      <div className="flex items-center gap-2 p-2">
-                        <input
-                          value={image.caption}
-                          onChange={(event) =>
-                            setDraft({
-                              ...draft,
-                              images: draft.images.map((item) => (item.id === image.id ? { ...item, caption: event.target.value } : item)),
-                            })
-                          }
-                          placeholder="Caption"
-                          className="h-9 min-w-0 flex-1 rounded-lg border bg-card px-2 text-xs"
-                        />
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setDraft({
-                              ...draft,
-                              images: draft.images.filter((item) => item.id !== image.id),
-                            })
-                          }
-                          className="grid size-9 place-items-center rounded-lg border text-red-600 dark:text-red-300"
-                        >
-                          <Trash2 className="size-4" />
-                        </button>
+                <button type="button" disabled={busy} onClick={() => setEditing(undefined)} className="grid size-11 shrink-0 place-items-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40" aria-label="Close question editor">
+                  <X className="size-5" />
+                </button>
+              </header>
+
+              <fieldset disabled={busy} className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain bg-muted/20 p-4 sm:p-6">
+                <div className="grid min-w-0 gap-5 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+                  <div className="min-w-0 space-y-5">
+                    <section className="q-question-editor-section">
+                      <label className="block">
+                        <span className="mb-3 flex items-center justify-between gap-2 text-sm font-bold">Question text <span className="q-question-field-note">Required</span></span>
+                        <textarea dir="auto" required rows={5} value={draft.stem} onChange={event => setDraft({ ...draft, stem: event.target.value })} placeholder="Write the complete question, including the details needed to answer it." className="q-question-control min-h-32 w-full resize-y" />
+                      </label>
+                    </section>
+
+                    <section className="q-question-editor-section" aria-labelledby="question-options-heading">
+                      <div className="mb-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 id="question-options-heading" className="text-sm font-bold">Answer options</h3>
+                          <span className="q-question-field-note">{draft.options.length} / 10</span>
+                        </div>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">Select the letter beside the correct answer.</p>
                       </div>
-                    </figure>
-                  ))}
+                      <div className="space-y-3">
+                        {draft.options.map((option, index) => (
+                          <div key={index} className={cn('q-question-option', draft.answer === index && 'q-question-option-correct')}>
+                            <label className="q-question-answer-selector">
+                              <input aria-label={`Mark option ${optionLabel(index)} as correct`} type="radio" name="correct-answer" checked={draft.answer === index} onChange={() => setDraft({ ...draft, answer: index })} className="peer sr-only" />
+                              <span className="q-question-answer-letter peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary">{optionLabel(index)}</span>
+                            </label>
+                            <div className="min-w-0 flex-1">
+                              <textarea dir="auto" aria-label={`Option ${optionLabel(index)}`} required rows={2} value={option} onChange={event => setDraft({ ...draft, options: draft.options.map((item, itemIndex) => itemIndex === index ? event.target.value : item) })} placeholder={`Answer choice ${optionLabel(index)}`} className="q-question-option-text w-full resize-y" />
+                              {draft.answer === index && <span className="flex items-center gap-1.5 pb-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300"><Check className="size-3.5" />Correct answer</span>}
+                            </div>
+                            <button type="button" aria-label={`Remove option ${optionLabel(index)}`} disabled={draft.options.length <= 2} onClick={() => setDraft({ ...draft, options: draft.options.filter((_, itemIndex) => itemIndex !== index), answer: draft.answer === index ? 0 : draft.answer > index ? draft.answer - 1 : draft.answer })} className="q-question-remove-option">
+                              <Trash2 className="size-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <button type="button" disabled={draft.options.length >= 10} onClick={() => setDraft({ ...draft, options: [...draft.options, ''] })} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-xl border border-dashed px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-40">
+                        <Plus className="size-4" />Add option
+                      </button>
+                    </section>
+
+                    <section className="q-question-editor-section">
+                      <label className="block">
+                        <span className="mb-3 flex items-center justify-between gap-2 text-sm font-bold">Explanation <span className="q-question-field-note">{editing === 'new' ? 'Required' : 'Optional'}</span></span>
+                        <textarea dir="auto" required={editing === 'new'} rows={5} value={draft.explanation} onChange={event => setDraft({ ...draft, explanation: event.target.value })} placeholder="Explain why the selected answer is correct." className="q-question-control min-h-32 w-full resize-y" />
+                        {editing !== 'new' && !draft.explanation.trim() && <p className="mt-2 text-xs leading-5 text-muted-foreground">Saving an empty explanation removes the existing explanation.</p>}
+                      </label>
+                    </section>
+                  </div>
+
+                  <div className="min-w-0 space-y-5">
+                    <section className="q-question-editor-section">
+                      <h3 className="mb-4 text-sm font-bold">Classification</h3>
+                      <div className="q-question-classification"><ClassificationFields specialties={bankSpecialties} topics={bankTopics} specialty={draft.specialty} topic={draft.topic} onChange={classification => setDraft({ ...draft, ...classification })} disabled={busy} /></div>
+                    </section>
+
+                    <section className="q-question-editor-section space-y-4">
+                      <div>
+                        <h3 className="text-sm font-bold">Source</h3>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">Use the same source name for questions from the same file.</p>
+                      </div>
+                      <label className="block">
+                        <span className="mb-2 flex items-center justify-between gap-2 text-sm font-semibold">File or lecture name <span className="q-question-field-note">Required</span></span>
+                        <input required maxLength={240} aria-label="Source file name" dir="auto" value={draft.sourceFile} onChange={event => setDraft({ ...draft, sourceFile: event.target.value })} placeholder="e.g. Surgery lecture.pdf" className="q-question-control h-11 w-full" />
+                      </label>
+                      <label className="block">
+                        <span className="mb-2 flex items-center justify-between gap-2 text-sm font-semibold">Page or slide <span className="q-question-field-note">Optional</span></span>
+                        <input aria-label="Source page" type="number" min={1} max={100000} step={1} value={draft.sourcePage} onChange={event => setDraft({ ...draft, sourcePage: event.target.value })} placeholder="Leave empty if unknown" className="q-question-control h-11 w-full" />
+                      </label>
+                    </section>
+
+                    <section className="q-question-editor-section">
+                      <div className="mb-4 flex items-center justify-between gap-3">
+                        <h3 className="text-sm font-bold">Question images</h3>
+                        <span className="q-question-field-note">Optional</span>
+                      </div>
+                      <label className="flex min-h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/30 p-4 text-center transition-colors hover:border-primary hover:bg-primary/5 focus-within:outline-2 focus-within:outline-primary">
+                        <ImagePlus className="size-5 text-primary" />
+                        <span className="text-sm font-semibold">Add images</span>
+                        <span className="text-xs text-muted-foreground">Up to 5 new images · 10 MB each</span>
+                        <input aria-label="Add question images" type="file" accept="image/*" multiple className="sr-only" onChange={event => setImageFiles(Array.from(event.target.files ?? []).slice(0, 5))} />
+                      </label>
+                      {draft.images.length > 0 && <div className="mt-4 grid grid-cols-2 gap-3">
+                        {draft.images.map(image => <figure key={image.id} className="overflow-hidden rounded-xl border">
+                          <img src={image.url} alt={image.caption || image.name} className="aspect-video w-full bg-muted/30 object-contain" />
+                          <div className="flex items-center gap-1 p-2">
+                            <input aria-label={`Caption for ${image.name}`} value={image.caption} onChange={event => setDraft({ ...draft, images: draft.images.map(item => item.id === image.id ? { ...item, caption: event.target.value } : item) })} placeholder="Caption" className="h-9 min-w-0 flex-1 rounded-lg border bg-card px-2 text-xs" />
+                            <button type="button" aria-label={`Remove image ${image.name}`} onClick={() => setDraft({ ...draft, images: draft.images.filter(item => item.id !== image.id) })} className="grid min-h-11 min-w-11 place-items-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><Trash2 className="size-4" /></button>
+                          </div>
+                        </figure>)}
+                      </div>}
+                      {imageFiles.length > 0 && <div className="mt-3 space-y-2">
+                        <p className="text-xs font-semibold text-primary">{imageFiles.length} new image{imageFiles.length === 1 ? '' : 's'} ready to upload</p>
+                        {imageFiles.map((file, index) => <div key={`${file.name}-${index}`} className="flex min-w-0 items-center gap-2 rounded-lg bg-muted/50 ps-3 text-xs">
+                          <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                          <button type="button" aria-label={`Remove pending image ${file.name}`} onClick={() => setImageFiles(current => current.filter((_, itemIndex) => itemIndex !== index))} className="grid size-11 shrink-0 place-items-center rounded-lg text-muted-foreground hover:text-destructive"><X className="size-4" /></button>
+                        </div>)}
+                      </div>}
+                    </section>
+                  </div>
                 </div>
-              )}
-              {imageFiles.length > 0 && (
-                <p className="mt-3 text-sm text-primary">
-                  {imageFiles.length} new image
-                  {imageFiles.length === 1 ? '' : 's'} ready to upload.
-                </p>
-              )}
-            </section>
-            <div className="mt-6 flex flex-wrap justify-end gap-2">
-              <button type="button" onClick={() => setEditing(undefined)} className="h-11 rounded-xl border px-5 text-sm font-bold">
-                Cancel
-              </button>
-              <button type="submit" disabled={busy} className="q-button q-button-contribute">
-                {busy ? <RefreshCw className="size-4 animate-spin" /> : <Save className="size-4" />}
-                {editing !== 'new' && user.role === 'super_admin' ? 'Save changes now' : 'Submit for review'}
-              </button>
-            </div>
-          </form>
-        </div>
+              </fieldset>
+
+              <footer className="shrink-0 border-t bg-card px-4 py-4 sm:px-6">
+                {error && <p role="alert" className="mb-3 rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-muted-foreground">Fields marked Required must be completed.</p>
+                  <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 sm:flex">
+                    <button type="button" disabled={busy} onClick={() => setEditing(undefined)} className="q-button q-button-secondary">Cancel</button>
+                    <button type="submit" disabled={busy} className="q-button q-button-contribute">
+                      {busy ? <RefreshCw className="size-4 animate-spin" /> : <Save className="size-4" />}
+                      {busy ? 'Saving…' : editing !== 'new' && user.role === 'super_admin' ? 'Save changes now' : 'Submit for review'}
+                    </button>
+                  </div>
+                </div>
+              </footer>
+            </form>
+          </DialogContent>
+        </Dialog>
       )}
       {deleteOpen && canManageAccess && (
         <div className="q-safe-overlay fixed inset-0 z-[60] grid place-items-center bg-slate-950/60 p-4">

@@ -16,6 +16,7 @@ import {
 import { preformedAccountScope } from '@/features/exams/domain/preformed-attempt-scope';
 import { preformedGuestScope } from '@/features/exams/client/guest-scope';
 import type { AppUser } from '@/lib/medguard-types';
+import { getPlanLimits } from '@/features/subscriptions/domain/plan-config';
 import {
   buildQuestionPrompt,
   parseQuestionImportReport,
@@ -27,12 +28,10 @@ import type {
   PreformedLeaderboardEntry,
   PreformedLocalAttempt,
   PreformedQuestion,
-  PreformedQuestionStat,
   PreformedTestDocument,
   PreformedTestSummary,
 } from '@/lib/preformed-test-types';
 import {
-  BarChart3,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -122,7 +121,7 @@ function testUrl(code: string) {
 }
 
 function downloadResults(
-  test: PreformedTestDocument,
+  test: Pick<PreformedTestSummary, 'title'>,
   entries: PreformedLeaderboardEntry[],
 ) {
   const escape = (value: string | number) => {
@@ -169,7 +168,11 @@ function downloadResults(
 type ManageResponse = {
   test: PreformedTestDocument;
   leaderboard: PreformedLeaderboardEntry[];
-  questionStats: PreformedQuestionStat[];
+};
+
+type LeaderboardResponse = {
+  test: PreformedTestSummary;
+  leaderboard: PreformedLeaderboardEntry[];
 };
 
 function Leaderboard({ entries }: { entries: PreformedLeaderboardEntry[] }) {
@@ -201,6 +204,7 @@ function Leaderboard({ entries }: { entries: PreformedLeaderboardEntry[] }) {
               {entry.guest ? 'Guest' : `Attempt ${entry.attemptNumber}`} ·{' '}
               {duration(entry.durationSeconds)}
             </p>
+            <time dateTime={entry.submittedAt} className="mt-1 block text-xs text-muted-foreground">{new Date(entry.submittedAt).toLocaleString()}</time>
           </div>
           <strong className="text-primary">
             {entry.score}/{entry.questionCount}{' '}
@@ -1935,7 +1939,7 @@ export function PreformedTestsWorkspace({
   const [tab, setTab] = useState<'mine' | 'public'>('mine');
   const [joinCode, setJoinCode] = useState('');
   const [editing, setEditing] = useState<PreformedTestDocument>();
-  const [stats, setStats] = useState<ManageResponse>();
+  const [stats, setStats] = useState<LeaderboardResponse>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -1946,9 +1950,7 @@ export function PreformedTestsWorkspace({
   const loadSequence = useRef(0);
   const cancelPendingLoads = useCallback(() => { loadSequence.current += 1; }, []);
   const copyResetTimer = useRef<number | undefined>(undefined);
-  const canCreate = ['pro', 'unlimited'].includes(
-    user.effectivePlan ?? user.tier,
-  );
+  const canCreate = user.role === 'super_admin' || (user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier)).canCreateReadyTests;
   const load = useCallback(
     async (force = false, silent = false) => {
       const sequence = ++loadSequence.current;
@@ -1989,11 +1991,10 @@ export function PreformedTestsWorkspace({
       void load(true, true);
       if (!stats) return;
       const id = stats.test.id;
-      const owner = stats.test.ownerId === user.uid;
-      void api<ManageResponse>(`/preformed/${owner ? 'manage' : 'leaderboard'}?id=${id}`, {
+      void api<{ leaderboard: PreformedLeaderboardEntry[] }>(`/preformed/leaderboard?id=${encodeURIComponent(id)}`, {
         forceRefresh: true, cacheScope: user.uid, requestReason: 'server-invalidation',
       }).then(value => setStats(current => current?.test.id === id
-        ? (owner ? value : { ...current, leaderboard: value.leaderboard }) : current))
+        ? { ...current, leaderboard: value.leaderboard } : current))
         .catch(() => setStats(current => current?.test.id === id ? undefined : current));
     }, ['preformed-tests', 'preformed-results', 'connected']),
     [load, stats, user.uid],
@@ -2021,16 +2022,16 @@ export function PreformedTestsWorkspace({
       setEditing(value.test);
     }, 'Could not create a test. Please try again.');
   };
-  const edit = async (id: string, showStats = false) => {
+  const edit = async (id: string) => {
     await runAction(async () => {
       const value = await api<ManageResponse>(`/preformed/manage?id=${encodeURIComponent(id)}`, { forceRefresh: true, requestReason: 'user-transaction' });
-      if (showStats) setStats(value); else setEditing(value.test);
+      setEditing(value.test);
     }, 'Could not load this test. Please try again.');
   };
   const showBoard = async (test: PreformedTestSummary) => {
     await runAction(async () => {
       const value = await api<{ leaderboard: PreformedLeaderboardEntry[] }>(`/preformed/leaderboard?id=${encodeURIComponent(test.id)}`);
-      setStats({ test: { ...test, questions: [], hasPasscode: false }, leaderboard: value.leaderboard, questionStats: [] });
+      setStats({ test, leaderboard: value.leaderboard });
     }, 'Could not load the leaderboard. Please try again.');
   };
   const share = async (code: string) => {
@@ -2182,9 +2183,9 @@ export function PreformedTestsWorkspace({
                         onClick={() => void create()}
               className="q-button q-button-primary ml-auto"
               aria-label={
-                !canCreate ? 'New test — Pro plan required' : undefined
+                !canCreate ? 'New test — Full Access plan required' : undefined
               }
-              title={!canCreate ? 'Upgrade to Pro to create a test' : undefined}
+              title={!canCreate ? 'Upgrade to Full Access to create a test' : undefined}
             >
               <span
                 aria-hidden="true"
@@ -2255,26 +2256,27 @@ export function PreformedTestsWorkspace({
                   <span>·</span>
                   <span>{test.settings.mode}</span>
                 </div>
-                <div className="mt-auto flex flex-wrap gap-2 pt-5">
+                <div className="q-preformed-card-actions mt-auto pt-5">
                   <button
+                    aria-label={`Open ${test.title}`}
                     disabled={busy || loading || test.status !== 'published'}
                     title={
                       test.status !== 'published'
                         ? 'Publish this test before opening it.'
-                        : undefined
+                        : 'Open test'
                     }
                     onClick={() => onRunTest(test.code)}
                     className="q-button q-button-primary"
                   >
                     <Eye className="size-4" />
-                    {test.status === 'published' ? 'Open' : test.status}
                   </button>
                   <button
+                    aria-label={copiedCode === test.code ? `Link copied for ${test.title}` : `Copy link for ${test.title}`}
                     disabled={busy || loading || test.status !== 'published'}
                     title={
                       test.status !== 'published'
                         ? 'Publish this test before sharing it.'
-                        : 'Copy a direct link to this test'
+                        : copiedCode === test.code ? 'Link copied' : 'Copy link'
                     }
                     onClick={() => void share(test.code)}
                     className="q-button q-button-secondary"
@@ -2284,25 +2286,20 @@ export function PreformedTestsWorkspace({
                     ) : (
                       <Copy className="size-4" />
                     )}
-                    {copiedCode === test.code ? 'Link copied' : 'Copy link'}
+                  </button>
+                  <button title="Leaderboard" aria-label={`Leaderboard for ${test.title}`} disabled={busy || loading} onClick={() => void showBoard(test)} className="q-button q-button-secondary">
+                    <Trophy className="size-4" />
                   </button>
                   {test.ownerId === user.uid ? (
                     <>
                       <button
+                        title="Edit test"
+                        aria-label={`Edit ${test.title}`}
                         disabled={busy || loading}
                         onClick={() => void edit(test.id)}
                         className="q-button q-button-secondary"
                       >
                         <Pencil className="size-4" />
-                        Edit
-                      </button>
-                      <button
-                        disabled={busy || loading}
-                        onClick={() => void edit(test.id, true)}
-                        className="q-button q-button-secondary"
-                      >
-                        <BarChart3 className="size-4" />
-                        Stats
                       </button>
                       <button
                         title="Rotate code"
@@ -2326,14 +2323,6 @@ export function PreformedTestsWorkspace({
                   ) : (
                     <>
                       <button
-                        disabled={busy || loading}
-                        onClick={() => void showBoard(test)}
-                        className="q-button q-button-secondary"
-                      >
-                        <Trophy className="size-4" />
-                        Board
-                      </button>
-                      <button
                         title="Report"
                         aria-label={`Report ${test.title}`}
                         disabled={busy || loading}
@@ -2344,6 +2333,7 @@ export function PreformedTestsWorkspace({
                       </button>
                       {user.role === 'super_admin' && user.mfaVerified && (
                         <button
+                          title="Hide test"
                           disabled={busy || loading}
                         aria-label={`Hide ${test.title}`}
                           onClick={() => void moderate(test.id)}
@@ -2355,6 +2345,7 @@ export function PreformedTestsWorkspace({
                     </>
                   )}
                 </div>
+                {copiedCode === test.code && <output className="sr-only">Link copied</output>}
               </article>
             ))}
           </div>
@@ -2385,7 +2376,7 @@ export function PreformedTestsWorkspace({
             <section className="mx-auto max-w-4xl rounded-3xl bg-card p-5 shadow-2xl sm:p-7">
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-bold text-primary">RESULTS</p>
+                  <p className="text-xs font-bold text-primary">LEADERBOARD</p>
                   <h2 className="truncate text-2xl font-black">
                     {stats.test.title}
                   </h2>
@@ -2403,52 +2394,14 @@ export function PreformedTestsWorkspace({
                 )}
                 <button
                   onClick={() => setStats(undefined)}
+                  aria-label="Close leaderboard"
                   className="grid size-10 place-items-center rounded-xl hover:bg-muted"
                 >
                   <X className="size-5" />
                 </button>
               </div>
-              <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_280px]">
+              <div className="mt-6">
                 <Leaderboard entries={stats.leaderboard} />
-                <div>
-                  <h3 className="mb-3 font-bold">Question performance</h3>
-                  {stats.questionStats.length ? (
-                    <div className="space-y-2">
-                      {stats.test.questions.map((question, index) => {
-                        const stat = stats.questionStats.find(
-                          (item) => item.questionId === question.id,
-                        );
-                        const rate = stat?.submissions
-                          ? Math.round((stat.correct / stat.submissions) * 100)
-                          : 0;
-                        return (
-                          <div
-                            key={question.id}
-                            className="rounded-xl border p-3"
-                          >
-                            <p className="line-clamp-2 text-xs font-semibold">
-                              {index + 1}. {question.stem}
-                            </p>
-                            <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
-                              <div
-                                className="h-full bg-emerald-500"
-                                style={{ width: `${rate}%` }}
-                              />
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {rate}% correct · {stat?.submissions ?? 0}{' '}
-                              signed-in submissions
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">
-                      Detailed analytics are available to the creator.
-                    </p>
-                  )}
-                </div>
               </div>
             </section>
           </div>

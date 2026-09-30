@@ -118,7 +118,7 @@ export async function qbankLifecycleApiTests(t, { db, call }) {
         );
       }
       assert.equal(
-        (await call('lite', '/qbanks', { bank: draft('lite') })).status,
+        (await call('trial', '/qbanks', { bank: draft('trial') })).status,
         403,
       );
     },
@@ -127,8 +127,8 @@ export async function qbankLifecycleApiTests(t, { db, call }) {
   await t.test(
     'only the owner and Superadmin can delete; rank, editor and reviewer memberships do not grant deletion',
     async () => {
-      const bank = draft('pro', { visibility: 'private' });
-      assert.equal((await call('pro', '/qbanks', { bank })).status, 200);
+      const bank = draft('monthly', { visibility: 'private' });
+      assert.equal((await call('monthly', '/qbanks', { bank })).status, 200);
       for (const [uid, role] of [
         ['editor', 'editor'],
         ['reviewer', 'reviewer'],
@@ -139,11 +139,11 @@ export async function qbankLifecycleApiTests(t, { db, call }) {
           qbankId: bank.id,
           userId: uid,
           role,
-          grantedById: 'pro',
+          grantedById: 'monthly',
           createdAt: bank.createdAt,
         };
         assert.equal(
-          (await put('pro', [set('qbankMemberships', membership)])).status,
+          (await put('monthly', [set('qbankMemberships', membership)])).status,
           200,
         );
       }
@@ -153,7 +153,7 @@ export async function qbankLifecycleApiTests(t, { db, call }) {
         'reviewer',
         'moderator',
         'access',
-        'lite',
+        'trial',
       ]) {
         assert.equal(
           (await call(uid, `/qbanks/${bank.id}`, undefined, 'DELETE')).status,
@@ -171,11 +171,11 @@ export async function qbankLifecycleApiTests(t, { db, call }) {
         );
       }
       assert.equal(
-        (await call('pro', `/qbanks/${bank.id}`, undefined, 'DELETE')).status,
+        (await call('monthly', `/qbanks/${bank.id}`, undefined, 'DELETE')).status,
         200,
       );
       assert.equal(
-        (await call('pro', `/qbanks/${bank.id}`, undefined, 'DELETE')).status,
+        (await call('monthly', `/qbanks/${bank.id}`, undefined, 'DELETE')).status,
         200,
       );
       assert.equal(
@@ -183,13 +183,13 @@ export async function qbankLifecycleApiTests(t, { db, call }) {
         403,
       );
       assert.equal(
-        (await put('pro', [set('qbanks', bank)])).status,
+        (await put('monthly', [set('qbanks', bank)])).status,
         403,
         'offline snapshots cannot resurrect deleted banks',
       );
-      const foreign = draft('pro');
+      const foreign = draft('monthly');
       assert.equal(
-        (await call('pro', '/qbanks', { bank: foreign })).status,
+        (await call('monthly', '/qbanks', { bank: foreign })).status,
         200,
       );
       assert.equal(
@@ -197,14 +197,14 @@ export async function qbankLifecycleApiTests(t, { db, call }) {
           .status,
         200,
       );
-      const legacy = draft('pro');
+      const legacy = draft('monthly');
       assert.equal(
-        (await call('pro', '/qbanks', { bank: legacy })).status,
+        (await call('monthly', '/qbanks', { bank: legacy })).status,
         200,
       );
       assert.equal(
         (
-          await put('pro', [
+          await put('monthly', [
             { collection: 'qbanks', id: legacy.id, type: 'delete' },
           ])
         ).status,
@@ -347,8 +347,8 @@ export async function qbankLifecycleApiTests(t, { db, call }) {
   await t.test(
     'rejected synchronization identifies the change and does not commit the rest of its dependent batch',
     async () => {
-      const bank = draft('pro');
-      const rejected = await put('pro', [
+      const bank = draft('monthly');
+      const rejected = await put('monthly', [
         set('qbanks', bank),
         {
           collection: 'profiles',
@@ -388,7 +388,7 @@ export async function qbankLifecycleApiTests(t, { db, call }) {
         (await call('admin', '/qbanks/smle-gs', undefined, 'DELETE')).status,
         200,
       );
-      for (const uid of ['admin', 'pro', 'other'])
+      for (const uid of ['admin', 'monthly', 'other'])
         assert.equal(
           (await call(uid, '/collaboration')).data.collaboration.qbanks.some(
             (item) => item.id === 'smle-gs',

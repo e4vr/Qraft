@@ -62,13 +62,27 @@ void test('plan policy preserves limits, ordering, and feature gates', async () 
   const plans = await loadTypeScript(
     'features/subscriptions/domain/plan-config.ts',
   );
-  assert.deepEqual(plans.PLAN_ORDER, ['free', 'lite', 'pro', 'unlimited']);
+  assert.deepEqual(plans.PLAN_ORDER, ['free', 'full_monthly', 'full_quarterly']);
   assert.equal(plans.getPlanLimits('free').lifetimeExamLimit, 2);
-  assert.equal(plans.getPlanLimits('lite').monthlyExamLimit, 30);
-  assert.equal(plans.getPlanLimits('pro').maxQuestionsPerExam, 200);
-  assert.equal(plans.hasFeature('lite', 'flashcards'), false);
-  assert.equal(plans.hasFeature('pro', 'flashcards'), true);
-  assert.equal(plans.highestPlan('lite', 'free', 'unlimited'), 'unlimited');
+  assert.equal(plans.getPlanLimits('free').maxQuestionsPerExam, 15);
+  assert.equal(plans.getPlanLimits('full_monthly').priceSarPeriod, 100);
+  assert.equal(plans.getPlanLimits('full_quarterly').priceSarPeriod, 230);
+  const { priceSarPeriod: monthlyPrice, ...monthlyAccess } = plans.getPlanLimits('full_monthly');
+  const { priceSarPeriod: quarterlyPrice, ...quarterlyAccess } = plans.getPlanLimits('full_quarterly');
+  assert.deepEqual([monthlyPrice, quarterlyPrice], [100, 230]);
+  assert.deepEqual(monthlyAccess, quarterlyAccess);
+  assert.equal(monthlyAccess.monthlyExamLimit, null);
+  assert.equal(monthlyAccess.lifetimeExamLimit, null);
+  assert.equal(monthlyAccess.maxFlashcardDecks, null);
+  assert.equal(monthlyAccess.maxFlashcards, null);
+  for (const feature of ['createQBank', 'createPrivateQBank', 'jsonImport', 'privateNotes', 'flashcards', 'readyTests']) {
+    assert.equal(plans.hasFeature('free', feature), false);
+    assert.equal(plans.hasFeature('full_monthly', feature), true);
+    assert.equal(plans.hasFeature('full_quarterly', feature), true);
+  }
+  assert.equal(plans.highestPlan('full_monthly', 'free', 'full_quarterly'), 'full_quarterly');
+  assert.equal(plans.PLAN_DURATION_MONTHS.full_monthly, 1);
+  assert.equal(plans.PLAN_DURATION_MONTHS.full_quarterly, 3);
 });
 
 void test('calendar subscription durations clamp end-of-month and leap-day boundaries', async () => {
@@ -83,6 +97,7 @@ void test('calendar subscription durations clamp end-of-month and leap-day bound
     calendar.addCalendarDuration('2028-02-29T12:30:00.000Z', 1, 'year'),
     '2029-02-28T12:30:00.000Z',
   );
+  assert.equal(calendar.addCalendarDuration('2027-01-31T12:30:00.000Z', 3, 'month'), '2027-04-30T12:30:00.000Z');
 });
 
 void test('exam helpers preserve range, title, and progress behavior', async () => {

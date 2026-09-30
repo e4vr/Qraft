@@ -99,7 +99,7 @@ void test('platform roles are managed independently from subscriptions', async (
     dashboard,
     /Moderator includes Reviewer and Access Manager permissions/,
   );
-  assert.doesNotMatch(dashboard, /toggleAccountRole\(member, 'pro'\)/);
+  assert.doesNotMatch(dashboard, /toggleAccountRole\(member, 'monthly'\)/);
   assert.match(dashboard, /disabled={!unsaved}/);
   assert.match(dashboard, /account_roles_saved/);
   assert.match(dashboard, /Manage roles/);
@@ -138,7 +138,7 @@ void test('private banks, per-bank roles, and owner boundaries are enforced', as
   );
   assert.match(
     types,
-    /type AccountTier = 'free' \| 'lite' \| 'pro' \| 'unlimited'/,
+    /type AccountTier = 'free' \| 'full_monthly' \| 'full_quarterly'/,
   );
   assert.match(
     types,
@@ -165,8 +165,10 @@ void test('edit proposals require classified changes, a source, and review', asy
   );
   assert.match(server, /proposal\.editKinds\.length > 0/);
   assert.match(server, /typeof payload\?\.explanation === 'string'/);
-  assert.match(server, /payload\.sourceReference\.trim/);
-  assert.match(app, /Suggest Edit → Review → Approve\s*\/\s*Reject/);
+  assert.match(server, /validateQuestionSource\(payload\)/);
+  const editDialog = await readFile(new URL('components/question-edit-dialog.tsx', root), 'utf8');
+  assert.match(app, /<QuestionEditDialog/);
+  assert.match(editDialog, /reviewer will compare your proposed changes before approving or rejecting them/);
   assert.match(review, /Proposed · \{label\}/);
 });
 
@@ -670,7 +672,8 @@ void test('questions and JSON prompts support a configurable number of options',
     /options.length < 2\s*\|\|\s*item.options.length > 10/,
   );
   assert.match(manager, /Add option/);
-  assert.match(app, /proposedOptions\.length >= 10/);
+  const editDialog = await readFile(new URL('components/question-edit-dialog.tsx', root), 'utf8');
+  assert.match(editDialog, /draft\.options\.length >= 10/);
   assert.match(app, /options\.length >= 10/);
 });
 
@@ -711,7 +714,7 @@ void test('Every subscription can contribute questions and redeem earned rewards
     new URL('features/subscriptions/domain/plan-config.ts', root),
     'utf8',
   );
-  for (const plan of ['free', 'lite', 'pro', 'unlimited']) {
+  for (const plan of ['free', 'full_monthly', 'full_quarterly']) {
     const block = plans.match(
       new RegExp(`${plan}: \\{([\\s\\S]*?)\\n  \\},`),
     )?.[1];
@@ -719,11 +722,11 @@ void test('Every subscription can contribute questions and redeem earned rewards
     assert.match(block, /canAddQuestions: true/);
     assert.match(block, /canContribute: true/);
   }
-  const lite = plans.match(/lite: \{([\s\S]*?)\n  \},/)?.[1];
-  assert.ok(lite, 'Lite plan configuration is present');
-  assert.match(lite, /canCreateQBank: false/);
-  assert.match(lite, /canCreatePrivateQBank: false/);
-  assert.match(lite, /canAddQuestions: true/);
+  const trial = plans.match(/free: \{([\s\S]*?)\n  \},/)?.[1];
+  assert.ok(trial, 'Free trial configuration is present');
+  assert.match(trial, /canCreateQBank: false/);
+  assert.match(trial, /canCreatePrivateQBank: false/);
+  assert.match(trial, /canAddQuestions: true/);
   assert.match(plans, /REWARD_CATALOG/);
 });
 

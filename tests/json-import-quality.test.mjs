@@ -28,11 +28,12 @@ void test('common model schema variants preserve ordered choices and answer keys
 void test('readable questions survive malformed JSON and invalid rows without guessing answers or pages', () => {
   const raw = JSON.stringify({ sourceFile: 'Bank.pdf', questions: [question, { ...question, correctAnswer: 'Z' }, { ...question, sourcePage: undefined }] }).replace(/\}\]\}$/, '},]}');
   const report = parseQuestionImportReport(raw);
-  assert.equal(report.questions.length, 1);
-  assert.equal(report.skipped.length, 2);
+  assert.equal(report.questions.length, 2);
+  assert.equal(report.skipped.length, 1);
   assert.equal(report.repaired, true);
   assert.match(report.skipped[0].reason, /answer/);
-  assert.match(report.skipped[1].reason, /sourcePage/);
+  assert.equal(report.questions[1].sourcePage, undefined);
+  assert.equal(report.questions[1].sourceReference, 'Original bank.pdf - Q.17');
 });
 
 void test('full local parsing accepts a large file and source rename preserves source numbering', () => {

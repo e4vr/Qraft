@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { addCalendarDuration } from '@/features/subscriptions/domain/calendar-duration';
 import { subscribeLive } from '@/lib/realtime-client';
 import { Check, Crown, Eye, X, Search, Ticket, Users, ShieldCheck, Pencil, Plus, ChevronLeft, ChevronRight, History, SlidersHorizontal } from 'lucide-react';
 import { api, setApiCache } from '@/lib/api-client';
@@ -11,6 +12,9 @@ import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import {
   PLAN_LIMITS,
   PLAN_ORDER,
+  PAID_PLAN_IDS,
+  PLAN_DURATION_MONTHS,
+  planDurationLabel,
   type PlanId,
 } from '@/features/subscriptions/domain/plan-config';
 
@@ -59,7 +63,7 @@ export function Subscribe({
     [error, setError] = useState(''),
     [success, setSuccess] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState<Exclude<PlanId, 'free'>>('pro');
+  const [selectedPlan, setSelectedPlan] = useState<Exclude<PlanId, 'free'>>('full_quarterly');
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const actionInFlight = useRef(false);
   const quoteSequence = useRef(0);
@@ -148,7 +152,7 @@ export function Subscribe({
       if (result.upgraded && result.user) {
         setAuthenticatedUserCache(result.user);
         onUser(result.user);
-        setSuccess(`${catalogLimits(selectedPlan).name} is now active for one year.`);
+        setSuccess(`${catalogLimits(selectedPlan).name} is now active for ${planDurationLabel(selectedPlan)}.`);
       } else if (result.url) window.location.assign(result.url);
       else throw new Error('The subscription could not be confirmed. Please try again.');
     } catch (e) {
@@ -166,47 +170,54 @@ export function Subscribe({
           Choose the plan that fits your study
         </h1>
         <p className="mt-2 text-muted-foreground">
-          Support your study with a one-year subscription.
+          Full access to Qraft. Choose one month or three months.
         </p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {PLAN_ORDER.map((plan) => {
+      <div className="grid gap-5 sm:grid-cols-2">
+        {PAID_PLAN_IDS.map((plan) => {
           const limits = catalogLimits(plan);
-          const selectable = plan !== 'free';
-          const descriptions: Record<PlanId, string> = {
-            free: 'Try the platform',
-            lite: 'For university study',
-            pro: 'For serious study and contribution',
-            unlimited: 'For major exam preparation and heavy usage',
-          };
+          const quarterly = plan === 'full_quarterly';
+          const features = [
+            limits.monthlyExamLimit === null && limits.lifetimeExamLimit === null ? 'Unlimited tests across your accessible QBanks' : `${limits.lifetimeExamLimit ?? limits.monthlyExamLimit} tests ${limits.lifetimeExamLimit !== null ? 'for account lifetime' : 'per month'}`,
+            limits.canCreateReadyTests && 'Create independent Ready Tests',
+            limits.canUseFlashcards && 'Turn questions into Flashcards',
+            'Bookmark and flag questions',
+            'Track daily progress and performance',
+            limits.canUsePrivateNotes && 'Private notes and study tools',
+            limits.canCreateQBank && 'Create and share QBanks',
+            limits.canUseJsonImport && 'Import and contribute questions',
+          ].filter((item): item is string => Boolean(item));
           return (
             <button
               type="button"
               key={plan}
-              disabled={!selectable || busy}
+              disabled={busy}
               aria-pressed={selectedPlan === plan}
+              aria-label={`${limits.name}, ${planDurationLabel(plan)}`}
               onClick={() => {
-                if (plan === 'free' || plan === selectedPlan || actionInFlight.current) return;
+                if (plan === selectedPlan || actionInFlight.current) return;
                 ++quoteSequence.current;
                 setPrice(undefined); setCode(''); setAppliedCode(''); setError(''); setSuccess('');
                 setRequestId(crypto.randomUUID()); setSelectedPlan(plan);
               }}
-              className={`relative rounded-2xl border p-4 text-left transition ${selectedPlan === plan ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : 'bg-card'} disabled:cursor-default`}
+              className={`relative flex flex-col rounded-3xl border p-6 text-left transition ${quarterly ? 'border-emerald-300 bg-gradient-to-br from-emerald-50/70 to-card dark:border-emerald-800 dark:from-emerald-950/40' : 'border-blue-200 bg-gradient-to-br from-blue-50/70 to-card dark:border-blue-800 dark:from-blue-950/40'} ${selectedPlan === plan ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : ''}`}
             >
-              {plan === 'pro' && <span className="absolute right-3 top-3 rounded-full bg-primary px-2 py-1 text-[10px] font-bold text-primary-foreground">MOST POPULAR</span>}
-              <strong className="text-lg">{limits.name}</strong>
-              <p className="mt-1 text-2xl font-black">{plan === 'free' ? 'Free' : catalogPrices[plan] === undefined ? 'Loading price…' : `${catalogPrices[plan]} SAR/year`}</p>
-              <p className="mt-2 text-sm text-muted-foreground">{catalogLimits(plan).description || descriptions[plan]}</p>
-              <p className="mt-3 text-xs text-muted-foreground">
-                {limits.lifetimeExamLimit
-                  ? `${limits.lifetimeExamLimit} exams for account lifetime`
-                  : `${limits.monthlyExamLimit} exams/month`}{' '}
-                · {limits.maxQuestionsPerExam} questions/exam
-                {limits.fairUse ? ' · Fair Use applies' : ''}
-              </p>
+              <span className={`mb-4 w-fit rounded-full px-3 py-1 text-xs font-bold ${quarterly ? 'bg-emerald-600 text-white' : 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-100'}`}>{quarterly ? 'BEST VALUE · 3 MONTHS' : 'MONTHLY PLAN'}</span>
+              <strong className="text-2xl font-black">{limits.name}</strong>
+              <p className="mt-1 text-muted-foreground">{planDurationLabel(plan)}</p>
+              <p className={`my-5 text-4xl font-black ${quarterly ? 'text-emerald-700 dark:text-emerald-400' : 'text-blue-700 dark:text-blue-400'}`}>{catalogPrices[plan] === undefined ? 'Loading price…' : `${catalogPrices[plan]} SAR`}</p>
+              {limits.description && <p className="mb-4 text-sm text-muted-foreground">{limits.description}</p>}
+              <ul className="mb-6 space-y-3 border-t pt-5 text-sm">
+                {features.map(feature => <li key={feature} className="flex items-start gap-2"><Check aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${quarterly ? 'text-emerald-600' : 'text-blue-600'}`} />{feature}</li>)}
+              </ul>
+              <span className={`mt-auto rounded-xl px-4 py-3 text-center font-semibold ${quarterly ? 'bg-emerald-600 text-white' : 'bg-blue-600 text-white'}`}>{selectedPlan === plan ? 'Selected' : 'Choose this plan'}</span>
             </button>
           );
         })}
+      </div>
+      <div className="rounded-2xl border border-violet-300 bg-violet-50/60 p-5 dark:border-violet-800 dark:bg-violet-950/30">
+        <strong className="text-lg">{catalogLimits('free').name}</strong>
+        <p className="mt-2 text-sm text-muted-foreground">{catalogLimits('free').lifetimeExamLimit === null ? 'No lifetime exam limit' : `${catalogLimits('free').lifetimeExamLimit} tests for the lifetime of your account`}, from any accessible QBank, with up to {catalogLimits('free').maxQuestionsPerExam} questions per test.</p>
       </div>
       <div className="flex justify-center">
         <button
@@ -235,19 +246,21 @@ export function Subscribe({
                 <tr>
                   <th className="w-[25%] p-4 align-bottom font-semibold text-muted-foreground">Features</th>
                   {PLAN_ORDER.map((plan) => (
-                    <th key={plan} className={`p-4 text-center align-bottom ${plan === 'pro' ? 'border-x-2 border-t-2 border-[#18b39f] bg-[#effcf9] dark:bg-[#123b3b]' : ''}`}>
-                      {plan === 'pro' && <span className="mx-auto mb-2 flex w-fit items-center justify-center whitespace-nowrap rounded-full bg-[#18b39f] px-3 py-1 text-[10px] font-bold leading-4 text-white shadow-sm">Most popular</span>}
+                    <th key={plan} className={`p-4 text-center align-bottom ${plan === 'full_quarterly' ? 'border-x-2 border-t-2 border-[#18b39f] bg-[#effcf9] dark:bg-[#123b3b]' : ''}`}>
+                      {plan === 'full_quarterly' && <span className="mx-auto mb-2 flex w-fit items-center justify-center whitespace-nowrap rounded-full bg-[#18b39f] px-3 py-1 text-[10px] font-bold leading-4 text-white shadow-sm">Most popular</span>}
                       <span className="block text-lg font-black text-[#07233d] dark:text-white">{catalogLimits(plan).name}</span>
-                      <span className="mt-1 block text-xs font-normal text-muted-foreground">{plan === 'free' ? 'Start free' : catalogPrices[plan] === undefined ? '…' : `${catalogPrices[plan]} SAR / year`}</span>
+                      <span className="mt-1 block text-xs font-normal text-muted-foreground">{plan === 'free' ? 'Start free' : catalogPrices[plan] === undefined ? '…' : `${catalogPrices[plan]} SAR / ${planDurationLabel(plan)}`}</span>
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {[
-                  ['Annual price', (plan: PlanId) => plan === 'free' ? 'Free' : catalogPrices[plan] === undefined ? '…' : `${catalogPrices[plan]} SAR`],
-                  ['Exams', (plan: PlanId) => catalogLimits(plan).lifetimeExamLimit ? `${catalogLimits(plan).lifetimeExamLimit} for account lifetime` : `${catalogLimits(plan).monthlyExamLimit} per month`],
-                  ['Questions per exam', (plan: PlanId) => String(catalogLimits(plan).maxQuestionsPerExam)],
+                  ['Subscription price', (plan: PlanId) => plan === 'free' ? 'Free' : catalogPrices[plan] === undefined ? '…' : `${catalogPrices[plan]} SAR`],
+                  ['Exams', (plan: PlanId) => catalogLimits(plan).lifetimeExamLimit !== null ? `${catalogLimits(plan).lifetimeExamLimit} for account lifetime` : catalogLimits(plan).monthlyExamLimit === null ? 'Unlimited' : `${catalogLimits(plan).monthlyExamLimit} per month`],
+                  ['Subscription period', (plan: PlanId) => planDurationLabel(plan)],
+                  ['Questions per test', (plan: PlanId) => plan === 'free' ? String(catalogLimits(plan).maxQuestionsPerExam) : 'Full question access'],
+                  ['Create Ready Tests', (plan: PlanId) => catalogLimits(plan).canCreateReadyTests],
                   ['Create a QBank', (plan: PlanId) => catalogLimits(plan).canCreateQBank],
                   ['Add questions and contributions', (plan: PlanId) => catalogLimits(plan).canAddQuestions && catalogLimits(plan).canContribute],
                   ['Upload contribution images', (plan: PlanId) => catalogLimits(plan).canUploadImages],
@@ -260,7 +273,7 @@ export function Subscribe({
                     {PLAN_ORDER.map((plan) => {
                       const result = (value as (plan: PlanId) => string | boolean)(plan);
                       return (
-                        <td key={plan} className={`border-t p-3 text-center text-muted-foreground ${plan === 'pro' ? 'border-x-2 border-x-[#18b39f] bg-[#effcf9] dark:bg-[#123b3b]' : ''}`}>
+                        <td key={plan} className={`border-t p-3 text-center text-muted-foreground ${plan === 'full_quarterly' ? 'border-x-2 border-x-[#18b39f] bg-[#effcf9] dark:bg-[#123b3b]' : ''}`}>
                           {typeof result === 'boolean' ? (result ? <span className="mx-auto grid size-6 place-items-center rounded-full bg-[#18b39f] text-white"><Check aria-hidden="true" className="size-4" /><span className="sr-only">Included</span></span> : <span className="mx-auto grid size-6 place-items-center rounded-full bg-red-100 text-red-500 dark:bg-red-950"><X aria-hidden="true" className="size-4" /><span className="sr-only">Not included</span></span>) : <span className="font-semibold text-[#07233d] dark:text-slate-100">{result}</span>}
                         </td>
                       );
@@ -279,7 +292,7 @@ export function Subscribe({
             <p className="text-3xl font-black">
               {sar(currentPrice.final)}{' '}
               <span className="text-sm font-normal text-muted-foreground">
-                / Year
+                / {planDurationLabel(selectedPlan)}
               </span>
             </p>
             {currentPrice.code && (
@@ -332,13 +345,13 @@ export function Subscribe({
         )}
         <button
           className="q-button mt-4 w-full bg-primary text-primary-foreground"
-          disabled={busy || !currentPrice || (user.effectivePlan ?? user.tier) === selectedPlan}
+          disabled={busy || !currentPrice}
           onClick={() => void subscribe()}
         >
           {busy
             ? 'Processing…'
             : (user.effectivePlan ?? user.tier) === selectedPlan
-              ? `${catalogLimits(selectedPlan).name} active`
+              ? 'Renew subscription'
               : 'Subscribe now'}
         </button>
         <p className="mt-3 text-xs text-muted-foreground">
@@ -366,7 +379,7 @@ export function UpgradeDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="sm:max-w-3xl">
-        <DialogTitle className="sr-only">Upgrade to Pro</DialogTitle>
+        <DialogTitle className="sr-only">Qraft Full Access</DialogTitle>
         <Subscribe user={user} onUser={onUser} />
       </DialogContent>
     </Dialog>
@@ -429,7 +442,7 @@ const emptyCode: Code = {
   max_uses: null,
   per_user: 1,
   uses: 0,
-  allowed_plans: '["lite","pro","unlimited"]',
+  allowed_plans: '["full_monthly","full_quarterly"]',
 };
 const codeSignature = (code: Code) => JSON.stringify({
   id: code.id,
@@ -461,7 +474,7 @@ export function SubscriptionAdmin({
     [end, setEnd] = useState(''),
     [paid, setPaid] = useState('0'),
     [manualCode, setManualCode] = useState(''),
-    [manualPlan, setManualPlan] = useState<PlanId>('pro'),
+    [manualPlan, setManualPlan] = useState<PlanId>('full_monthly'),
     [noExpiration, setNoExpiration] = useState(true),
     [reason, setReason] = useState(''),
     [planDrafts, setPlanDrafts] = useState<Record<string, PlanId>>({}),
@@ -575,7 +588,7 @@ export function SubscriptionAdmin({
   function openSubscription(row: Subscription) {
     setSelected(row); setManualPlan(row.tier); setReason(row.override_reason ?? '');
     setNoExpiration(!row.override_expires_at);
-    setEnd((row.override_expires_at || row.expires_at || new Date(Date.now() + 365 * 86400000).toISOString()).slice(0, 10));
+    setEnd((row.override_expires_at || row.expires_at || addCalendarDuration(new Date().toISOString(), PLAN_DURATION_MONTHS[row.tier] || 1, 'month')).slice(0, 10));
     setPaid(String((row.paid ?? 0) / 100)); setManualCode(''); setError(''); setMessage('');
   }
   const date = (value: string | null) => value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
@@ -612,7 +625,7 @@ export function SubscriptionAdmin({
             </tr>) : subscriptions.slice(0,50).map(row => <tr key={row.uid}>
               <td data-label="Member"><strong>{row.name}</strong><span className="q-control-email">{row.email}</span><small className="q-control-uid" title={row.uid}>{row.uid}</small></td>
               <td data-label="Effective access"><span className="q-control-badge" data-plan={row.tier}>{PLAN_LIMITS[row.tier]?.name ?? row.tier}</span><small>{row.override_plan ? 'Admin assigned' : row.reward_plan === row.tier ? 'Reward access' : 'Standard access'}</small></td>
-              <td data-label="Assign plan"><div className="q-control-plan-editor"><select aria-label={`Plan for ${row.email}`} disabled={saving} value={planDrafts[row.uid] ?? row.tier} onChange={e => setPlanDrafts(current => ({...current,[row.uid]:e.target.value as PlanId}))}>{PLAN_ORDER.map(plan => <option key={plan} value={plan}>{PLAN_LIMITS[plan].name}</option>)}</select><button disabled={saving || !planDrafts[row.uid]} onClick={() => void save({operation:'override',userId:row.uid,plan:planDrafts[row.uid],expires_at:null,reason:'Assigned from subscribers dashboard'})}>Apply</button></div><small>Immediate · no expiration</small></td>
+              <td data-label="Assign plan"><div className="q-control-plan-editor"><select aria-label={`Plan for ${row.email}`} disabled={saving} value={planDrafts[row.uid] ?? row.tier} onChange={e => setPlanDrafts(current => ({...current,[row.uid]:e.target.value as PlanId}))}>{PLAN_ORDER.map(plan => <option key={plan} value={plan}>{PLAN_LIMITS[plan].name} · {planDurationLabel(plan)}</option>)}</select><button disabled={saving || !planDrafts[row.uid]} onClick={() => void save({operation:'override',userId:row.uid,plan:planDrafts[row.uid],expires_at:null,reason:'Assigned from subscribers dashboard'})}>Apply</button></div><small>Immediate · no expiration</small></td>
               <td data-label="Access / billing dates"><span>{row.override_plan ? row.override_expires_at ? `Access until ${date(row.override_expires_at)}` : 'Access has no expiration' : row.expires_at ? `Billing until ${date(row.expires_at)}` : 'No billing expiration'}</span><small>{row.starts_at ? `Billing since ${date(row.starts_at)}` : 'No billing start date'}</small>{row.expires_at && <small>{Math.max(0,Math.ceil((Date.parse(row.expires_at)-today)/86400000))} billing days left</small>}</td>
               <td data-label="Payment record"><strong>{sar(row.paid ?? 0)}</strong><small>{row.method || 'No payment method'} · {row.status?.replaceAll('_',' ') || 'No billing record'}</small><small>Code: {row.discount_code || '—'}</small></td>
               <td data-label="Actions"><button className="q-control-manage" onClick={() => openSubscription(row)}><SlidersHorizontal className="size-4" />Manage</button></td>
@@ -727,7 +740,7 @@ export function SubscriptionAdmin({
             <fieldset className="sm:col-span-2">
               <legend className="text-sm font-semibold">Allowed paid plans</legend>
               <div className="mt-2 flex flex-wrap gap-3">
-                {(['lite', 'pro', 'unlimited'] as const).map((plan) => {
+                {PAID_PLAN_IDS.map((plan) => {
                   const selected = (JSON.parse(draft.allowed_plans || '[]') as string[]).includes(plan);
                   return (
                     <label key={plan} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm capitalize">
@@ -782,7 +795,7 @@ export function SubscriptionAdmin({
           <div className="q-control-member-heading"><strong>{selected?.name}</strong><span>{selected?.email}</span></div>
           <form className="q-control-access-form" onSubmit={event => { event.preventDefault(); void save({operation:'override',userId:selected?.uid,plan:manualPlan,expires_at:noExpiration ? null : `${end}T23:59:59.999Z`,reason}); }}>
             <p className="q-control-assignment-note"><ShieldCheck className="size-5" />This assignment takes priority over subscriptions, active gifts and rewards. Access changes immediately.</p>
-            <fieldset disabled={saving}><legend>Assign plan</legend><div className="q-control-plan-options">{PLAN_ORDER.map(plan => <label key={plan} data-selected={manualPlan===plan}><input type="radio" name="override-plan" value={plan} checked={manualPlan===plan} onChange={() => setManualPlan(plan)} /><span>{PLAN_LIMITS[plan].name}</span></label>)}</div></fieldset>
+            <fieldset disabled={saving}><legend>Assign plan</legend><div className="q-control-plan-options">{PLAN_ORDER.map(plan => <label key={plan} data-selected={manualPlan===plan}><input type="radio" name="override-plan" value={plan} checked={manualPlan===plan} onChange={() => setManualPlan(plan)} /><span>{PLAN_LIMITS[plan].name} · {planDurationLabel(plan)}</span></label>)}</div></fieldset>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={noExpiration} onChange={event => setNoExpiration(event.target.checked)} />No expiration · keep until changed</label>
             {!noExpiration && <label>Access expiration<input required type="date" className={field} value={end} min={new Date().toISOString().slice(0,10)} onChange={e => setEnd(e.target.value)} /><small>Access remains until 23:59:59 UTC on this date, then returns to the other eligible plans.</small></label>}
             <div className="q-ops-form-grid"><label>Extend by days<input className={field} type="number" min="1" max="730" value={extensionDays} onChange={event=>setExtensionDays(event.target.value)} /></label><button type="button" className="q-ops-button" disabled={saving || !Number.isInteger(Number(extensionDays)) || Number(extensionDays)<1 || Number(extensionDays)>730} onClick={()=>{setNoExpiration(false);setEnd(new Date(Math.max(Date.now(),Number.isFinite(Date.parse(end))?Date.parse(end):Date.now())+Number(extensionDays)*86_400_000).toISOString().slice(0,10));}}>Preview new date</button></div>
@@ -790,7 +803,7 @@ export function SubscriptionAdmin({
             {error && <p role="alert" className="text-destructive text-sm">{error}</p>}
             <button disabled={saving} className="q-button q-button-primary w-full" type="submit">{saving ? 'Applying…' : `Apply ${PLAN_LIMITS[manualPlan].name} now`}</button>
           </form>
-          <details className="q-control-billing-details"><summary>Payment & renewal records</summary><p>Update billing history separately. An admin access assignment keeps its priority.</p><label>Billing expiration<input type="date" className={field} value={end} onChange={e => setEnd(e.target.value)} /></label><button className="q-button border" onClick={() => setEnd(new Date(Math.max(Date.now(), Number.isFinite(Date.parse(end)) ? Date.parse(end) : Date.now())+365*86400000).toISOString().slice(0,10))}>Extend one year</button><label>Final amount paid (SAR)<input type="number" min="0" step="0.01" className={field} value={paid} onChange={e => setPaid(e.target.value)} /></label><label>Discount code<input className={field} value={manualCode} onChange={e => setManualCode(e.target.value)} /></label><button disabled={saving || manualPlan==='free' || !end} className="q-button border" onClick={() => void save({userId:selected?.uid,plan:manualPlan,expires_at:`${end}T23:59:59.999Z`,paid:Math.round(Number(paid)*100),code:manualCode})}>Save {PLAN_LIMITS[manualPlan].name} billing record</button><button disabled={saving} className="q-button text-destructive" onClick={() => void save({userId:selected?.uid,operation:'cancel'})}>Cancel paid subscription</button></details>
+          <details className="q-control-billing-details"><summary>Payment & renewal records</summary><p>Update billing history separately. An admin access assignment keeps its priority.</p><label>Billing expiration<input type="date" className={field} value={end} onChange={e => setEnd(e.target.value)} /></label><button className="q-button border" onClick={() => setEnd(addCalendarDuration(new Date(Math.max(Date.now(), Number.isFinite(Date.parse(end)) ? Date.parse(end) : Date.now())).toISOString(), PLAN_DURATION_MONTHS[manualPlan] || 1, 'month').slice(0,10))}>Extend selected period</button><label>Final amount paid (SAR)<input type="number" min="0" step="0.01" className={field} value={paid} onChange={e => setPaid(e.target.value)} /></label><label>Discount code<input className={field} value={manualCode} onChange={e => setManualCode(e.target.value)} /></label><button disabled={saving || manualPlan==='free' || !end} className="q-button border" onClick={() => void save({userId:selected?.uid,plan:manualPlan,expires_at:`${end}T23:59:59.999Z`,paid:Math.round(Number(paid)*100),code:manualCode})}>Save {PLAN_LIMITS[manualPlan].name} billing record</button><button disabled={saving} className="q-button text-destructive" onClick={() => void save({userId:selected?.uid,operation:'cancel'})}>Cancel paid subscription</button></details>
         </DialogContent>
       </Dialog>
       {confirmationDialog}

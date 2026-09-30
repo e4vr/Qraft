@@ -108,6 +108,59 @@ void test('a rejected group is preserved locally while an unrelated bank synchro
   assert.equal(retained[0].details.group, 'bad');
 });
 
+void test('peer-only answer statistics do not send empty patches or reject unrelated bank changes', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const uid = 'answer-patch-recovery';
+  const stat = (id, selections) => ({ id, qbankId: 'a', questionId: id, selections });
+  const before = {
+    ...empty(), qbanks: [bank('a')],
+    answerStats: {
+      'no-own-answer': stat('no-own-answer', { peer: 0 }),
+      'same-own-answer': stat('same-own-answer', { [uid]: 0, peer: 0 }),
+      'changed-own-answer': stat('changed-own-answer', { [uid]: 0, peer: 0 }),
+    },
+  };
+  const next = {
+    ...before, qbanks: [{ ...bank('a'), name: 'Updated bank' }],
+    answerStats: {
+      'no-own-answer': stat('no-own-answer', { peer: 1 }),
+      'same-own-answer': stat('same-own-answer', { [uid]: 0, peer: 1 }),
+      'changed-own-answer': stat('changed-own-answer', { [uid]: 1, peer: 1 }),
+      'new-own-answer': stat('new-own-answer', { [uid]: 0 }),
+      'empty-stat': stat('empty-stat', {}),
+    },
+  };
+  const sent = [];
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(init.method, 'PUT');
+    const operations = JSON.parse(init.body).operations;
+    sent.push(operations);
+    for (const operation of operations.filter(o => o.collection === 'answerStats')) {
+      assert.deepEqual(Object.keys(operation.value.selections), [uid]);
+      assert.equal(typeof operation.value.selections[uid], 'number');
+    }
+    return Response.json({ ok: true });
+  };
+  await m.saveCollaborationState(next, before, uid);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].map(o => o.id), ['a', 'changed-own-answer', 'new-own-answer']);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 0);
+  assert.equal(await m.loadCollaborationSyncOutbox(uid), undefined);
+});
+
+void test('a peer-only statistics refresh completes without any write or rejection', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => { assert.fail('A peer-only refresh must not send a request.'); };
+  const uid = 'peer-only-refresh';
+  const before = { ...empty(), answerStats: { s: { id: 's', qbankId: 'a', questionId: 'q', selections: { peer: 0 } } } };
+  const next = { ...before, answerStats: { s: { ...before.answerStats.s, selections: { peer: 1 } } } };
+  await m.saveCollaborationState(next, before, uid);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 0);
+  assert.equal(await m.loadCollaborationSyncOutbox(uid), undefined);
+});
+
 void test('acknowledging an in-flight batch rebases newer changes instead of resending already accepted changes', async (t) => {
   const fetch = globalThis.fetch;
   t.after(() => {

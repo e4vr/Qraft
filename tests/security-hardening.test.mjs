@@ -28,7 +28,7 @@ void test('Phase 4 server trust boundaries remain enforced', async () => {
   assert.match(platform, /hmac-sha256-v1/);
   assert.match(platform, /conflict with data owned by another account/);
   assert.match(preformed, /preformed_participation/);
-  assert.match(preformed, /Submit this test before viewing its leaderboard/);
+  assert.match(preformed, /if \(!owner && row\.status !== 'published'\)/);
   assert.match(preformed, /authorizePrivateMedia/);
   assert.match(worker, /withSecurityHeaders/);
   for (const name of [

@@ -13,11 +13,11 @@ export async function saasApiTests(t, { db, call, mf, emptyState }) {
         { ...emptyState(), progress: { broken: null } },
       ])
         assert.equal(
-          (await call('pro', '/state', { state }, 'PUT')).status,
+          (await call('monthly', '/state', { state }, 'PUT')).status,
           400,
         );
       assert.equal(
-        (await call('pro', '/auth/login', { email: 42, password: [] })).status,
+        (await call('monthly', '/auth/login', { email: 42, password: [] })).status,
         400,
       );
       const response = await mf.dispatchFetch(
@@ -25,7 +25,7 @@ export async function saasApiTests(t, { db, call, mf, emptyState }) {
         {
           method: 'PUT',
           headers: {
-            cookie: '__Host-qraft_session=fixture-pro',
+            cookie: '__Host-qraft_session=fixture-monthly',
             origin: 'https://qraft.test',
             'x-qraft-account': 'other',
           },
@@ -54,8 +54,8 @@ export async function saasApiTests(t, { db, call, mf, emptyState }) {
         )
         .run();
       try {
-        const result = await call('pro', '/platform/quote', {
-          plan: 'pro',
+        const result = await call('monthly', '/platform/quote', {
+          plan: 'full_monthly',
           code: 'FAILURE',
         });
         assert.equal(result.status, 500);
@@ -105,7 +105,7 @@ export async function saasApiTests(t, { db, call, mf, emptyState }) {
                 uid,
                 email: `${uid}@example.test`,
                 displayName: uid,
-                tier: 'pro',
+                tier: 'full_monthly',
                 role: 'student',
                 status: 'approved',
                 platformRoles: [],

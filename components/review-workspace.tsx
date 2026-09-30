@@ -1,4 +1,5 @@
 'use client';
+import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 
 /* oxlint-disable next/no-img-element */
 
@@ -146,7 +147,7 @@ function DuplicateQuestionPanel({
         <div><dt className="text-xs font-bold text-muted-foreground">Correct answer</dt><dd>{payload.options[payload.answer] ?? optionLabel(payload.answer)}</dd></div>
         <div><dt className="text-xs font-bold text-muted-foreground">Specialty / topic</dt><dd>{payload.specialty} · {payload.topic}</dd></div>
         <div className="sm:col-span-2"><dt className="text-xs font-bold text-muted-foreground">Explanation</dt><dd className="whitespace-pre-wrap">{payload.explanation || 'No explanation provided.'}</dd></div>
-        <div className="sm:col-span-2"><dt className="text-xs font-bold text-muted-foreground">Source</dt><dd>{payload.sourceReference || '—'}</dd></div>
+        <div className="sm:col-span-2"><dt className="text-xs font-bold text-muted-foreground">Source</dt><dd>{readQuestionSource(payload).sourceReference || '—'}</dd></div>
       </dl>
       {payload.images?.length > 0 && (
         <div className="mt-3 grid grid-cols-2 gap-2">
@@ -899,7 +900,7 @@ export function ReviewWorkspace({
                         const candidatePayload: QuestionProposal['payload'] = {
                           ...candidateQuestion,
                           explanation: candidateQuestion.explanation ?? '',
-                          sourceReference: candidateQuestion.sourceReference ?? '',
+                          sourceReference: readQuestionSource(candidateQuestion).sourceReference,
                           images: candidateQuestion.images ?? [],
                         };
                         return (
@@ -965,8 +966,8 @@ export function ReviewWorkspace({
                     />
                     <DiffField
                       label="Source"
-                      current={current.sourceReference ?? ('sourceFile' in current ? current.sourceFile : '') ?? ''}
-                      proposed={proposal.payload.sourceReference}
+                      current={readQuestionSource(current).sourceReference}
+                      proposed={readQuestionSource(proposal.payload).sourceReference}
                     />
                   </div>}
                   {proposal.payload.images?.length > 0 && (

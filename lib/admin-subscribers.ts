@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 
-const rank = (column: string) => `CASE ${column} WHEN 'unlimited' THEN 3 WHEN 'pro' THEN 2 WHEN 'lite' THEN 1 ELSE 0 END`;
+const rank = (column: string) => `CASE ${column} WHEN 'full_quarterly' THEN 2 WHEN 'full_monthly' THEN 1 ELSE 0 END`;
 
 // Resolve the same sources as getEffectiveEntitlement before filtering or paging.
 export async function listAdminSubscribers(url: URL) {
@@ -15,7 +15,7 @@ export async function listAdminSubscribers(url: URL) {
     FROM profiles p LEFT JOIN subscriptions s ON s.user_id=p.uid
     LEFT JOIN account_plan_overrides o ON o.user_id=p.uid AND (o.expires_at IS NULL OR o.expires_at>?)
   ), resolved AS (
-    SELECT *,coalesce(override_plan,json_extract('["free","lite","pro","unlimited"]', '$[' || max(${rank('base_plan')},${rank('paid_plan')},${rank('reward_plan')},${rank('admin_plan')}) || ']')) AS tier FROM sources
+    SELECT *,coalesce(override_plan,json_extract('["free","full_monthly","full_quarterly"]', '$[' || max(${rank('base_plan')},${rank('paid_plan')},${rank('reward_plan')},${rank('admin_plan')}) || ']')) AS tier FROM sources
   ), filtered AS (
     SELECT * FROM resolved WHERE (email LIKE ? OR name LIKE ? OR uid LIKE ?)
     AND (?='' OR tier=? OR coalesce(status,'none')=? OR (?='override' AND override_plan IS NOT NULL))

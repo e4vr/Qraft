@@ -19,6 +19,7 @@ import { subscribeLive } from '@/lib/realtime-client';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
   PLAN_LIMITS,
+  planDurationLabel,
   type PlanId,
 } from '@/features/subscriptions/domain/plan-config';
 import {
@@ -960,7 +961,7 @@ export function PricingAdmin() {
     };
   }, []);
   const valid =
-    plans.length === 4 &&
+    plans.length === 3 &&
     plans
       .filter((plan) => plan.id !== 'free')
       .every(
@@ -1016,18 +1017,18 @@ export function PricingAdmin() {
       {saved && <Notice>{saved}</Notice>}
       <Notice>
         <CreditCard size={17} />
-        All prices are annual in SAR. Changes affect new quotes; existing paid
+        Prices are in SAR for the selected subscription period. Changes affect new quotes; existing paid
         access and gifts keep their dates.
       </Notice>
       <div className="q-ops-pricing">
         {plans.map((plan) => (
           <article className="q-ops-panel" key={plan.id}>
             <span className="q-ops-eyebrow">
-              {plan.id === 'free' ? 'STARTER ACCESS' : 'ANNUAL SUBSCRIPTION'}
+              {plan.id === 'free' ? 'STARTER ACCESS' : planDurationLabel(plan.id).toUpperCase()}
             </span>
             <h2>{plan.name}</h2>
             <label className="q-ops-field">
-              Price (SAR / year)
+              Price (SAR / subscription period)
               <input
                 type="number"
                 min={plan.id === 'free' ? 0 : 0.01}
@@ -1049,7 +1050,7 @@ export function PricingAdmin() {
                 <dd>
                   {plan.lifetimeExamLimit
                     ? `${plan.lifetimeExamLimit} lifetime`
-                    : `${plan.monthlyExamLimit} / month`}
+                    : plan.monthlyExamLimit === null ? 'No exam limit' : `${plan.monthlyExamLimit} / month`}
                 </dd>
               </div>
               <div>
@@ -1062,7 +1063,7 @@ export function PricingAdmin() {
               </div>
               <div>
                 <dt>Flashcards</dt>
-                <dd>{format(plan.maxFlashcards)}</dd>
+                <dd>{plan.maxFlashcards === null ? 'No plan limit' : format(plan.maxFlashcards)}</dd>
               </div>
               <div>
                 <dt>Imports / day</dt>
@@ -1181,7 +1182,7 @@ export function PricingAdmin() {
             maxLength={500}
             value={reason}
             onChange={(event) => setReason(event.target.value)}
-            placeholder="Annual pricing update"
+            placeholder="Subscription pricing update"
           />
         </label>
         <div className="q-ops-actions">

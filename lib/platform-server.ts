@@ -1,5 +1,6 @@
 import { detectImportDuplication, ImportDuplicateIndex, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
 import { env } from 'cloudflare:workers';
+import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 import { directQuestionEdit } from '@/features/qbanks/server/direct-question-edit';
 import { importSettings } from '@/features/imports/server/import-settings';
 import { validImportSettings } from '@/features/imports/domain/import-settings';
@@ -37,6 +38,7 @@ import { applyEffectiveEntitlement, getEffectiveEntitlement } from './entitlemen
 import {
   CONTRIBUTION_CREDITS,
   REWARD_CATALOG,
+  PLAN_DURATION_MONTHS,
   contributionBadge,
   getPlanLimits,
   isPlanId,
@@ -217,10 +219,15 @@ type Discount = {
   uses: number;
   allowed_plans: string;
 };
-async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'pro') {
+function paidPlan(value: string): Exclude<PlanId, 'free'> {
+  if (!value) return 'full_monthly';
+  if (!isPlanId(value) || value === 'free') throw new ValidationError('Choose a Full Access subscription period.');
+  return value;
+}
+async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'full_monthly') {
   if (requestedPlan === 'free') throw new ValidationError('Choose a paid plan.');
   const configured = await env.DB.prepare(
-    'SELECT coalesce(price_halalas,price_sar_year*100) AS price,policy_json FROM plan_prices WHERE plan=?',
+    'SELECT coalesce(price_halalas,price_sar_period*100) AS price,policy_json FROM plan_prices WHERE plan=?',
   )
     .bind(requestedPlan)
     .first<{ price: number; policy_json: string | null }>();
@@ -229,7 +236,7 @@ async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'pro')
     const policy = JSON.parse(configured?.policy_json || '{}') as { name?: unknown };
     if (typeof policy.name === 'string' && policy.name.trim()) planName = policy.name;
   } catch { /* Legacy catalog rows use the default plan name. */ }
-  const original = configured?.price ?? getPlanLimits(requestedPlan).priceSarYear * 100;
+  const original = configured?.price ?? getPlanLimits(requestedPlan).priceSarPeriod * 100;
   const discount = code
     ? await env.DB.prepare(
         'SELECT * FROM discount_codes WHERE code=? COLLATE NOCASE',
@@ -744,7 +751,7 @@ export async function platformApi(request: Request, action: string) {
     }
     if (action === 'import-preview' && request.method === 'POST') {
       if (!root && !(user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier)).canUseJsonImport)
-        return json({ error: 'Import is available with Pro.' }, 403);
+        return json({ error: 'Import is available with Full Access.' }, 403);
       const settings = await importSettings();
       if (!root && !settings.enabled) return json({ error: 'JSON import is temporarily paused by Superadmin.' }, 403);
       const now = new Date().toISOString();
@@ -2018,9 +2025,7 @@ export async function platformApi(request: Request, action: string) {
             answer: proposal.payload.answer,
             answerLetter: optionLabel(proposal.payload.answer),
             explanation: proposal.payload.explanation,
-            sourceReference: proposal.payload.sourceReference,
-            sourcePage: proposal.payload.sourcePage ?? existing?.sourcePage ?? 0,
-            sourceFile: proposal.payload.sourceFile ?? existing?.sourceFile ?? proposal.payload.sourceReference,
+            ...readQuestionSource(proposal.payload),
             revision: (existing?.revision ?? 0) + 1,
             isCustom: true,
             images: proposal.payload.images ?? existing?.images ?? [],
@@ -2127,9 +2132,7 @@ export async function platformApi(request: Request, action: string) {
         await quote(
           user,
           text('code'),
-          isPlanId(requestedPlan) && requestedPlan !== 'free'
-            ? requestedPlan
-            : 'pro',
+          paidPlan(requestedPlan),
         ),
       );
     }
@@ -2147,12 +2150,12 @@ export async function platformApi(request: Request, action: string) {
           ? json({ upgraded: true, user: await applyEffectiveEntitlement(user) })
           : json({ error: 'Please retry with a new request.' }, 409);
       const requestedPlan = text('plan');
-      const plan = isPlanId(requestedPlan) && requestedPlan !== 'free' ? requestedPlan : 'pro';
-      if ((user.effectivePlan ?? user.tier) === plan)
-        return json({ error: `Your account is already ${getPlanLimits(plan).name}.` }, 409);
+      const plan = paidPlan(requestedPlan);
       const price = await quote(user, text('code'), plan);
       const now = new Date().toISOString();
-      const end = addCalendarDuration(now, 1, 'year');
+      const existing = await getEffectiveEntitlement(user);
+      const startsAt = existing.effectivePlanExpiresAt && existing.effectivePlanExpiresAt > now ? existing.effectivePlanExpiresAt : now;
+      const end = addCalendarDuration(startsAt, PLAN_DURATION_MONTHS[plan], 'month');
       if (price.final === 0 && price.codeId) {
         try {
           await env.DB.batch([
@@ -2173,7 +2176,7 @@ export async function platformApi(request: Request, action: string) {
               now,
               end,
               now,
-              `One year ${price.planName}`,
+              `${PLAN_DURATION_MONTHS[plan]} month(s) ${price.planName}`,
               plan,
             ),
             auditStatement(
@@ -2225,7 +2228,7 @@ export async function platformApi(request: Request, action: string) {
           { error: 'A valid discount code is required for a free activation.' },
           400,
         );
-      const message = `I would like a one-year Qraft ${price.planName} subscription.\nName: ${user.displayName}\nEmail: ${user.email}\nUser ID: ${user.uid}\nOriginal: ${price.original / 100} SAR\nCode: ${price.code || 'None'}\nDiscount: ${price.discount / 100} SAR\nFinal: ${price.final / 100} SAR`;
+      const message = `I would like a ${PLAN_DURATION_MONTHS[plan]}-month ${price.planName} subscription.\nName: ${user.displayName}\nEmail: ${user.email}\nUser ID: ${user.uid}\nOriginal: ${price.original / 100} SAR\nCode: ${price.code || 'None'}\nDiscount: ${price.discount / 100} SAR\nFinal: ${price.final / 100} SAR`;
       return json({
         url: `https://wa.me/966537043984?text=${encodeURIComponent(message)}`,
       });
@@ -2281,7 +2284,7 @@ export async function platformApi(request: Request, action: string) {
         ? [...new Set(input.allowedPlans.filter((plan): plan is PlanId => isPlanId(plan) && plan !== 'free'))]
         : old
           ? (JSON.parse(old.allowed_plans || '[]') as PlanId[])
-          : ['lite', 'pro', 'unlimited'];
+          : ['full_monthly', 'full_quarterly'];
       const max =
           input.max_uses === null || input.max_uses === ''
             ? null
@@ -2368,7 +2371,7 @@ export async function platformApi(request: Request, action: string) {
       const profile = JSON.parse(member.profile_json) as MemberProfile;
       if (text('operation') === 'override') {
         const plan = text('plan');
-        if (!isPlanId(plan)) throw new ValidationError('Choose Free, Lite, Pro or Unlimited.');
+        if (!isPlanId(plan)) throw new ValidationError('Choose Free trial or a Full Access subscription period.');
         const now = new Date().toISOString();
         const requestedEnd = text('expires_at');
         if (requestedEnd && (!Number.isFinite(Date.parse(requestedEnd)) || Date.parse(requestedEnd) <= Date.parse(now)))
@@ -2389,7 +2392,7 @@ export async function platformApi(request: Request, action: string) {
       }
       const cancel = text('operation') === 'cancel';
       const requestedPlan = text('plan');
-      const subscriptionPlan = isPlanId(requestedPlan) && requestedPlan !== 'free' ? requestedPlan : 'pro';
+      const subscriptionPlan = paidPlan(requestedPlan);
       const now = new Date().toISOString(),
         requestedEnd = text('expires_at'),
         end = requestedEnd && Number.isFinite(Date.parse(requestedEnd))
@@ -2633,7 +2636,7 @@ export async function platformApi(request: Request, action: string) {
         return rejectImport(
           context,
           'PLAN_ACCESS_DENIED',
-          'Import is available with Pro.',
+          'Import is available with Full Access.',
           403,
         );
       if (!root && !(await importSettings()).enabled)
@@ -2662,7 +2665,7 @@ export async function platformApi(request: Request, action: string) {
           context,
           bank ? 'QBANK_ACCESS_DENIED' : 'QBANK_NOT_FOUND',
           bank
-            ? 'Question contribution access requires Pro.'
+            ? 'Question contribution access requires Full Access.'
             : 'The target QBank no longer exists.',
           bank ? 403 : 404,
         );

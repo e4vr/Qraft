@@ -74,7 +74,7 @@ void test('iPad rail exposes ten ordered destinations without changing phone nav
   assert.match(navigation, /\{tabletItems\.map\(\(item\) =>/);
   assert.match(navigation, /aria-label="More"[\s\S]*onClick=\{onMore\}/);
   assert.match(app, /showReview=\{showReview\}/);
-  assert.match(app, /showSubscribe=\{\(user\.effectivePlan \?\? user\.tier\) !== 'unlimited'\}/);
+  assert.match(app, /showSubscribe=\{user\.role !== 'super_admin'\}/);
   assert.match(shell, /mode === 'handheld' && handheldNavigation/);
   assert.match(shell, /mode === 'tablet' && tabletNavigation/);
   assert.match(styles, /\.q-tablet-rail \{[\s\S]*gap: clamp\(2px, \.55vh, var\(--q-space-2\)\)/);

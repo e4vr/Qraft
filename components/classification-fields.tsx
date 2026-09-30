@@ -59,7 +59,7 @@ export function ClassificationFields({
           {availableTopics.map((item) => <option key={item.id} value={item.name} aria-label={item.name} />)}
         </datalist>
       </label>
-      <p className="text-xs text-muted-foreground sm:col-span-2">New names are created only when you save. Typing and searching do not contact the server.</p>
+      <p className="text-xs text-muted-foreground sm:col-span-2">Choose an existing name or enter a new one. New names are saved with your question.</p>
     </div>
   );
 }

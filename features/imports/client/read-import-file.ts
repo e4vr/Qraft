@@ -11,6 +11,7 @@ export async function readImportFile(file: File): Promise<{ report: QuestionImpo
       else resolve(data);
     };
     worker.onerror = () => { finish(); reject(new Error('Unable to read the file. Please try again.')); };
-    worker.postMessage({ bytes, fallbackSourceFile: file.name.replace(/\.(json|txt|text)$/i, '') }, [bytes]);
+    // The uploaded JSON filename is not evidence of the original source.
+    worker.postMessage({ bytes, fallbackSourceFile: '' }, [bytes]);
   });
 }

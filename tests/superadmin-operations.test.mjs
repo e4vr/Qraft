@@ -122,7 +122,7 @@ void test('superadmin operations enforce authorization, money, maintenance and b
       displayName: uid,
       role: root ? 'super_admin' : 'student',
       status: 'approved',
-      tier: 'pro',
+      tier: 'full_monthly',
       platformRoles: [],
       universityId: uid,
       createdAt: now,
@@ -170,6 +170,18 @@ void test('superadmin operations enforce authorization, money, maintenance and b
     );
     return { status: response.status, data: await response.json() };
   };
+  await t.test('the catalog defaults to two Full Access periods and rejects retired plan requests', async () => {
+    const catalog = await call('member', '/platform/plan-catalog');
+    assert.equal(catalog.status, 200);
+    assert.deepEqual(catalog.data.plans.map(({ id, price }) => [id, price]), [['free', 0], ['full_monthly', 10000], ['full_quarterly', 23000]]);
+    for (const plan of ['full_monthly', 'full_quarterly']) {
+      const quote = await call('member', '/platform/quote', { plan });
+      assert.equal(quote.status, 200);
+      assert.equal(quote.data.plan, plan);
+    }
+    assert.equal((await call('member', '/platform/quote', { plan: 'retired-plan' })).status, 400);
+    assert.equal((await call('member', '/platform/checkout', { plan: 'retired-plan', requestId: randomUUID() })).status, 400);
+  });
   await t.test(
     'all operational endpoints require verified MFA and authoritative root role',
     async () => {
@@ -195,18 +207,17 @@ void test('superadmin operations enforce authorization, money, maintenance and b
     async () => {
       const prices = {
         plans: [
-          { id: 'lite', price: 1999 },
-          { id: 'pro', price: 2999 },
-          { id: 'unlimited', price: 6999 },
+          { id: 'full_monthly', price: 2999 },
+          { id: 'full_quarterly', price: 6999 },
         ],
-        reason: 'Test annual prices',
+        reason: 'Test subscription prices',
       };
       assert.equal(
         (await call('admin', '/platform/plan-pricing', prices, 'PUT')).status,
         200,
       );
       const quote = await call('member', '/platform/quote', {
-        plan: 'pro',
+        plan: 'full_monthly',
         code: '',
       });
       assert.equal(quote.data.original, 2999);
@@ -226,17 +237,25 @@ void test('superadmin operations enforce authorization, money, maintenance and b
       );
       await db
         .prepare(
-          "INSERT INTO discount_codes(id,code,kind,amount,enabled,uses,allowed_plans,updated_at) VALUES('test-free','TESTFREE','percent',100,1,0,'[\"pro\",\"unlimited\"]',?)",
+          "INSERT INTO discount_codes(id,code,kind,amount,enabled,uses,allowed_plans,updated_at) VALUES('test-free','TESTFREE','percent',100,1,0,'[\"full_monthly\",\"full_quarterly\"]',?)",
         )
         .bind(now)
         .run();
       const checkout = await call('member', '/platform/checkout', {
-        plan: 'unlimited',
+        plan: 'full_quarterly',
         code: 'TESTFREE',
         requestId: randomUUID(),
       });
       assert.equal(checkout.status, 200);
       assert.equal(checkout.data.upgraded, true);
+      const paid = await db.prepare("SELECT starts_at,expires_at FROM subscriptions WHERE user_id='member'").first();
+      const calendarEnd = new Date(paid.starts_at);
+      const day = calendarEnd.getUTCDate();
+      calendarEnd.setUTCDate(1);
+      calendarEnd.setUTCMonth(calendarEnd.getUTCMonth() + 3);
+      const lastDay = new Date(Date.UTC(calendarEnd.getUTCFullYear(),calendarEnd.getUTCMonth()+1,0)).getUTCDate();
+      calendarEnd.setUTCDate(Math.min(day,lastDay));
+      assert.equal(paid.expires_at, calendarEnd.toISOString());
     },
   );
   await t.test(
@@ -254,7 +273,7 @@ void test('superadmin operations enforce authorization, money, maintenance and b
         /PRIVATE_PASSWORD|password_hash|password_salt/,
       );
       assert.equal(
-        (await call('member', '/platform/quote', { plan: 'pro', code: '' }))
+        (await call('member', '/platform/quote', { plan: 'full_monthly', code: '' }))
           .status,
         403,
       );
@@ -276,7 +295,7 @@ void test('superadmin operations enforce authorization, money, maintenance and b
         .bind(new Date(Date.now() - 1000).toISOString())
         .run();
       assert.equal(
-        (await call('member', '/platform/quote', { plan: 'lite', code: '' }))
+        (await call('member', '/platform/quote', { plan: 'full_monthly', code: '' }))
           .status,
         200,
       );
@@ -305,8 +324,8 @@ void test('superadmin operations enforce authorization, money, maintenance and b
             id: plan.id,
             price: plan.price,
             policy:
-              plan.id === 'unlimited'
-                ? { name: 'Unlimited Plus', maxQuestionsPerExam: 5 }
+              plan.id === 'full_quarterly'
+                ? { name: 'Full Access Plus', maxQuestionsPerExam: 5, canCreateReadyTests: false, maxFlashcardDecks: null, maxFlashcards: null }
                 : { name: plan.name },
           })),
       };
@@ -315,8 +334,12 @@ void test('superadmin operations enforce authorization, money, maintenance and b
         200,
       );
       const session = await call('member', '/auth/session');
-      assert.equal(session.data.user.planLimits.name, 'Unlimited Plus');
+      assert.equal(session.data.user.planLimits.name, 'Full Access Plus');
       assert.equal(session.data.user.planLimits.maxQuestionsPerExam, 5);
+      assert.equal(session.data.user.planLimits.canCreateReadyTests, false);
+      assert.equal(session.data.user.planLimits.maxFlashcardDecks, null);
+      assert.equal(session.data.user.planLimits.maxFlashcards, null);
+      assert.equal((await call('member', '/preformed/create', { title: 'Disabled by plan' })).status, 403);
       await db
         .prepare(
           "UPDATE profiles SET profile_json=json_set(profile_json,'$.planLimits.maxQuestionsPerExam',99999) WHERE uid='member'",
@@ -365,7 +388,7 @@ void test('superadmin operations enforce authorization, money, maintenance and b
       const gift = await call('admin', '/platform/economy-admin', {
         operation: 'grant-reward',
         userId: 'member',
-        plan: 'lite',
+        plan: 'full_monthly',
         days: 9,
         reason: 'Nine day gift',
       });
@@ -399,7 +422,7 @@ void test('superadmin operations enforce authorization, money, maintenance and b
         200,
       );
       assert.equal(
-        (await call('member', '/platform/quote', { plan: 'pro', code: '' }))
+        (await call('member', '/platform/quote', { plan: 'full_monthly', code: '' }))
           .status,
         503,
       );

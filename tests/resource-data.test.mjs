@@ -65,8 +65,8 @@ void test('resource keys canonicalize query and JSON parameter order', async () 
   const output = '.ui-review/resource-data-test.mjs';
   const resources = await import(`${pathToFileURL(output).href}?keys=${Date.now()}`);
   assert.equal(
-    resources.resourceKey('/platform/quote?plan=pro&code=SAVE', 'POST', JSON.stringify({ plan: 'pro', code: 'SAVE' }), 'member'),
-    resources.resourceKey('/platform/quote?code=SAVE&plan=pro', 'post', JSON.stringify({ code: 'SAVE', plan: 'pro' }), 'member'),
+    resources.resourceKey('/platform/quote?plan=full_monthly&code=SAVE', 'POST', JSON.stringify({ plan: 'full_monthly', code: 'SAVE' }), 'member'),
+    resources.resourceKey('/platform/quote?code=SAVE&plan=full_monthly', 'post', JSON.stringify({ code: 'SAVE', plan: 'full_monthly' }), 'member'),
   );
 });
 

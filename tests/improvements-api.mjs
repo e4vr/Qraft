@@ -25,7 +25,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
       displayName: `Name ${uid}`,
       phone: '0500004321',
       universityId: 'deleted-student-number',
-      tier: 'pro',
+      tier: 'full_monthly',
       status: 'approved',
       role: 'student',
       platformRoles: roles,
@@ -692,6 +692,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
     'Ready-made tests stay separate, rank atomically, reset on question edits, and support moderation',
     async () => {
       await account('preformed-owner');
+      await account('preformed-observer');
       assert.equal((await call('free', '/preformed/create', {})).status, 403);
       const created = await call('preformed-owner', '/preformed/create', {});
       assert.equal(created.status, 201, JSON.stringify(created));
@@ -825,6 +826,11 @@ export async function improvementsApiTests(t, db, call, runtime) {
         'PUT',
       );
       assert.equal(privatePublished.status, 200, JSON.stringify(privatePublished));
+      const privateBoard = await call('free', `/preformed/leaderboard?id=${base.id}`);
+      assert.equal(privateBoard.status, 200, JSON.stringify(privateBoard));
+      assert.deepEqual(privateBoard.data, { leaderboard: [] });
+      assert.equal((await call('free', `/preformed/manage?id=${base.id}`)).status, 403);
+      assert.equal((await call('unknown-guest', `/preformed/leaderboard?id=${base.id}`)).status, 401);
       const privateOpened = await call(
         'free',
         `/preformed/open?code=${privatePublished.data.test.code}`,
@@ -859,6 +865,10 @@ export async function improvementsApiTests(t, db, call, runtime) {
       assert.equal(published.status, 200, JSON.stringify(published));
       assert.equal(published.data.resultsReset, false);
       const test = published.data.test;
+      const beforeAttempt = await call('free', `/preformed/leaderboard?id=${test.id}`);
+      assert.equal(beforeAttempt.status, 200, JSON.stringify(beforeAttempt));
+      assert.deepEqual(beforeAttempt.data, { leaderboard: [] });
+      assert.equal((await db.prepare('SELECT count(*) n FROM preformed_participation WHERE test_id=? AND user_id=?').bind(test.id, 'free').first()).n, 0);
       assert.match(test.code, /^QF-[A-Z0-9]{6}$/);
       assert.ok(
         (await call('free', '/preformed/catalog')).data.tests.some(
@@ -922,6 +932,14 @@ export async function improvementsApiTests(t, db, call, runtime) {
         (await call('free', `/preformed/leaderboard?id=${test.id}`)).status,
         200,
       );
+      const observerBoard = await call('preformed-observer', `/preformed/leaderboard?id=${test.id}`);
+      assert.equal(observerBoard.status, 200, JSON.stringify(observerBoard));
+      assert.equal(observerBoard.data.leaderboard[0].participantUserId, 'free');
+      assert.equal(typeof observerBoard.data.leaderboard[0].participantName, 'string');
+      assert.equal(typeof observerBoard.data.leaderboard[0].score, 'number');
+      assert.equal(typeof observerBoard.data.leaderboard[0].durationSeconds, 'number');
+      assert.ok(Number.isFinite(Date.parse(observerBoard.data.leaderboard[0].submittedAt)));
+      assert.deepEqual(Object.keys(observerBoard.data), ['leaderboard']);
       assert.equal(
         (
           await db

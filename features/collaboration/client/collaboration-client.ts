@@ -260,14 +260,19 @@ async function sendCollaborationState(
   snapshot: CollaborationSyncSnapshot,
 ): Promise<{ confirmed: CollaborationState; rejected: number }> {
   const { uid, state: next, base: previous } = snapshot;
-  const operations = collaborationChangeSet(next, previous).map((operation) => {
+  const operations = collaborationChangeSet(next, previous).flatMap((operation) => {
     if (operation.collection !== 'answerStats' || operation.type !== 'set')
-      return operation;
+      return [operation];
     const value = operation.value as CollaborationState['answerStats'][string];
-    return {
+    const answer = value.selections[uid];
+    // A refreshed aggregate may only contain other learners' changes. Missing
+    // own answers are not answer removals and must never become empty patches.
+    if (answer === undefined || answer === previous.answerStats[operation.id]?.selections[uid])
+      return [];
+    return [{
       ...operation,
-      value: { ...value, selections: { [uid]: value.selections[uid] } },
-    };
+      value: { ...value, selections: { [uid]: answer } },
+    }];
   });
   if (!operations.length) return { confirmed: next, rejected: 0 };
   const groups = new Map<string, CollaborationOperation[]>();

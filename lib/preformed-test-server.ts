@@ -3,7 +3,7 @@ import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { currentUser } from '@/features/auth/server/auth-service';
 import { assertSameOrigin, readJson } from '@/server/http/request';
 import { json } from '@/server/http/response';
-import { PLAN_ORDER } from '@/features/subscriptions/domain/plan-config';
+import { getPlanLimits } from '@/features/subscriptions/domain/plan-config';
 import type { AppUser } from './medguard-types';
 import type {
   PreformedLeaderboardEntry,
@@ -55,10 +55,7 @@ function approved(user: AppUser | null | undefined): user is AppUser {
 }
 
 function canCreate(user: AppUser) {
-  return (
-    PLAN_ORDER.indexOf(user.effectivePlan ?? user.tier) >=
-    PLAN_ORDER.indexOf('pro')
-  );
+  return user.role === 'super_admin' || (user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier)).canCreateReadyTests;
 }
 
 function normalizeCode(value: unknown) {
@@ -461,7 +458,7 @@ export async function preformedTestApi(request: Request, action: string) {
 
     if (action === 'create' && request.method === 'POST') {
       if (!approved(user) || !canCreate(user))
-        return json({ error: 'Creating ready-made tests requires Pro.' }, 403);
+        return json({ error: 'Creating ready-made tests requires Full Access.' }, 403);
       const id = crypto.randomUUID();
       const code = await uniqueCode();
       const now = new Date().toISOString();
@@ -609,16 +606,11 @@ export async function preformedTestApi(request: Request, action: string) {
       if (!row || row.status === 'hidden')
         return json({ error: 'Test not found.' }, 404);
       const owner = row.owner_id === user.uid;
-      const participation = owner
-        ? { allowed: 1 }
-        : await env.DB.prepare(
-            'SELECT 1 AS allowed FROM preformed_participation WHERE test_id=? AND version=? AND user_id=? LIMIT 1',
-          )
-            .bind(row.id, row.version, user.uid)
-            .first<{ allowed: number }>();
-      if (!owner && (!participation || row.status !== 'published'))
+      // Viewing published rankings is available to every approved account,
+      // independently of plan and whether they have attempted the test.
+      if (!owner && row.status !== 'published')
         return json(
-          { error: 'Submit this test before viewing its leaderboard.' },
+          { error: 'The leaderboard is unavailable while this test is unpublished.' },
           403,
         );
       return json({

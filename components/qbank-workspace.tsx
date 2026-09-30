@@ -490,7 +490,7 @@ export function QBankWorkspace({
           ) : (
             <LockKeyhole className="size-4" />
           )}
-          {canCreate ? 'New QBank' : 'Create QBank · Pro'}
+          {canCreate ? 'New QBank' : 'Create QBank · Full Access'}
         </button>}
       />
       <div className="q-page space-y-6">
@@ -538,7 +538,7 @@ export function QBankWorkspace({
                 <UpgradeButton />
               </div>
               <p className="mt-1 text-sm text-muted-foreground">
-                You can study public and shared banks. Upgrade to Pro to create
+                You can study public and shared banks. Upgrade to Full Access to create
                 your own.
               </p>
             </div>
@@ -1224,7 +1224,7 @@ export function QBankWorkspace({
                       <span className="mt-1 block text-sm leading-6 text-muted-foreground">
                         {item === 'private'
                           ? 'Only you, invited members, and Superadmin audit view.'
-                          : 'Visible to every approved Lite and Pro user.'}
+                          : 'Visible to every approved Full Access user.'}
                       </span>
                     </button>
                   ))}

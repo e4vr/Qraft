@@ -3,6 +3,7 @@ import { bankDeletionStatements } from '@/features/qbanks/server/bank-deletion';
 import { bankAccessState, bankAccessStates } from './qbank-access-repository';
 import { allocateQuestionIds } from './question-id-repository';
 import { env } from 'cloudflare:workers';
+import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
 import { accountBlocked } from '@/features/administration/domain/account-block';
 import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { appStateFreshness } from './merge-app-state';
@@ -1016,14 +1017,14 @@ export async function saveState(request: Request) {
   const oldCardCount = storedState?.flashcards?.length ?? 0;
   if (
     flashcardDecks.length >
-      Math.max(oldDeckCount, planLimits.maxFlashcardDecks) ||
-    flashcards.length > Math.max(oldCardCount, planLimits.maxFlashcards)
+      Math.max(oldDeckCount, planLimits.maxFlashcardDecks ?? Infinity) ||
+    flashcards.length > Math.max(oldCardCount, planLimits.maxFlashcards ?? Infinity)
   )
     return json(
       {
         error: planLimits.canUseFlashcards
           ? `Your ${planLimits.name} plan allows ${planLimits.maxFlashcardDecks} decks and ${planLimits.maxFlashcards} cards.`
-          : 'Flashcards are available with Pro.',
+          : 'Flashcards are available with Full Access.',
       },
       403,
     );
@@ -1038,7 +1039,7 @@ export async function saveState(request: Request) {
       );
     })
   )
-    return json({ error: 'Private Notes are available with Pro.' }, 403);
+    return json({ error: 'Private Notes are available with Full Access.' }, 403);
   const normalizedTestTitles = input.state.tests.map((test) =>
     typeof test.title === 'string'
       ? test.title.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US')
@@ -2034,14 +2035,14 @@ function selfMembershipChangeAllowed(
 
 function proposalPayloadIsComplete(proposal: Record<string, unknown>) {
   const payload = isRecord(proposal.payload) ? proposal.payload : undefined;
+  if (!payload) return false;
+  try { validateQuestionSource(payload); } catch { return false; }
   const options = Array.isArray(payload?.options) ? payload.options : [];
   return (
     Array.isArray(proposal.editKinds) &&
     proposal.editKinds.length > 0 &&
     proposal.editKinds.every((item) => typeof item === 'string') &&
     typeof payload?.explanation === 'string' &&
-    typeof payload.sourceReference === 'string' &&
-    Boolean(payload.sourceReference.trim()) &&
     typeof payload.stem === 'string' &&
     Boolean(payload.stem.trim()) &&
     options.length >= 2 &&
@@ -2777,6 +2778,7 @@ export async function saveCollaboration(request: Request) {
     )?.value as { payload?: Record<string, unknown> } | undefined;
     if (
       !proposal?.payload ||
+      !sameJson(readQuestionSource(question), readQuestionSource(proposal.payload)) ||
       [
         'stem',
         'options',
@@ -3072,8 +3074,8 @@ export async function uploadMedia(
       {
         error:
           kind === 'notes'
-            ? 'Private Notes are available with Pro.'
-            : 'Image Upload is available with Pro.',
+            ? 'Private Notes are available with Full Access.'
+            : 'Image Upload is available with Full Access.',
       },
       403,
     );

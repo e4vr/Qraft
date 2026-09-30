@@ -4,6 +4,8 @@ The canonical checkout is `app`; previous release worktrees have been consolidat
 All changes follow [QRAFT_ENGINEERING_CONSTITUTION.md](QRAFT_ENGINEERING_CONSTITUTION.md).
 See [SaaS readiness and validation](docs/SAAS_READINESS_2026-09-27.ar.md) for the 100-user local scenario, current safeguards, and remaining cloud launch checks.
 See [the current foundation decisions](docs/QRAFT_FOUNDATION_2026-09-27.ar.md) for synchronization, participant privacy, server grading, and the transitional data capacity policy.
+See [Full Access plans and data migration](docs/FULL_ACCESS_PLANS_2026-09-30.ar.md) for the current pricing, free trial, and editable Superadmin permissions.
+See [question sources and JSON fields](docs/QUESTION_SOURCES_2026-09-30.ar.md) for source filtering, required original source names, optional pages, and legacy compatibility.
 
 Qraft 1.0.0 is a private, installable medical QBank PWA. It supports collaborative question authoring and review, personal study progress, subscriptions, account administration, support tickets, and live invalidation across active sessions.
 
@@ -11,9 +13,11 @@ Qraft 1.0.0 is a private, installable medical QBank PWA. It supports collaborati
 
 - Public and private QBanks with owner, reviewer, and viewer access.
 - Tutor and timed tests, progress history, flags, highlights, notes, and answer statistics.
+- Previous tests with live search and collapsible calendar month/year groups; see [history behavior](docs/TEST_HISTORY_2026-09-30.ar.md).
 - Reviewed question proposals with field-by-field comparison and durable attribution.
+- Structured question edit dialog with clearer contrast, inline correct-answer selection, separate source fields, and persistent save controls; see [dialog behavior](docs/QUESTION_EDIT_DIALOG_2026-09-30.ar.md).
 - JSON question import with a review step before submission.
-- Lite and Pro subscriptions, discount codes, and Superadmin subscription management.
+- Qraft Full Access subscriptions (100 SAR / month or 230 SAR / 3 months), discount codes, and editable Superadmin pricing and permissions.
 - Registration approval, university-ID claiming, access blocking, and MFA-protected Superadmin actions.
 - Private support tickets optionally linked to stable question UUIDs.
 - IndexedDB local-first persistence, Cloudflare D1 data, Cloudflare R2 media storage, and an installable PWA shell. Existing ImageKit records remain compatible during migration.

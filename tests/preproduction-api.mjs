@@ -22,7 +22,7 @@ export async function preproductionApiTests(t, { db, call }) {
     assert.equal(delayedReplay.data.ticket.status, 'resolved');
     assert.deepEqual(delayedReplay.data.message, saved.data.message);
     assert.equal((await db.prepare('SELECT count(*) AS n FROM ticket_messages WHERE ticket_id=?').bind(id).first()).n, 2);
-    assert.equal((await call('lite', '/contact', draft)).status, 409);
+    assert.equal((await call('trial', '/contact', draft)).status, 409);
     assert.equal((await call('other', '/contact', { ...draft, body: 'Different content' })).status, 409);
     const other = await call('other', '/contact', { ...draft, requestId: randomUUID() });
     assert.equal((await call('other', '/contact', { ...reply, id: other.data.id })).status, 409);

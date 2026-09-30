@@ -34,9 +34,9 @@ const statements = ['PRAGMA foreign_keys=ON;'];
 for (const [uid, email, displayName, platformRoles] of accounts) {
   const salt = `qraft-staging-seed-v1:${uid}`;
   const hash = pbkdf2Sync(password, salt, 100_000, 32, 'sha256').toString('hex');
-  const profile = { uid, email, displayName, phone: '0500000000', universityId: `STAGING-${uid}`, tier: 'pro', status: 'approved', role: 'student', platformRoles, createdAt: now };
+  const profile = { uid, email, displayName, phone: '0500000000', universityId: `STAGING-${uid}`, tier: 'full_monthly', status: 'approved', role: 'student', platformRoles, createdAt: now };
   statements.push(`INSERT INTO profiles(uid,email,password_hash,password_salt,profile_json,created_at,updated_at) VALUES(${quote(uid)},${quote(email)},${quote(hash)},${quote(salt)},${json(profile)},${quote(now)},${quote(now)}) ON CONFLICT(uid) DO UPDATE SET email=excluded.email,password_hash=excluded.password_hash,password_salt=excluded.password_salt,profile_json=excluded.profile_json,updated_at=excluded.updated_at;`);
-  statements.push(`INSERT INTO subscriptions(user_id,status,starts_at,expires_at,method,paid,updated_at,plan) VALUES(${quote(uid)},'active',${quote(now)},'2030-01-01T00:00:00.000Z','staging-seed',0,${quote(now)},'pro') ON CONFLICT(user_id) DO UPDATE SET status=excluded.status,expires_at=excluded.expires_at,updated_at=excluded.updated_at,plan=excluded.plan;`);
+  statements.push(`INSERT INTO subscriptions(user_id,status,starts_at,expires_at,method,paid,updated_at,plan) VALUES(${quote(uid)},'active',${quote(now)},'2030-01-01T00:00:00.000Z','staging-seed',0,${quote(now)},'full_monthly') ON CONFLICT(user_id) DO UPDATE SET status=excluded.status,expires_at=excluded.expires_at,updated_at=excluded.updated_at,plan=excluded.plan;`);
 }
 
 const banks = [

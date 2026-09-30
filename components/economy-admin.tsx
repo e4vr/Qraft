@@ -21,7 +21,7 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
   const [data, setData] = useState<EconomyData>();
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
-  const [plan, setPlan] = useState<Exclude<PlanId, 'free'>>('pro');
+  const [plan, setPlan] = useState<Exclude<PlanId, 'free'>>('full_monthly');
   const [giftDays, setGiftDays] = useState('30');
   const [importQuestions,setImportQuestions]=useState('150');
   const [importTimes,setImportTimes]=useState('5');
@@ -127,7 +127,7 @@ export function EconomyAdmin({ members }: { members: MemberProfile[] }) {
         </article>
         <article className="rounded-2xl border bg-card p-4">
           <h3 className="font-bold">Grant stored reward</h3>
-          <select value={plan} onChange={(event) => setPlan(event.target.value as typeof plan)} className="mt-3 h-11 w-full rounded-xl border bg-background px-3"><option value="lite">Lite</option><option value="pro">Pro</option><option value="unlimited">Unlimited</option></select>
+          <select value={plan} onChange={(event) => setPlan(event.target.value as typeof plan)} className="mt-3 h-11 w-full rounded-xl border bg-background px-3"><option value="full_monthly">Full Access · 1 month</option><option value="full_quarterly">Full Access · 3 months</option></select>
           <label className="q-ops-field">Gift days<input type="number" min="1" max="730" value={giftDays} onChange={event => setGiftDays(event.target.value)} /></label>
           <button disabled={busy || !Number.isInteger(Number(giftDays)) || Number(giftDays)<1 || Number(giftDays)>730} onClick={() => void mutate('grant-reward', { plan, days:Number(giftDays) })} className="q-button mt-3 w-full border">Grant {giftDays || '…'} days</button>
         </article>

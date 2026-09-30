@@ -14,7 +14,7 @@ export type UserRole =
   | 'reviewer'
   | 'access_manager'
   | 'student';
-export type AccountTier = 'free' | 'lite' | 'pro' | 'unlimited';
+export type AccountTier = 'free' | 'full_monthly' | 'full_quarterly';
 export type PlatformRole = 'moderator' | 'reviewer' | 'access_manager';
 export type BankRole = 'owner' | 'editor' | 'reviewer' | 'viewer';
 export type QBankVisibility = 'public' | 'private';
@@ -62,8 +62,9 @@ export interface Question {
   options: string[];
   answer: number;
   answerLetter: string;
-  sourcePage: number;
+  sourcePage?: number;
   sourceFile: string;
+  originalQuestionNumber?: string;
   revision: number;
   isCustom?: boolean;
   qbankId?: string;
@@ -744,7 +745,7 @@ export function normalizeCollaborationState(
     ),
     members: (input.members ?? []).map((member) => ({
       ...member,
-      tier: member.tier ?? 'lite',
+      tier: member.tier ?? 'free',
       platformRoles: member.platformRoles ?? [],
     })),
     blockedAccess: {

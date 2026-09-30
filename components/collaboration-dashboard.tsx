@@ -119,7 +119,7 @@ const adminSections: Record<
 > = {
   monitoring: { icon: Activity, description: 'User usage, backend health and cost visibility from one dashboard.' },
   'site-operations': { icon: ShieldCheck, description: 'Manage availability, visitor messages and scheduled maintenance.' },
-  pricing: { icon: CreditCard, description: 'Publish annual plan prices and inspect subscription details.' },
+  pricing: { icon: CreditCard, description: 'Publish subscription prices and inspect subscription details.' },
   overview: {
     icon: LayoutDashboard,
     description:
@@ -1072,9 +1072,8 @@ export function AdminDashboard({
       (member) => member.status === 'approved' && !member.suspended,
     );
     return {
-      lite: active.filter((member) => member.tier === 'lite').length,
-      pro: active.filter((member) => member.tier === 'pro').length,
-      unlimited: active.filter((member) => member.tier === 'unlimited').length,
+      full_monthly: active.filter((member) => member.tier === 'full_monthly').length,
+      full_quarterly: active.filter((member) => member.tier === 'full_quarterly').length,
     };
   }, [collaboration.members]);
   const attentionQueue = useMemo(
@@ -1835,9 +1834,8 @@ export function AdminDashboard({
                         {
                           label: 'Active members',
                           value:
-                            subscriptionSnapshot.lite +
-                            subscriptionSnapshot.pro +
-                            subscriptionSnapshot.unlimited,
+                            subscriptionSnapshot.full_monthly +
+                            subscriptionSnapshot.full_quarterly,
                           detail: 'Approved accounts',
                           icon: Users,
                           destination: 'registrations',
@@ -2051,11 +2049,10 @@ export function AdminDashboard({
                       <div className="q-admin-plan-list">
                         {(
                           [
-                            { label: 'Lite', value: subscriptionSnapshot.lite },
-                            { label: 'Pro', value: subscriptionSnapshot.pro },
+                            { label: 'Full Access · 1 month', value: subscriptionSnapshot.full_monthly },
                             {
-                              label: 'Unlimited',
-                              value: subscriptionSnapshot.unlimited,
+                              label: 'Full Access · 3 months',
+                              value: subscriptionSnapshot.full_quarterly,
                             },
                           ] as const
                         ).map((item) => (
@@ -2072,9 +2069,8 @@ export function AdminDashboard({
                               value={item.value}
                               max={Math.max(
                                 1,
-                                subscriptionSnapshot.lite +
-                                  subscriptionSnapshot.pro +
-                                  subscriptionSnapshot.unlimited,
+                                subscriptionSnapshot.full_monthly +
+                                  subscriptionSnapshot.full_quarterly,
                               )}
                             />
                           </button>

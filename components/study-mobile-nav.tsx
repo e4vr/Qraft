@@ -42,7 +42,7 @@ const tabletCoreItems = [
 
 const tabletReviewItem = { id: 'review', label: 'Review', icon: ScanSearch } as const;
 const tabletContactItem = { id: 'contact', label: 'Contact', icon: CircleAlert } as const;
-const tabletSubscribeItem = { id: 'subscribe', label: 'Upgrade', icon: Sparkles } as const;
+const tabletSubscribeItem = { id: 'subscribe', label: 'Plans', icon: Sparkles } as const;
 const tabletCommunityItems = [
   { id: 'contribution-center', label: 'Contribute', icon: Award },
   { id: 'manager', label: 'Add', icon: ClipboardList },
