@@ -1,0 +1,280 @@
+{
+  "recordedAt": "2026-10-01T10:52:40.510Z",
+  "sourceCommit": "eb7a76e372c43625c50b88bf30d22793d5fa8ab7",
+  "packageVersion": "1.2.0",
+  "serviceWorker": "v4.7.2",
+  "migration": "0029_collaboration_write_guard.sql",
+  "production": {
+    "url": "https://qraft.eduhelp.workers.dev",
+    "database": "qraft-qbank",
+    "app": {
+      "deploymentId": "b63ace76-d76e-4579-bd82-736dcebbb102",
+      "at": "2026-10-01T06:04:58.957972Z",
+      "versions": [
+        {
+          "version_id": "32f5de2d-e8fe-4974-8243-26327949a1ef",
+          "percentage": 100
+        }
+      ]
+    },
+    "realtime": {
+      "deploymentId": "90029776-ab57-40dc-823c-c4b5d80cbd79",
+      "at": "2026-10-01T06:04:36.067958Z",
+      "versions": [
+        {
+          "version_id": "4d13c9ec-f4ee-40d5-a211-458a219faea8",
+          "percentage": 100
+        }
+      ]
+    },
+    "pendingMigrations": 0,
+    "guardRows": 0
+  },
+  "staging": {
+    "url": "https://qraft-staging.eduhelp.workers.dev",
+    "database": "qraft-qbank-staging",
+    "appVersion": "e6ac42b6-569f-44a2-ab57-b4fcc3297cac",
+    "realtimeVersion": "1f150f5e-4478-40f9-b466-8be62a3d71b4",
+    "pendingMigrations": 0,
+    "guardRows": 0,
+    "temporaryBanks": 0
+  },
+  "recovery": {
+    "method": "Cloudflare D1 Time Travel bookmark recorded before migration; no production user-data export",
+    "bookmarkLocalFile": "outputs/p1-prod-bookmark-before-migrate.json",
+    "previousApp": {
+      "deploymentId": "5fb7b4aa-dc4f-4f88-843d-74c698fdb642",
+      "at": "2026-10-01T02:55:59.31053Z",
+      "versions": [
+        {
+          "version_id": "3d827d97-88ea-4b09-be25-647f4d027505",
+          "percentage": 100
+        }
+      ]
+    },
+    "previousRealtime": {
+      "deploymentId": "7d13dd7f-80d5-4235-a3ae-73acfb58d685",
+      "at": "2026-10-01T02:55:38.317491Z",
+      "versions": [
+        {
+          "version_id": "0fe017c4-7978-4072-9020-641f242a5872",
+          "percentage": 100
+        }
+      ]
+    }
+  },
+  "releaseGate": {
+    "cleanCommittedCheckout": true,
+    "freshNpmCi": true,
+    "nodeTestsPassed": 294,
+    "nodeTestsFailed": 0,
+    "pythonDatabaseTestsPassed": 12,
+    "pythonFullAccessTestsPassed": 3,
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "productionAndStagingBuilds": "PASS",
+    "cloudflareDryRuns": "PASS"
+  },
+  "stagingSmoke": {
+    "at": "2026-10-01T06:01:40.806Z",
+    "origin": "https://qraft-staging.eduhelp.workers.dev",
+    "build": "eb7a76e372c43625c50b88bf30d22793d5fa8ab7",
+    "result": "PASS",
+    "scope": "Existing synthetic staging owner only; temporary bank deleted; daily goal restored; session logged out.",
+    "checks": [
+      {
+        "path": "/auth/login",
+        "method": "POST",
+        "status": 200,
+        "ms": 915.6
+      },
+      {
+        "path": "/state",
+        "method": "GET",
+        "status": 200,
+        "ms": 248.7
+      },
+      {
+        "path": "/state/daily-goal",
+        "method": "PUT",
+        "status": 200,
+        "ms": 373.7
+      },
+      {
+        "path": "/state/daily-goal",
+        "method": "PUT",
+        "status": 200,
+        "ms": 292.5
+      },
+      {
+        "path": "/state",
+        "method": "GET",
+        "status": 200,
+        "ms": 234.8
+      },
+      {
+        "path": "/collaboration",
+        "method": "PUT",
+        "status": 200,
+        "ms": 648.1
+      },
+      {
+        "path": "/collaboration",
+        "method": "GET",
+        "status": 200,
+        "ms": 400.1
+      },
+      {
+        "path": "/collaboration",
+        "method": "PUT",
+        "status": 200,
+        "ms": 376.3
+      },
+      {
+        "path": "/collaboration",
+        "method": "PUT",
+        "status": 409,
+        "ms": 603.2
+      },
+      {
+        "path": "/collaboration",
+        "method": "GET",
+        "status": 200,
+        "ms": 380
+      },
+      {
+        "path": "/collaboration",
+        "method": "PUT",
+        "status": 409,
+        "ms": 318.2
+      },
+      {
+        "path": "/collaboration",
+        "method": "GET",
+        "status": 200,
+        "ms": 311.2
+      },
+      {
+        "path": "/collaboration",
+        "method": "GET",
+        "status": 200,
+        "ms": 361.4
+      },
+      {
+        "path": "/collaboration",
+        "method": "PUT",
+        "status": 200,
+        "ms": 422.9
+      },
+      {
+        "path": "/state",
+        "method": "GET",
+        "status": 200,
+        "ms": 228.9
+      },
+      {
+        "path": "/state/daily-goal",
+        "method": "PUT",
+        "status": 200,
+        "ms": 361.9
+      },
+      {
+        "path": "/auth/logout",
+        "method": "POST",
+        "status": 200,
+        "ms": 216.9
+      }
+    ]
+  },
+  "productionSmoke": {
+    "at": "2026-10-01T10:50:21.170Z",
+    "origin": "https://qraft.eduhelp.workers.dev",
+    "build": "eb7a76e372c43625c50b88bf30d22793d5fa8ab7",
+    "schema": "0029_collaboration_write_guard.sql",
+    "result": "PASS",
+    "scope": "Read-only production public pages, current assets, anonymous session and protected endpoint rejection; no production account login or user-content writes.",
+    "checks": [
+      {
+        "path": "/",
+        "status": 200,
+        "ms": 854.6,
+        "bytes": 14712,
+        "build": "eb7a76e372c43625c50b88bf30d22793d5fa8ab7",
+        "schema": "0029_collaboration_write_guard.sql"
+      },
+      {
+        "path": "/api/cloudflare/auth/session",
+        "status": 200,
+        "ms": 85.5,
+        "bytes": 13,
+        "build": "eb7a76e372c43625c50b88bf30d22793d5fa8ab7",
+        "schema": "0029_collaboration_write_guard.sql"
+      },
+      {
+        "path": "/api/cloudflare/state",
+        "status": 401,
+        "ms": 123.4,
+        "bytes": 36,
+        "build": "eb7a76e372c43625c50b88bf30d22793d5fa8ab7",
+        "schema": "0029_collaboration_write_guard.sql"
+      },
+      {
+        "path": "/api/cloudflare/collaboration",
+        "status": 403,
+        "ms": 388.1,
+        "bytes": 38,
+        "build": "eb7a76e372c43625c50b88bf30d22793d5fa8ab7",
+        "schema": "0029_collaboration_write_guard.sql"
+      },
+      {
+        "path": "/sw.js",
+        "status": 200,
+        "ms": 89.3,
+        "bytes": 2389,
+        "sha256": "0587b52a7ce47e0b8f09c3583a119a0cc1461dc3a6b0130a9307eb39ed1f205a"
+      },
+      {
+        "path": "/_next/static/chunks/medguard-app-XlOrOrz3.js",
+        "status": 200,
+        "ms": 299.3,
+        "bytes": 867280,
+        "sha256": "1c94759137dbd2df5c134be445d187854eea4294620fa36abf95c72343b72387"
+      },
+      {
+        "path": "/_next/static/chunks/rolldown-runtime-hePW80VL.js",
+        "status": 200,
+        "ms": 84.2,
+        "bytes": 716,
+        "sha256": "580ad8c58061a4dde99bde0a56905e382f0568516ee2f5b84dbfb52085709021"
+      },
+      {
+        "path": "/_next/static/chunks/framework-DTZGTDtF.js",
+        "status": 200,
+        "ms": 103.9,
+        "bytes": 190109,
+        "sha256": "2a1edf81f32a49b1eacafc3546b371bca024c82a9191836e274d90890212e9df"
+      },
+      {
+        "path": "/_next/static/chunks/vinext-vr2yuYzd.js",
+        "status": 200,
+        "ms": 102.4,
+        "bytes": 146659,
+        "sha256": "ba5df9b016da631b99c9f97c96f4ec6a1e6357d8e8a41e2258b8e06969c8fcd2"
+      },
+      {
+        "path": "/_next/static/chunks/index-Bi1P7UO9.js",
+        "status": 200,
+        "ms": 121.7,
+        "bytes": 118588,
+        "sha256": "bc914eb47228a7fe4870f31a3dd7da298053e92088bc51b646426f23903a3a7e"
+      }
+    ]
+  },
+  "limits": [
+    "Production verification was read-only; no production-account login or user-content writes.",
+    "Remote functional writes used only the existing synthetic staging owner.",
+    "The staging owner initially had no personal state; the test created a state and left its default daily goal at 20. Temporary bank deleted and session logged out.",
+    "Local SQL export was rejected by automatic review; recovery uses the provider-native bookmark without exporting production records.",
+    "Single-run network timings are smoke evidence, not production capacity benchmarks."
+  ]
+}
