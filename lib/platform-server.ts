@@ -1,6 +1,9 @@
 import { detectImportDuplication, ImportDuplicateIndex, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
 import { env } from 'cloudflare:workers';
 import { DEFAULT_LEGAL_LINKS } from './legal-links';
+import { DEFAULT_ANNOUNCEMENT, DEFAULT_COMMUNITY_LINKS, validAnnouncementLink, validTelegramLink } from '@/features/announcements/domain/announcement';
+import { announcementSettings } from '@/features/announcements/server/announcement-settings';
+import { validImageAttachments } from '@/features/media/domain/image-attachments';
 import { contributionReward } from '@/features/contributions/domain/contribution-reward';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 import { directQuestionEdit } from '@/features/qbanks/server/direct-question-edit';
@@ -508,6 +511,13 @@ async function rejectImport(
 
 export async function platformApi(request: Request, action: string) {
   if (request.method !== 'GET') assertSameOrigin(request);
+  if (action === 'announcement' && request.method === 'GET' && new URL(request.url).searchParams.get('manage') !== '1') {
+    const current = await announcementSettings();
+    if (!current.enabled) return json(DEFAULT_ANNOUNCEMENT);
+    const viewer = await currentUser(request);
+    const seen = viewer ? await env.DB.prepare("SELECT json_extract(payload,'$.revision') AS revision FROM records WHERE type='announcementDismissals' AND id=? AND owner_id=?").bind(viewer.uid, viewer.uid).first<{ revision: string }>() : null;
+    return json({ ...current, dismissed: current.displayMode === 'once' && seen?.revision === current.revision });
+  }
   const user = await currentUser(request);
   if (!user || user.status !== 'approved' || user.suspended)
     return json({ error: 'Approved account required.' }, 403);
@@ -527,6 +537,14 @@ export async function platformApi(request: Request, action: string) {
     user.role === 'super_admin' && user.mfaEnrolled && user.mfaVerified;
   let activeImportContext: ImportMonitorContext | undefined;
   try {
+    if (action === 'announcement-dismiss') {
+      if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+      const current = await announcementSettings();
+      if (!current.enabled || text('revision') !== current.revision) return json({ error: 'This announcement changed. Refresh before dismissing it.' }, 409);
+      const now = new Date().toISOString();
+      const result = await env.DB.prepare("INSERT INTO records(type,id,owner_id,payload,updated_at) VALUES('announcementDismissals',?,?,?,?) ON CONFLICT(type,id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at WHERE json_extract(records.payload,'$.revision')!=json_extract(excluded.payload,'$.revision')").bind(user.uid, user.uid, JSON.stringify({ revision: current.revision }), now).run();
+      return json({ ok: true }, 200, result.meta.changes ? undefined : { 'x-qraft-unchanged': '1' });
+    }
     if (action === 'question-edit') {
       if (request.method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
       return directQuestionEdit(user, input);
@@ -917,38 +935,58 @@ export async function platformApi(request: Request, action: string) {
       return json({ error: 'Method not allowed.' }, 405);
     }
     if (action === 'announcement') {
-      const defaults = { enabled: false, content: '', href: '' };
-      const record = await env.DB.prepare(
-        "SELECT payload FROM records WHERE type='system' AND id='announcement' LIMIT 1",
-      ).first<{ payload: string }>();
-      const current = record
-        ? { ...defaults, ...(JSON.parse(record.payload) as Partial<typeof defaults>) }
-        : defaults;
+      if (!root) return json({ error: 'Superadmin access required.' }, 403);
+      const current = await announcementSettings();
       if (request.method === 'GET') return json(current);
       if (request.method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
-      if (!root) return json({ error: 'Superadmin access required.' }, 403);
-      const href = text('href').slice(0, 1000);
-      if (href && !(href.startsWith('/') && !href.startsWith('//'))) {
-        try {
-          if (new URL(href).protocol !== 'https:') throw new Error();
-        } catch {
-          return json({ error: 'Use a secure HTTPS URL or an internal path beginning with /.' }, 400);
-        }
+      const href = text('href');
+      const images = input.images === undefined ? current.images : input.images;
+      if (!validImageAttachments(images, 5) || !validAnnouncementLink(href) || href.length > 1000 || text('content').length > 5000 || text('title').length > 120 || (input.displayMode !== undefined && input.displayMode !== 'once' && input.displayMode !== 'visit'))
+        return json({ error: 'Use valid announcement text, links and up to 5 images.' }, 400);
+      for (const image of images) {
+        if (!image.url.startsWith('/')) continue;
+        if (!image.url.startsWith('/api/cloudflare/media/announcements/')) return json({ error: 'Upload announcement images using the announcement editor.' }, 400);
+        let key: string;
+        try { key = decodeURIComponent(image.url.slice('/api/cloudflare/media/'.length)); }
+        catch { return json({ error: 'Use a valid announcement image URL.' }, 400); }
+        if (image.url !== `/api/cloudflare/media/${key.split('/').map(encodeURIComponent).join('/')}`) return json({ error: 'Use the original announcement image URL.' }, 400);
+        const media = await env.DB.prepare("SELECT 1 AS valid FROM media WHERE key=? AND purpose='announcements' AND status='ready'").bind(key).first();
+        if (!media) return json({ error: 'An announcement image is missing. Upload it again.' }, 400);
       }
       const next = {
         enabled: input.enabled === true,
-        content: text('content').slice(0, 280),
+        title: input.title === undefined ? current.title : text('title'),
+        content: text('content'),
         href,
+        images,
+        displayMode: input.displayMode === undefined ? current.displayMode : input.displayMode as 'once' | 'visit',
+        revision: current.revision,
       };
-      if (next.enabled && !next.content)
-        return json({ error: 'Enter announcement content before enabling it.' }, 400);
+      if (next.enabled && !next.content && !next.images.length)
+        return json({ error: 'Enter announcement content or add images before enabling it.' }, 400);
       if (JSON.stringify(next) === JSON.stringify(current)) return json({ ...next, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
+      next.revision = crypto.randomUUID();
       const now = new Date().toISOString();
       await env.DB.batch([
         env.DB.prepare(
           "INSERT INTO records(type,id,owner_id,payload,updated_at) VALUES('system','announcement',?,?,?) ON CONFLICT(type,id) DO UPDATE SET owner_id=excluded.owner_id,payload=excluded.payload,updated_at=excluded.updated_at",
         ).bind(user.uid, JSON.stringify(next), now),
         auditStatement(user, 'announcement_updated', 'announcement', current, next),
+      ]);
+      return json(next);
+    }
+    if (action === 'community-links') {
+      const row = await env.DB.prepare("SELECT payload FROM records WHERE type='system' AND id='communityLinks' LIMIT 1").first<{ payload: string }>();
+      const current = row ? { ...DEFAULT_COMMUNITY_LINKS, ...JSON.parse(row.payload) } : DEFAULT_COMMUNITY_LINKS;
+      if (request.method === 'GET') return json(current);
+      if (request.method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
+      if (!root) return json({ error: 'Superadmin access required.' }, 403);
+      const next = { telegramUrl: text('telegramUrl') };
+      if (next.telegramUrl.length > 1000 || !validTelegramLink(next.telegramUrl)) return json({ error: 'Use a secure Telegram channel link beginning with https://t.me/.' }, 400);
+      if (JSON.stringify(current) === JSON.stringify(next)) return json({ ...next, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO records(type,id,payload,updated_at) VALUES('system','communityLinks',?,?) ON CONFLICT(type,id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at").bind(JSON.stringify(next), new Date().toISOString()),
+        auditStatement(user, 'community_links_updated', 'communityLinks', current, next),
       ]);
       return json(next);
     }

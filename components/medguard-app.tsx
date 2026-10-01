@@ -34,6 +34,9 @@ import { openLiveChannels, subscribeLive } from '@/lib/realtime-client';
 import { createRefreshQueue } from '@/features/collaboration/client/refresh-queue';
 import { ApiError, api, setApiCache } from '@/lib/api-client';
 import { DEFAULT_LEGAL_LINKS, type LegalLinks } from '@/lib/legal-links';
+import { DEFAULT_COMMUNITY_LINKS } from '@/features/announcements/domain/announcement';
+import { SiteAnnouncement } from '@/components/site-announcement';
+import { TelegramChannelButton } from '@/components/telegram-channel-button';
 import { COLLABORATION_SYNC_NOTICE, type CollaborationSyncNotice } from '@/features/collaboration/client/collaboration-client';
 import { loadRejectedCollaboration } from '@/lib/local-db';
 import { saveDirectQuestionEdit } from '@/features/qbanks/client/direct-question-edit';
@@ -4663,6 +4666,7 @@ function SettingsView({
   ) => void;
 }) {
   const [legalLinks, setLegalLinks] = useState(DEFAULT_LEGAL_LINKS);
+  const [communityLinks, setCommunityLinks] = useState(DEFAULT_COMMUNITY_LINKS);
   const [personalBackupBusy, setPersonalBackupBusy] = useState(false);
   const [personalBackupMessage, setPersonalBackupMessage] = useState('');
   const [dailyGoalOverride, setDailyGoalDraft] = useState<number>();
@@ -4685,6 +4689,13 @@ function SettingsView({
   const backupAvailable =
     hasFeature(user.effectivePlan ?? user.tier, 'flashcards', user.planLimits) ||
     hasFeature(user.effectivePlan ?? user.tier, 'createPrivateQBank', user.planLimits);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => { void api<typeof communityLinks>('/platform/community-links').then(links => { if (active) setCommunityLinks(links); }).catch(() => undefined); };
+    refresh();
+    const stop = subscribeLive(refresh, ['community-links']);
+    return () => { active = false; stop(); };
+  }, []);
   const downloadPersonalBackup = async () => {
     setPersonalBackupBusy(true);
     setPersonalBackupMessage('');
@@ -4737,6 +4748,7 @@ function SettingsView({
         openMenu={() => window.dispatchEvent(new Event('medguard-open-menu'))}
       />
       <div className="mx-auto max-w-4xl space-y-5 p-4 sm:p-7">
+        <TelegramChannelButton href={communityLinks.telegramUrl} />
         {dataSize >= STATE_WARNING_BYTES && (
           <output className="block rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm text-amber-950 dark:bg-amber-950 dark:text-amber-100">
             {dataSize > STATE_BUDGET_BYTES ? 'Cloud sync capacity reached.' : 'Your study data is approaching the current cloud sync capacity.'}
@@ -5848,11 +5860,6 @@ export default function MedGuardApp({
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [flashcardClock, setFlashcardClock] = useState(() => Date.now());
-  const [announcement, setAnnouncement] = useState({
-    enabled: false,
-    content: '',
-    href: '',
-  });
   const [linkInvitation, setLinkInvitation] = useState<
     (QBankLinkInvitation & { token: string }) | null
   >(null);
@@ -5909,30 +5916,6 @@ export default function MedGuardApp({
   const handledInvitationLink = useRef('');
   const hydratedIdentity = useRef('');
   const cloudLoaded = useRef(false);
-  const announcementUserId = user?.uid;
-  const announcementUserStatus = user?.status;
-  useEffect(() => {
-    if (!announcementUserId || announcementUserStatus !== 'approved') return;
-    let active = true;
-    const refresh = () => {
-      void api<typeof announcement>('/platform/announcement')
-        .then((value) => {
-          if (active) setAnnouncement(value);
-        })
-        .catch(() => undefined);
-    };
-    refresh();
-    const stop = subscribeLive(
-      (topic) => {
-        if (topic === 'announcement') refresh();
-      },
-      ['announcement'],
-    );
-    return () => {
-      active = false;
-      stop();
-    };
-  }, [announcementUserId, announcementUserStatus]);
   const confirmUpdate = (
     updater: (current: CollaborationState) => CollaborationState,
   ) => {
@@ -7266,7 +7249,7 @@ export default function MedGuardApp({
   }
   if (!user)
     return (
-      <AuthScreen
+      <><SiteAnnouncement defer={portal !== 'app'} /><AuthScreen
         onAuthenticated={setUser}
         onJoinTest={(code) => {
           const url = new URL(window.location.href);
@@ -7278,7 +7261,7 @@ export default function MedGuardApp({
           );
           setDirectTestCode(code);
         }}
-      />
+      /></>
     );
   if (user.status !== 'approved' || user.suspended)
     return <PendingApproval user={user} onSignOut={() => void signOut()} />;
@@ -7495,19 +7478,7 @@ export default function MedGuardApp({
           <span>{syncIssue}</span>
           <button type="button" className="shrink-0 underline" onClick={() => setView('settings')}>Open Settings</button>
         </output>}
-        {portal === 'app' && announcement.enabled && announcement.content && (
-          <output className="q-announcement flex min-h-10 items-center justify-center gap-3 bg-gradient-to-r from-primary via-cyan-600 to-teal-600 px-4 py-2 text-center text-xs font-bold text-white shadow-sm sm:text-sm">
-            <span>{announcement.content}</span>
-            {announcement.href && (
-              <a
-                href={announcement.href}
-                className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-[11px] ring-1 ring-white/30 transition hover:bg-white/25"
-              >
-                Learn more
-              </a>
-            )}
-          </output>
-        )}
+        <SiteAnnouncement userId={user.uid} defer={view === 'test' || portal !== 'app'} />
         {view === 'subscribe' && (
           <>
             <PageHeader

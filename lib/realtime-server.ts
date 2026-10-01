@@ -60,7 +60,7 @@ export function needsMutationNotification(request: Request): boolean {
   if (
     (['state', 'media', 'ids'].includes(path[0]) && !(path[0] === 'state' && path[1] === 'exam')) ||
     (path[0] === 'auth' && path[1] !== 'register') ||
-    (path[0] === 'platform' && ['exam-start', 'quote', 'import-preview'].includes(path[1]))
+    (path[0] === 'platform' && ['exam-start', 'quote', 'import-preview', 'announcement-dismiss'].includes(path[1]))
   )
     return false;
   return true;
@@ -133,6 +133,8 @@ export async function notifyMutation(request: Request, response?: Response) {
     topics.add('account'); topics.add('subscriptions'); channels.add('access');
   } else if (path[0] === 'platform' && path[1] === 'announcement') {
     topics.add('announcement'); channels.add('catalog');
+  } else if (path[0] === 'platform' && path[1] === 'community-links') {
+    topics.add('community-links'); channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'legal-links') {
     topics.add('legal-links'); channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'monitoring') {

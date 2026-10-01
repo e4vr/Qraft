@@ -35,6 +35,7 @@ export const resourcePolicies: ResourcePolicy[] = [
   { name: 'collaboration', class: 'event-driven', tags: ['collaboration', 'question-catalog', 'review-queue', 'question-stats'], persistence: 'indexed-db', match: path => path.startsWith('/collaboration') },
   { name: 'announcement', class: 'event-driven', tags: ['announcement'], persistence: 'memory', match: path => path.startsWith('/platform/announcement') },
   { name: 'legal-links', class: 'static', tags: ['legal-links'], persistence: 'memory', match: path => path.startsWith('/platform/legal-links') },
+  { name: 'community-links', class: 'event-driven', tags: ['community-links'], persistence: 'memory', match: path => path.startsWith('/platform/community-links') },
   { name: 'reviewer-performance', class: 'event-driven', tags: ['reviewer-performance'], persistence: 'memory', match: path => path.startsWith('/platform/reviewer-performance') },
   { name: 'review-history', class: 'event-driven', tags: ['review-history'], persistence: 'memory', match: path => path.startsWith('/platform/review-history') },
   { name: 'contributions', class: 'event-driven', tags: ['contributions', 'economy'], persistence: 'memory', match: path => path.startsWith('/platform/contributions') || path.startsWith('/platform/rewards') },

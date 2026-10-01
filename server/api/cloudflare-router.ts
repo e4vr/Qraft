@@ -94,6 +94,8 @@ async function routePost(request: Request): Promise<Response> {
     return uploadMedia(request, 'notes');
   if (scope === 'media' && action === 'shared-notes')
     return uploadMedia(request, 'shared-notes');
+  if (scope === 'media' && action === 'announcements')
+    return uploadMedia(request, 'announcements');
   if (scope === 'media' && action === 'questions')
     return uploadMedia(request, 'questions');
   return notFound();

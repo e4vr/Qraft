@@ -1,4 +1,5 @@
 import { auditStatement } from './platform-server';
+import { announcementSettings } from '@/features/announcements/server/announcement-settings';
 import { validOptionalExplanationImages } from '@/features/media/domain/image-attachments';
 import { bankDeletionStatements } from '@/features/qbanks/server/bank-deletion';
 import { bankAccessState, bankAccessStates } from './qbank-access-repository';
@@ -3058,7 +3059,7 @@ export async function previewBankInvite(request: Request) {
 
 export async function uploadMedia(
   request: Request,
-  kind: 'notes' | 'questions' | 'shared-notes',
+  kind: 'notes' | 'questions' | 'shared-notes' | 'announcements',
 ) {
   assertSameOrigin(request);
   const authorization = imageKitAuthorization();
@@ -3070,9 +3071,11 @@ export async function uploadMedia(
   const user = await currentUser(request);
   if (!user || user.status !== 'approved')
     return json({ error: 'Approved account required.' }, 403);
+  if (kind === 'announcements' && !(user.role === 'super_admin' && user.mfaEnrolled && user.mfaVerified && !user.suspended))
+    return json({ error: 'Superadmin access required.' }, 403);
   const limits = user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier);
   if (
-    !limits.canUploadImages ||
+    (kind !== 'announcements' && !limits.canUploadImages) ||
     (kind === 'notes' && !limits.canUsePrivateNotes)
   )
     return json(
@@ -3103,7 +3106,7 @@ export async function uploadMedia(
   const file = form.get('file');
   const qbankValue = form.get('qbankId');
   const questionValue = form.get('questionId');
-  const qbankId = typeof qbankValue === 'string' ? qbankValue : '';
+  const qbankId = kind === 'announcements' ? 'system-announcement' : typeof qbankValue === 'string' ? qbankValue : '';
   const questionId =
     typeof questionValue === 'string' ? questionValue : 'general';
   const permittedTypes = new Set([
@@ -3121,16 +3124,16 @@ export async function uploadMedia(
       { error: 'Upload a JPEG, PNG, WebP, or GIF image smaller than 10 MB.' },
       400,
     );
-  const readyMadeTest = await preformedMediaTest(qbankId);
-  const state = readyMadeTest ? null : await bankAccessState(qbankId);
+  const readyMadeTest = kind === 'announcements' ? null : await preformedMediaTest(qbankId);
+  const state = readyMadeTest || kind === 'announcements' ? null : await bankAccessState(qbankId);
   const bank = state?.qbanks.find((item) => item.id === qbankId);
-  const permitted = readyMadeTest
+  const permitted = kind === 'announcements' || (readyMadeTest
     ? kind === 'questions' && readyMadeTest.owner_id === user.uid
     : bank &&
       state &&
       (kind === 'questions'
         ? canReviewBank(user, bank, state.memberships)
-        : canAccessBank(user, bank, state.memberships));
+        : canAccessBank(user, bank, state.memberships)));
   if (!permitted)
     return json(
       {
@@ -3152,7 +3155,7 @@ export async function uploadMedia(
   )
     .bind(user.uid)
     .first<{ bytes: number }>();
-  if (Number(usage?.bytes ?? 0) + file.size > limits.maxImageStorageBytes)
+  if (kind !== 'announcements' && Number(usage?.bytes ?? 0) + file.size > limits.maxImageStorageBytes)
     return json(
       {
         error: `Your ${limits.name} image storage allowance has been reached. Delete unused images before uploading more.`,
@@ -3161,9 +3164,9 @@ export async function uploadMedia(
     );
   const fileHash = await sha256Bytes(bytes);
   const duplicate = await env.DB.prepare(
-    "SELECT key,provider FROM media WHERE owner_id=? AND qbank_id=? AND file_hash=? AND provider='r2' AND status='ready' AND (?!='shared-notes' OR purpose='shared-notes') LIMIT 1",
+    "SELECT key,provider FROM media WHERE owner_id=? AND qbank_id=? AND file_hash=? AND provider='r2' AND status='ready' AND (?!='shared-notes' OR purpose='shared-notes') AND (?!='announcements' OR purpose='announcements') LIMIT 1",
   )
-    .bind(user.uid, qbankId, fileHash, kind)
+    .bind(user.uid, qbankId, fileHash, kind, kind)
     .first<{ key: string; provider: string }>();
   if (duplicate)
     return json({
@@ -3303,7 +3306,7 @@ export async function uploadMedia(
 export async function serveMedia(request: Request, key: string) {
   const user = await currentUser(request);
   const metadata = await env.DB.prepare(
-    'SELECT qbank_id,provider,storage_key,status FROM media WHERE key = ?',
+    'SELECT qbank_id,provider,storage_key,status,purpose FROM media WHERE key = ?',
   )
     .bind(key)
     .first<{
@@ -3311,11 +3314,17 @@ export async function serveMedia(request: Request, key: string) {
       provider: string;
       storage_key: string | null;
       status: string;
+      purpose: string;
     }>();
   if (!metadata || metadata.status !== 'ready')
     return new Response('Not found.', { status: 404 });
-  const readyMadeTest = await preformedMediaTest(metadata.qbank_id);
-  if (readyMadeTest) {
+  const readyMadeTest = metadata.purpose === 'announcements' ? null : await preformedMediaTest(metadata.qbank_id);
+  if (metadata.purpose === 'announcements') {
+    const announcement = await announcementSettings();
+    const url = `/api/cloudflare/media/${key.split('/').map(encodeURIComponent).join('/')}`;
+    const published = announcement.enabled && announcement.images.some(image => image.url === url);
+    if (!published && !(user?.role === 'super_admin' && user.status === 'approved' && !user.suspended && user.mfaEnrolled && user.mfaVerified)) return new Response('Not found.', { status: 404 });
+  } else if (readyMadeTest) {
     const owner = Boolean(user && readyMadeTest.owner_id === user.uid);
     if (!owner) {
       if (readyMadeTest.status !== 'published')
@@ -3380,7 +3389,7 @@ export async function serveMedia(request: Request, key: string) {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
-  headers.set('cache-control', 'private, max-age=31536000, immutable');
+  headers.set('cache-control', metadata.purpose === 'announcements' ? 'private, no-store' : 'private, max-age=31536000, immutable');
   headers.set('x-content-type-options', 'nosniff');
   return new Response(object.body, { headers });
 }

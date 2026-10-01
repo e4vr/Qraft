@@ -88,7 +88,7 @@ export async function deleteOwnAccount(request: Request) {
   for (const row of rows) {
     const original = JSON.parse(row.payload) as Record<string, unknown>;
     const remove = (row.qbank_id && deletedBanks.has(row.qbank_id) && !['auditLog', 'questionProposals'].includes(row.type)) || (row.type === 'qbanks' && deletedBanks.has(row.id)) ||
-      (['qbankMemberships', 'roleApplications', 'reviewHistoryPreferences'].includes(row.type) && (original.userId === user.uid || row.owner_id === user.uid)) ||
+      (['qbankMemberships', 'roleApplications', 'reviewHistoryPreferences', 'announcementDismissals'].includes(row.type) && (original.userId === user.uid || row.owner_id === user.uid)) ||
       (['qbankInvitations', 'adminInvites'].includes(row.type) && (row.email === user.email || original.email === user.email));
     if (remove) { deletes.push({ type: row.type, id: row.id }); continue; }
     const next = anonymize(original, user, anonymousId) as Record<string, unknown>;

@@ -21,7 +21,7 @@ void test('staging exposes build identity without storing release secrets', () =
 
 void test('release metadata identifies current PWA and schema inputs', () => {
   const metadata = releaseMetadata();
-  assert.equal(metadata.serviceWorker, 'v4.7.1');
+  assert.equal(metadata.serviceWorker, 'v4.7.2');
   assert.match(metadata.schema, /^0028.*\.sql$/);
-  assert.equal(metadata.packageVersion, '1.1.0');
+  assert.equal(metadata.packageVersion, '1.2.0');
 });

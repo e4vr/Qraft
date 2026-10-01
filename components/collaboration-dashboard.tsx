@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { QraftBrand } from '@/components/brand/qraft-brand';
 import { DEFAULT_LEGAL_LINKS } from '@/lib/legal-links';
+import { AnnouncementAdmin } from '@/components/announcement-admin';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -428,138 +429,6 @@ function LegalLinksAdmin() {
   );
 }
 
-function AnnouncementAdmin() {
-  const [value, setValue] = useState({ enabled: false, content: '', href: '' });
-  const original = useRef(value);
-  const [busy, setBusy] = useState(true);
-  const [message, setMessage] = useState('');
-  useEffect(() => {
-    let active = true;
-    void api<typeof value>('/platform/announcement')
-      .then((next) => {
-        if (active) {
-          setValue(next);
-          original.current = next;
-        }
-      })
-      .catch((error) => {
-        if (active)
-          setMessage(
-            error instanceof Error
-              ? error.message
-              : 'Unable to load announcement.',
-          );
-      })
-      .finally(() => {
-        if (active) setBusy(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-  const save = async () => {
-    const normalized = {
-      enabled: value.enabled,
-      content: value.content.trim(),
-      href: value.href.trim(),
-    };
-    if (JSON.stringify(normalized) === JSON.stringify(original.current)) {
-      setMessage('No changes to save.');
-      return;
-    }
-    setBusy(true);
-    setMessage('');
-    try {
-      const saved = await api<typeof value>('/platform/announcement', {
-        method: 'PUT',
-        body: JSON.stringify(normalized),
-      });
-      setValue(saved);
-      original.current = saved;
-      setApiCache('/platform/announcement', saved);
-      setMessage('Announcement saved and published.');
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : 'Unable to save announcement.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
-      <div className="flex items-start gap-3">
-        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
-          <Megaphone className="size-5" />
-        </span>
-        <div>
-          <h2 className="font-bold">Site announcement bar</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Publish one compact announcement across the main application.
-          </p>
-        </div>
-      </div>
-      <label className="mt-5 grid gap-2 text-sm font-semibold">
-        Announcement content
-        <textarea
-          maxLength={280}
-          value={value.content}
-          onChange={(event) =>
-            setValue((current) => ({ ...current, content: event.target.value }))
-          }
-          className="min-h-28 rounded-xl border bg-background p-3 font-normal"
-          placeholder="Write a short announcement…"
-        />
-      </label>
-      <div className="mt-1 text-right text-xs text-muted-foreground">
-        {value.content.length}/280
-      </div>
-      <label className="mt-4 grid gap-2 text-sm font-semibold">
-        Optional action link
-        <input
-          value={value.href}
-          onChange={(event) =>
-            setValue((current) => ({ ...current, href: event.target.value }))
-          }
-          className="h-11 rounded-xl border bg-background px-3 font-normal"
-          placeholder="https://… or /internal-page"
-        />
-      </label>
-      <label className="mt-5 flex items-center gap-3 rounded-xl border bg-muted/25 p-3 text-sm font-semibold">
-        <input
-          type="checkbox"
-          checked={value.enabled}
-          onChange={(event) =>
-            setValue((current) => ({
-              ...current,
-              enabled: event.target.checked,
-            }))
-          }
-          className="size-4 accent-primary"
-        />
-        Show announcement on the site
-      </label>
-      {value.content && (
-        <div className="mt-5 rounded-xl bg-gradient-to-r from-primary via-cyan-600 to-teal-600 px-4 py-3 text-center text-sm font-bold text-white">
-          {value.content}
-        </div>
-      )}
-      <div className="mt-5 flex flex-wrap items-center gap-3">
-        <button
-          onClick={() => void save()}
-          disabled={busy}
-          className="q-button q-button-primary"
-        >
-          <Save className="size-4" />
-          {busy ? 'Saving…' : 'Save announcement'}
-        </button>
-        {message && (
-          <output className="text-sm text-muted-foreground">{message}</output>
-        )}
-      </div>
-    </section>
-  );
-}
 
 function BackupAdmin() {
   const [busy, setBusy] = useState(false);
@@ -708,7 +577,7 @@ export function AdminDashboard({
             ['json-imports', 'Imports'],
             ['ready-tests', 'Reported tests'],
             ['question-preview', 'Question preview'],
-            ['announcement', 'Announcement bar'],
+            ['announcement', 'Announcement & Telegram'],
             ['backups', 'Backup & restore'],
             ['legal', 'Terms & privacy'],
             ['audit', 'Audit log'],
@@ -1829,7 +1698,7 @@ export function AdminDashboard({
             )}
             {isRoot && tab === 'question-preview' && <QuestionPreview />}
             {isRoot && tab === 'announcement' && (
-              <AnnouncementAdmin key={refreshRevision} />
+              <AnnouncementAdmin key={refreshRevision} uid={user.uid} />
             )}
             {isRoot && tab === 'backups' && <BackupAdmin />}
             {isRoot && tab === 'legal' && (

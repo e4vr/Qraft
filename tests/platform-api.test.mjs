@@ -14,6 +14,7 @@ import { serverEfficiencyApiTests } from './server-efficiency-api.mjs';
 import { qbankLifecycleApiTests } from './qbank-lifecycle-api.mjs';
 import { exactImportSkipApiTests } from './exact-import-skip-api.mjs';
 import { sharedNoteImageApiTests } from './shared-note-images-api.mjs';
+import { announcementApiTests } from './announcement-api.mjs';
 import { contributionEconomyApiTests } from './contribution-economy-api.mjs';
 
 function decodeBase32(value) {
@@ -582,6 +583,7 @@ print(json.dumps(out))`,
     assert.equal(usage.class_b_operations, 1);
   });
   await sharedNoteImageApiTests(t, { db, call, mf, uploadImage });
+  await announcementApiTests(t, { db, call, mf, uploadImage });
   await t.test(
     'Members can update their profile and securely change their password',
     async () => {
