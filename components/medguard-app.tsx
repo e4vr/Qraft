@@ -2,6 +2,9 @@
 import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
 import { QuestionEditDialog } from '@/components/question-edit-dialog';
 import { QuestionSourceFields } from '@/components/question-source-fields';
+import { SharedNoteImages } from '@/components/shared-note-images';
+import { ExplanationImageEditor } from '@/components/explanation-image-editor';
+import { NOTE_IMAGE_ACCEPT, uploadSharedNoteImages } from '@/features/media/client/shared-note-images';
 import { DeleteAccount } from '@/components/delete-account';
 import { stateBytes, STATE_WARNING_BYTES, STATE_BUDGET_BYTES } from '@/features/state/domain/state-budget';
 
@@ -30,6 +33,7 @@ import {
 import { openLiveChannels, subscribeLive } from '@/lib/realtime-client';
 import { createRefreshQueue } from '@/features/collaboration/client/refresh-queue';
 import { ApiError, api, setApiCache } from '@/lib/api-client';
+import { DEFAULT_LEGAL_LINKS, type LegalLinks } from '@/lib/legal-links';
 import { COLLABORATION_SYNC_NOTICE, type CollaborationSyncNotice } from '@/features/collaboration/client/collaboration-client';
 import { loadRejectedCollaboration } from '@/lib/local-db';
 import { saveDirectQuestionEdit } from '@/features/qbanks/client/direct-question-edit';
@@ -150,7 +154,7 @@ import {
   setAuthenticatedUserCache,
   signInCloudflare,
   signOutCloudflare,
-  uploadNoteImage,
+  uploadSharedNoteImage,
   type QBankLinkInvitation,
 } from '@/lib/application-services';
 import {
@@ -2358,6 +2362,7 @@ function TestView({
   const [proposedStem, setProposedStem] = useState('');
   const [proposedOptions, setProposedOptions] = useState<string[]>([]);
   const [proposedExplanation, setProposedExplanation] = useState('');
+  const [proposedExplanationImages, setProposedExplanationImages] = useState<QuestionProgress['noteImages']>([]);
   const [proposedSource, setProposedSource] = useState('');
   const [proposedSourcePage, setProposedSourcePage] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
@@ -2365,6 +2370,10 @@ function TestView({
     QuestionProgress['noteImages']
   >([]);
   const [uploading, setUploading] = useState(false);
+  const [noteUploadError, setNoteUploadError] = useState('');
+  const noteUploadInFlight = useRef(false);
+  const activeNoteUploadScope = useRef('');
+  const noteDraftBaseline = useRef({ key: '', content: '', images: [] as QuestionProgress['noteImages'] });
   const { mode: presentationMode } = usePresentationEnvironment();
   const handheld = presentationMode === 'handheld';
   const stemRef = useRef<HTMLParagraphElement>(null);
@@ -2393,6 +2402,7 @@ function TestView({
   const qbankId = question?.qbankId ?? test.qbankId ?? 'smle-gs';
   const noteKey = question ? `${qbankId}:${question.id}` : '';
   const sharedNote = noteKey ? collaboration.sharedNotes[noteKey] : undefined;
+  const explanationImages = [...new Map([...(question?.explanationImages ?? []), ...(sharedNote?.images ?? [])].map(image => [image.url, image])).values()];
   const displayedExplanation =
     sharedNote?.content.trim() ||
     question?.explanation?.trim() ||
@@ -2434,12 +2444,21 @@ function TestView({
   ]);
 
   useEffect(() => {
+    activeNoteUploadScope.current = noteKey;
+    return () => { activeNoteUploadScope.current = ''; };
+  }, [noteKey]);
+
+  useEffect(() => {
     const update = window.setTimeout(() => {
-      setNoteDraft(sharedNote?.content ?? '');
-      setNoteImagesDraft(sharedNote?.images ?? []);
+      const previous = noteDraftBaseline.current;
+      const next = { key: noteKey, content: sharedNote?.content ?? '', images: sharedNote?.images ?? [] };
+      setNoteDraft(current => previous.key === noteKey ? mergeLiveState(previous.content, current, next.content) : next.content);
+      setNoteImagesDraft(current => previous.key === noteKey ? mergeLiveState(previous.images, current, next.images) : next.images);
+      noteDraftBaseline.current = next;
+      if (previous.key !== noteKey) setNoteUploadError('');
     }, 0);
     return () => window.clearTimeout(update);
-  }, [question?.id, sharedNote?.content, sharedNote?.images]);
+  }, [noteKey, sharedNote?.content, sharedNote?.images]);
 
   const updateTest = useCallback(
     (updater: (current: TestSession) => TestSession) => {
@@ -2805,6 +2824,7 @@ function TestView({
   }
 
   function saveNote() {
+    if (noteUploadInFlight.current) return;
     const content = noteDraft.trim();
     if (
       content === (sharedNote?.content ?? '') &&
@@ -2877,40 +2897,33 @@ function TestView({
     });
   }
 
-  async function attachImages(files: FileList | null) {
-    if (!files?.length) return;
+  async function attachImages(files: readonly File[]) {
+    if (!files.length || noteUploadInFlight.current) return;
+    const scope = noteKey;
+    noteUploadInFlight.current = true;
     setUploading(true);
+    setNoteUploadError('');
     try {
-      const images = await Promise.all(
-        Array.from(files)
-          .slice(0, 5)
-          .map(async (file) => {
-            if (!file.type.startsWith('image/'))
-              throw new Error('Only image files are supported.');
-            if (file.size > 10 * 1024 * 1024)
-              throw new Error('Each image must be smaller than 10 MB.');
-            const url = await uploadNoteImage(
-              user.uid,
-              file,
-              qbankId,
-              question.id,
-            );
-            return {
-              id: crypto.randomUUID(),
-              url,
-              name: file.name,
-              caption: '',
-            };
-          }),
+      const result = await uploadSharedNoteImages(
+        files,
+        file => uploadSharedNoteImage(user.uid, file, qbankId, question.id),
       );
-      setNoteImagesDraft((current) => [...current, ...images]);
+      // Navigation cannot attach a completed upload to a different question.
+      if (activeNoteUploadScope.current !== scope) return;
+      setNoteImagesDraft((current) => [...current, ...result.images]);
+      setNoteUploadError(result.errors.join('\n'));
     } catch (caught) {
-      window.alert(
-        caught instanceof Error ? caught.message : 'Image upload failed.',
-      );
+      if (activeNoteUploadScope.current === scope)
+        setNoteUploadError(caught instanceof Error ? caught.message : 'Image upload failed.');
     } finally {
+      noteUploadInFlight.current = false;
       setUploading(false);
     }
+  }
+
+  function openSharedNoteEditor() {
+    setExplanationOpen(false);
+    setNotesOpen(true);
   }
 
   function removeImage(imageId: string) {
@@ -2933,6 +2946,7 @@ function TestView({
     setProposedOptions([...question.options]);
     setSuggestedAnswer(question.answer);
     setProposedExplanation(question.explanation ?? sharedNote?.content ?? '');
+    setProposedExplanationImages(question.explanationImages ?? []);
     setProposedSource(readQuestionSource(question).sourceFile);
     setProposedSourcePage(String(readQuestionSource(question).sourcePage ?? ''));
     setEditKinds(['typo_formatting']);
@@ -2964,6 +2978,7 @@ function TestView({
       specialty: question.specialty,
       topic: question.topic,
       explanation: question.explanation ?? sharedNote?.content ?? '',
+      explanationImages: question.explanationImages ?? [],
       ...readQuestionSource(question),
       images: question.images ?? [],
     };
@@ -2974,7 +2989,7 @@ function TestView({
         const saved = await saveDirectQuestionEdit(user.uid, qbankId, question, {
           ...currentSnapshot,
           stem: proposedStem.trim(), options: proposedOptions.map(item => item.trim()),
-          answer: suggestedAnswer, explanation: proposedExplanation.trim(), ...source,
+          answer: suggestedAnswer, explanation: proposedExplanation.trim(), explanationImages: proposedExplanationImages, ...source,
         });
         confirmUpdate(current => ({ ...current, approvedQuestions: current.approvedQuestions.map(item => item.id === saved.id ? saved : item) }));
         setReportOpen(false);
@@ -2993,6 +3008,7 @@ function TestView({
         specialty: question.specialty,
         topic: question.topic,
         explanation: proposedExplanation.trim(),
+        explanationImages: proposedExplanationImages,
         ...source,
         images: question.images ?? [],
       };
@@ -3102,6 +3118,10 @@ function TestView({
             onRemove={(range) => removeHighlight('explanation', range)}
           />
         </p>
+        <SharedNoteImages images={explanationImages} onZoom={setZoomImage} />
+        <SecondaryButton className="mt-4" onClick={openSharedNoteEditor}>
+          <ImagePlus className="size-4" />Add explanation images
+        </SecondaryButton>
       </AdaptiveOverlay>
       <AdaptiveOverlay
         open={labsOpen}
@@ -3255,10 +3275,10 @@ function TestView({
         }}
       >
         <DialogContent className="sm:max-w-4xl">
-          <DialogTitle>Question image</DialogTitle>
+          <DialogTitle>Image preview</DialogTitle>
           <img
             src={zoomImage || undefined}
-            alt="Enlarged question illustration"
+            alt="Enlarged question or explanation illustration"
             className="max-h-[75dvh] w-full object-contain"
           />
         </DialogContent>
@@ -3605,17 +3625,16 @@ function TestView({
                           }
                         />
                       </p>
+                      <SharedNoteImages images={explanationImages} onZoom={setZoomImage} />
+                      <SecondaryButton className="mt-4" onClick={openSharedNoteEditor}>
+                        <ImagePlus className="size-4" />Add explanation images
+                      </SecondaryButton>
                       {(question.sourceReference || question.sourceFile) && (
                         <p className="mt-5 border-t pt-4 text-xs leading-6 text-muted-foreground">
                           <strong className="text-foreground">Source:</strong>{' '}
                           {readQuestionSource(question).sourceReference}
                         </p>
                       )}
-                      <p className="mt-5 rounded-xl bg-primary/5 p-3 text-sm leading-6 text-muted-foreground">
-                        Drag the divider to control the explanation space. Use
-                        Shared notes below to edit the collaborative
-                        explanation.
-                      </p>
                     </aside>
                   </ResizablePanel>
                 </>
@@ -3635,7 +3654,7 @@ function TestView({
                     Explanation
                   </SecondaryButton>
                 )}
-                <SecondaryButton onClick={openReport}>
+                <SecondaryButton className="q-test-edit-action" onClick={openReport}>
                   <CircleAlert className="size-4" />
                   {user.role === 'super_admin' ? 'Edit question' : 'Suggest edit'}
                 </SecondaryButton>
@@ -3658,7 +3677,24 @@ function TestView({
                 handheld={handheld}
                 onClose={() => setNotesOpen(false)}
               >
-                <section className="mt-4 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-border dark:bg-card">
+                <section
+                  className="mt-4 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-border dark:bg-card"
+                  onPaste={(event) => {
+                    const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith('image/'));
+                    if (files.length) {
+                      event.preventDefault();
+                      void attachImages(files);
+                    }
+                  }}
+                  onDragOver={(event) => {
+                    if (event.dataTransfer.types.includes('Files')) event.preventDefault();
+                  }}
+                  onDrop={(event) => {
+                    if (!event.dataTransfer.files.length) return;
+                    event.preventDefault();
+                    void attachImages(Array.from(event.dataTransfer.files));
+                  }}
+                >
                   <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
                     <div>
                       <h3 className="font-bold">Shared explanation & notes</h3>
@@ -3674,7 +3710,7 @@ function TestView({
                       </span>
                     )}
                   </div>
-                  <div className="mt-4 flex gap-1 border-b pb-2">
+                  <div className="mt-4 flex flex-wrap items-center gap-1 border-b pb-2">
                     <IconButton
                       label="Bold"
                       onClick={() => insertNoteToken('**')}
@@ -3693,25 +3729,24 @@ function TestView({
                     >
                       <List className="size-4" />
                     </IconButton>
-                    <label
-                      title="Add images"
-                      className="grid size-10 cursor-pointer place-items-center rounded-xl border text-muted-foreground hover:bg-muted"
-                    >
-                      <span className="sr-only">Add note images</span>
+                    <label className={cx('ml-auto flex min-h-11 items-center gap-2 rounded-xl border px-3 text-sm font-semibold', uploading ? 'cursor-wait opacity-50' : 'cursor-pointer text-primary hover:bg-primary/5')}>
                       <ImagePlus className="size-4" />
+                      <span>Add images</span>
                       <input
                         aria-label="Add note images"
                         type="file"
-                        accept="image/*"
+                        accept={NOTE_IMAGE_ACCEPT}
                         multiple
-                        hidden
+                        disabled={uploading}
+                        className="sr-only"
                         onChange={(event) => {
-                          void attachImages(event.target.files);
+                          void attachImages(Array.from(event.target.files ?? []));
                           event.target.value = '';
                         }}
                       />
                     </label>
                   </div>
+                  <p className="mt-3 text-xs leading-5 text-muted-foreground">Choose, paste, or drop up to 5 images at a time · JPEG, PNG, WebP, GIF · 10 MB each. Save the shared note to publish images in the explanation.</p>
                   <textarea
                     id="question-note"
                     dir="auto"
@@ -3721,11 +3756,12 @@ function TestView({
                     className="mt-3 min-h-40 w-full resize-y rounded-xl border bg-muted/20 p-4 text-sm leading-7 outline-none focus:border-primary focus:ring-3 focus:ring-primary/10"
                   />
                   {uploading && (
-                    <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                    <output className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
                       <RefreshCw className="size-3 animate-spin" />
                       Uploading images…
-                    </div>
+                    </output>
                   )}
+                  {noteUploadError && <p role="alert" className="mt-3 whitespace-pre-wrap rounded-xl bg-destructive/10 p-3 text-sm text-destructive">{noteUploadError}</p>}
                   {noteImagesDraft.length > 0 && (
                     <div className="mt-4 grid gap-3 sm:grid-cols-2">
                       {noteImagesDraft.map((image) => (
@@ -3734,12 +3770,12 @@ function TestView({
                           className="overflow-hidden rounded-xl border"
                         >
                           <div className="relative bg-muted">
-                            <img
-                              src={image.url}
-                              alt={image.caption || image.name}
-                              className="h-40 w-full object-contain"
-                            />
+                            <button type="button" onClick={() => setZoomImage(image.url)} aria-label={`Enlarge image: ${image.caption || image.name}`} className="block w-full cursor-zoom-in">
+                              <img src={image.url} alt={image.caption || image.name} className="h-40 w-full object-contain" />
+                            </button>
                             <button
+                              type="button"
+                              aria-label={`Remove image ${image.name}`}
                               onClick={() => removeImage(image.id)}
                               className="absolute right-2 top-2 grid size-8 place-items-center rounded-lg bg-white/90 text-red-600 shadow dark:bg-slate-950/85 dark:text-red-300"
                             >
@@ -3747,6 +3783,7 @@ function TestView({
                             </button>
                           </div>
                           <input
+                            aria-label={`Caption for ${image.name}`}
                             value={image.caption}
                             onChange={(event) =>
                               updateCaption(image.id, event.target.value)
@@ -3762,7 +3799,7 @@ function TestView({
                     <span className="text-xs text-muted-foreground">
                       Saving adds your name and timestamp to version history.
                     </span>
-                    <PrimaryButton tone="study" onClick={saveNote}>
+                    <PrimaryButton tone="study" onClick={saveNote} disabled={uploading}>
                       <Save className="size-4" />
                       Save shared note
                     </PrimaryButton>
@@ -3956,6 +3993,7 @@ function TestView({
       />
       {reportOpen && (
         <QuestionEditDialog
+          uid={user.uid} qbankId={qbankId} questionId={question.id}
           open={reportOpen}
           onClose={() => setReportOpen(false)}
           questionNumber={question.number}
@@ -3963,12 +4001,13 @@ function TestView({
           busy={reportBusy}
           error={reportError}
           onSubmit={submitReport}
-          draft={{ stem: proposedStem, options: proposedOptions, answer: suggestedAnswer, explanation: proposedExplanation, sourceFile: proposedSource, sourcePage: proposedSourcePage, rationale: reportMessage, kinds: editKinds }}
+          draft={{ stem: proposedStem, options: proposedOptions, answer: suggestedAnswer, explanation: proposedExplanation, explanationImages: proposedExplanationImages, sourceFile: proposedSource, sourcePage: proposedSourcePage, rationale: reportMessage, kinds: editKinds }}
           onChange={changes => {
             if (changes.stem !== undefined) setProposedStem(changes.stem);
             if (changes.options !== undefined) setProposedOptions(changes.options);
             if ('answer' in changes) setSuggestedAnswer(changes.answer);
             if (changes.explanation !== undefined) setProposedExplanation(changes.explanation);
+            if (changes.explanationImages !== undefined) { setProposedExplanationImages(changes.explanationImages); setEditKinds(current => [...new Set([...current, 'explanation' as const])]); }
             if (changes.sourceFile !== undefined) setProposedSource(changes.sourceFile);
             if (changes.sourcePage !== undefined) setProposedSourcePage(changes.sourcePage);
             if (changes.rationale !== undefined) setReportMessage(changes.rationale);
@@ -4623,10 +4662,7 @@ function SettingsView({
     updater: (current: CollaborationState) => CollaborationState,
   ) => void;
 }) {
-  const [legalLinks, setLegalLinks] = useState({
-    termsUrl: '',
-    privacyUrl: '',
-  });
+  const [legalLinks, setLegalLinks] = useState(DEFAULT_LEGAL_LINKS);
   const [personalBackupBusy, setPersonalBackupBusy] = useState(false);
   const [personalBackupMessage, setPersonalBackupMessage] = useState('');
   const [dailyGoalOverride, setDailyGoalDraft] = useState<number>();
@@ -4637,9 +4673,9 @@ function SettingsView({
   const [draftDownloadError, setDraftDownloadError] = useState('');
   useEffect(() => {
     let active = true;
-    void api<{ termsUrl: string; privacyUrl: string }>('/platform/legal-links')
+    void api<LegalLinks>('/platform/legal-links')
       .then((links) => {
-        if (active) setLegalLinks(links);
+        if (active) setLegalLinks({ ...DEFAULT_LEGAL_LINKS, ...links });
       })
       .catch(() => undefined);
     return () => {
@@ -4893,7 +4929,7 @@ function SettingsView({
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
             Review the policies that govern your use of Qraft and your data.
           </p>
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <a
               href={legalLinks.termsUrl || undefined}
               target={legalLinks.termsUrl ? '_blank' : undefined}
@@ -4922,8 +4958,22 @@ function SettingsView({
               Privacy policy
               <ArrowRight className="ml-auto size-4 text-muted-foreground" />
             </a>
+            <a
+              href={legalLinks.refundUrl || undefined}
+              target={legalLinks.refundUrl ? '_blank' : undefined}
+              rel={legalLinks.refundUrl ? 'noreferrer' : undefined}
+              aria-disabled={!legalLinks.refundUrl}
+              className={cx(
+                'flex min-h-12 items-center gap-3 rounded-xl border px-4 text-sm font-bold transition hover:border-primary/40 hover:bg-primary/5',
+                !legalLinks.refundUrl && 'pointer-events-none opacity-50',
+              )}
+            >
+              <RotateCcw className="size-5 text-primary" />
+              Refund policy
+              <ArrowRight className="ml-auto size-4 text-muted-foreground" />
+            </a>
           </div>
-          {(!legalLinks.termsUrl || !legalLinks.privacyUrl) && (
+          {(!legalLinks.termsUrl || !legalLinks.privacyUrl || !legalLinks.refundUrl) && (
             <p className="mt-3 text-xs text-muted-foreground">
               The Superadmin can configure unavailable links from the Admin
               page.
@@ -4984,6 +5034,9 @@ function QuestionManager({
   const [topic, setTopic] = useState(questions[0]?.topic ?? 'General');
   const [rationale, setRationale] = useState('');
   const [explanation, setExplanation] = useState('');
+  const [explanationImages, setExplanationImages] = useState<QuestionProgress['noteImages']>([]);
+  const [explanationImagesBusy, setExplanationImagesBusy] = useState(false);
+  const [composerImageScope, setComposerImageScope] = useState('');
   const [sourceFile, setSourceFile] = useState('');
   const [sourcePage, setSourcePage] = useState('');
   const [sourceError, setSourceError] = useState('');
@@ -4995,6 +5048,8 @@ function QuestionManager({
     setTopic(questions[0]?.topic ?? 'General');
     setRationale('');
     setExplanation('');
+    setExplanationImages([]);
+    setComposerImageScope(crypto.randomUUID());
     setSourceFile(''); setSourcePage(''); setSourceError('');
   }
 
@@ -5013,6 +5068,8 @@ function QuestionManager({
     setTopic(proposal.payload.topic);
     setRationale(proposal.rationale);
     setExplanation(proposal.payload.explanation);
+    setExplanationImages(proposal.payload.explanationImages ?? []);
+    setComposerImageScope(proposal.id);
     const source = readQuestionSource(proposal.payload);
     setSourceFile(source.sourceFile); setSourcePage(String(source.sourcePage ?? '')); setSourceError('');
     setOpen(true);
@@ -5020,6 +5077,7 @@ function QuestionManager({
 
   async function addQuestion(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (explanationImagesBusy) return;
     if (
       !stem.trim() ||
       options.length < 2 ||
@@ -5042,6 +5100,7 @@ function QuestionManager({
       specialty: specialty.trim() || 'General',
       topic: topic.trim() || 'General',
       explanation: explanation.trim(),
+      explanationImages,
       ...source,
       images: editingProposal?.payload.images ?? [],
     };
@@ -5234,6 +5293,7 @@ function QuestionManager({
               type="button"
               onClick={() => setOpen(false)}
               aria-label="Close composer"
+              disabled={explanationImagesBusy}
               className="grid size-11 shrink-0 place-items-center rounded-xl border"
             >
               <X className="size-5" />
@@ -5347,6 +5407,7 @@ function QuestionManager({
             />
             {editingProposal?.type === 'question_edit' && !explanation.trim() && <p className="mt-2 text-sm text-orange-600 dark:text-orange-400">Adding an explanation helps learners. Saving empty removes the existing explanation when accepted.</p>}
           </label>
+          <ExplanationImageEditor key={`${activeQBankId}:${composerImageScope}`} uid={user.uid} qbankId={activeQBankId} questionId={`proposal-${composerImageScope}`} images={explanationImages} onChange={setExplanationImages} onBusyChange={setExplanationImagesBusy} />
           <div className="mt-4"><QuestionSourceFields sourceFile={sourceFile} sourcePage={sourcePage} onChange={source => { setSourceFile(source.sourceFile); setSourcePage(source.sourcePage); }} /></div>
           {sourceError && <p role="alert" className="mt-2 text-sm text-destructive">{sourceError}</p>}
           <label className="mt-4 block">
@@ -5361,10 +5422,10 @@ function QuestionManager({
             />
           </label>
           <div className="mt-6 flex flex-wrap justify-end gap-2">
-            <SecondaryButton onClick={() => setOpen(false)}>
+            <SecondaryButton disabled={explanationImagesBusy} onClick={() => setOpen(false)}>
               Cancel
             </SecondaryButton>
-            <PrimaryButton type="submit" tone="contribute">
+            <PrimaryButton type="submit" tone="contribute" disabled={explanationImagesBusy}>
               <Save className="size-4" />
               {editingProposal
                 ? editingProposal.status === 'rejected'
@@ -5427,6 +5488,7 @@ function QuestionManager({
         <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-3xl">
           <DialogTitle>Import</DialogTitle>
           <QuestionImportReview
+            uid={user.uid}
             bankId={activeQBankId}
             adminImportPrivileges={user.role === 'super_admin'}
             onImported={(result) =>

@@ -5,6 +5,7 @@ import { addCalendarDuration } from '@/features/subscriptions/domain/calendar-du
 import { subscribeLive } from '@/lib/realtime-client';
 import { Check, Crown, Eye, X, Search, Ticket, Users, ShieldCheck, Pencil, Plus, ChevronLeft, ChevronRight, History, SlidersHorizontal } from 'lucide-react';
 import { api, setApiCache } from '@/lib/api-client';
+import { DEFAULT_LEGAL_LINKS, type LegalLinks } from '@/lib/legal-links';
 import { setAuthenticatedUserCache } from '@/lib/application-services';
 import type { AppUser } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
@@ -65,12 +66,44 @@ export function Subscribe({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<Exclude<PlanId, 'free'>>('full_quarterly');
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [legalLinks, setLegalLinks] = useState(DEFAULT_LEGAL_LINKS);
+  const [legalLinksReadyFor, setLegalLinksReadyFor] = useState('');
+  const legalLinksReady = legalLinksReadyFor === user.uid;
+  const [legalLinksError, setLegalLinksError] = useState('');
+  const [legalLinksRetry, setLegalLinksRetry] = useState(0);
+  const legalSnapshot = useRef({ uid: user.uid, value: JSON.stringify(DEFAULT_LEGAL_LINKS) });
   const actionInFlight = useRef(false);
   const quoteSequence = useRef(0);
   const currentPrice = price?.plan === selectedPlan ? price : undefined;
   const [catalogPlans,setCatalogPlans] = useState<Partial<Record<PlanId, typeof PLAN_LIMITS[PlanId] & {description?:string}>>>({});
   const catalogLimits = (id:PlanId): typeof PLAN_LIMITS[PlanId] & {description?:string} => catalogPlans[id] ?? PLAN_LIMITS[id];
   const [catalogPrices, setCatalogPrices] = useState<Partial<Record<PlanId, number>>>({});
+  useEffect(() => {
+    let active = true;
+    const load = () => {
+      void api<LegalLinks>('/platform/legal-links')
+        .then(value => {
+          if (!active) return;
+          const links = { ...DEFAULT_LEGAL_LINKS, ...value };
+          const snapshot = JSON.stringify(links);
+          if (snapshot !== legalSnapshot.current.value || user.uid !== legalSnapshot.current.uid) setAcceptedTerms(false);
+          legalSnapshot.current = { uid: user.uid, value: snapshot };
+          setLegalLinks(links);
+          setLegalLinksReadyFor(user.uid);
+          setLegalLinksError('');
+        })
+        .catch(() => {
+          if (!active) return;
+          setLegalLinksReadyFor('');
+          setAcceptedTerms(false);
+          setLegalLinksError('Unable to load policies. Please try again.');
+        });
+    };
+    load();
+    const stop = subscribeLive(load, ['legal-links']);
+    return () => { active = false; stop(); };
+  }, [user.uid, legalLinksRetry]);
   useEffect(() => {
     let active = true;
     const load = () => void api<{plans:Array<typeof PLAN_LIMITS[PlanId] & {id:PlanId;price:number;description?:string}>}>('/platform/plan-catalog').then(result => { if(active) { setCatalogPrices(Object.fromEntries(result.plans.map(plan=>[plan.id,plan.price/100]))); setCatalogPlans(Object.fromEntries(result.plans.map(plan=>[plan.id,plan]))); } }).catch(error => { if(active) setError(error instanceof Error ? error.message : 'Unable to load plan prices.'); });
@@ -115,6 +148,7 @@ export function Subscribe({
     setBusy(true);
     setError('');
     setSuccess('');
+    setAcceptedTerms(false);
     try {
       setPrice(
         await api<Quote>('/platform/quote', {
@@ -136,6 +170,10 @@ export function Subscribe({
   }
   async function subscribe() {
     if (actionInFlight.current || !currentPrice) return;
+    if (!acceptedTerms || !legalLinksReady) {
+      setError('Please read and agree to all terms and policies before continuing.');
+      return;
+    }
     actionInFlight.current = true;
     ++quoteSequence.current;
     setBusy(true);
@@ -146,7 +184,7 @@ export function Subscribe({
         '/platform/checkout',
         {
           method: 'POST',
-          body: JSON.stringify({ code: currentPrice.code || '', requestId, plan: selectedPlan }),
+          body: JSON.stringify({ code: currentPrice.code || '', requestId, plan: selectedPlan, acceptedTerms }),
         },
       );
       if (result.upgraded && result.user) {
@@ -199,6 +237,7 @@ export function Subscribe({
                 ++quoteSequence.current;
                 setPrice(undefined); setCode(''); setAppliedCode(''); setError(''); setSuccess('');
                 setRequestId(crypto.randomUUID()); setSelectedPlan(plan);
+                setAcceptedTerms(false);
               }}
               className={`relative flex flex-col rounded-3xl border p-6 text-left transition ${quarterly ? 'border-emerald-300 bg-gradient-to-br from-emerald-50/70 to-card dark:border-emerald-800 dark:from-emerald-950/40' : 'border-blue-200 bg-gradient-to-br from-blue-50/70 to-card dark:border-blue-800 dark:from-blue-950/40'} ${selectedPlan === plan ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : ''}`}
             >
@@ -343,9 +382,26 @@ export function Subscribe({
         {success && (
           <output className="mt-3 text-emerald-600">{success}</output>
         )}
+        <div className="mt-4 rounded-xl border bg-muted/20 p-4" dir="rtl">
+          <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
+            {[
+              { label: 'شروط الاستخدام', url: legalLinks.termsUrl },
+              { label: 'سياسة الخصوصية', url: legalLinks.privacyUrl },
+              { label: 'شروط الاسترجاع', url: legalLinks.refundUrl },
+            ].filter(policy => policy.url).map(policy => (
+              <a key={policy.label} href={policy.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center font-semibold text-primary underline underline-offset-4">{policy.label}</a>
+            ))}
+          </div>
+          <label className="mt-2 flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6">
+            <input type="checkbox" checked={acceptedTerms} disabled={busy || !legalLinksReady} onChange={event => setAcceptedTerms(event.target.checked)} className="mt-1 size-5 shrink-0 accent-primary" />
+            <span>لقد قرأت جميع الشروط والأحكام وأوافق عليها.</span>
+          </label>
+          {!legalLinksReady && !legalLinksError && <output className="mt-2 block text-xs text-muted-foreground">Loading policies…</output>}
+          {legalLinksError && <div className="mt-2 text-sm" dir="auto"><p role="alert" className="text-destructive">{legalLinksError}</p><button type="button" className="q-button q-button-secondary mt-2" onClick={() => { setAcceptedTerms(false); setLegalLinksReadyFor(''); setLegalLinksError(''); setLegalLinksRetry(current => current + 1); }}>Retry</button></div>}
+        </div>
         <button
           className="q-button mt-4 w-full bg-primary text-primary-foreground"
-          disabled={busy || !currentPrice}
+          disabled={busy || !currentPrice || !acceptedTerms || !legalLinksReady}
           onClick={() => void subscribe()}
         >
           {busy

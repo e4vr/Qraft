@@ -469,6 +469,9 @@ body > main, .q-stage { min-width: 0; }
 /* Each scrolling surface has one safe-area owner; navigation takes real layout space. */
 .q-test-screen { height: 100%; min-height: 0; box-sizing: border-box; padding-top: var(--q-safe-top); overflow: hidden; }
 .q-test-screen > .q-test-body { min-height: 0; overflow-y: auto; touch-action: pan-y pinch-zoom; -webkit-overflow-scrolling: touch; }
+.q-test-actions { padding-bottom: 24px; }
+.q-button.q-test-edit-action { border-color: #fb923c; background: #fb923c; color: #431407; }
+.q-button.q-test-edit-action:hover:not(:disabled) { border-color: #f97316; background: #f97316; }
 @keyframes q-question-drawer-in { from { opacity: .72; transform: translateX(-18px); } to { opacity: 1; transform: translateX(0); } }
 .q-question-drawer { width: min(84vw, 420px); max-width: calc(100vw - var(--q-safe-left) - 48px); height: 100%; overflow: hidden; padding-top: max(20px, var(--q-safe-top)); padding-bottom: max(12px, var(--q-safe-bottom)); padding-left: var(--q-safe-left); border-radius: 0 24px 24px 0; animation: q-question-drawer-in 180ms ease-out both; }
 .q-question-drawer-list { overscroll-behavior: contain; scroll-padding-block: 45%; scrollbar-gutter: stable; touch-action: pan-y pinch-zoom; -webkit-overflow-scrolling: touch; }
@@ -484,7 +487,7 @@ body > main, .q-stage { min-width: 0; }
   .q-mobile-nav button { flex: 1; min-width: 0; max-width: 160px; min-height: 50px; border-radius: 16px; gap: 3px; padding: 5px 8px; }
   .q-mobile-nav .mobile-start:not([aria-current='page']) { background: transparent; color: var(--study); }
 }
-.q-test-bottom { padding-bottom: calc(var(--q-control-safe-bottom) + 8px); }
+.q-test-bottom { padding-bottom: calc(var(--q-control-safe-bottom) + 20px); }
 /* Custom full-screen overlays also keep their interactive contents inside the safe rect. */
 .q-safe-overlay { padding-top: max(1rem, var(--q-safe-top)); padding-right: max(1rem, var(--q-safe-right)); padding-bottom: max(1rem, var(--q-safe-bottom)); padding-left: max(1rem, var(--q-safe-left)); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .q-safe-overlay.grid { align-items: safe center; justify-items: center; }
@@ -865,7 +868,7 @@ html[data-presentation='handheld'] .q-test-choices button { min-height: 68px; bo
 html[data-presentation='handheld'] .q-test-bottom > button:last-child:not(:disabled) { border-color: var(--study); background: var(--study); color: white; }
 html[data-presentation='handheld'] .q-test-bottom > button:first-child,
 html[data-presentation='handheld'] .q-test-bottom > button:last-child { flex: 1; }
-html[data-presentation='handheld'] .q-test-actions { display: block; padding-bottom: 12px; }
+html[data-presentation='handheld'] .q-test-actions { display: block; padding-bottom: 24px; }
 html[data-presentation='handheld'] .q-test-secondary-actions { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 html[data-presentation='handheld'] .q-test-secondary-actions > button { width: 100%; min-width: 0; min-height: 48px; justify-content: center; padding-inline: 8px; white-space: normal; }
 html[data-presentation='handheld'] .q-test-secondary-actions > .q-test-explanation-action { grid-column: 1 / -1; }

@@ -13,6 +13,8 @@ import { directQuestionEditApiTests } from './direct-question-edit-api.mjs';
 import { serverEfficiencyApiTests } from './server-efficiency-api.mjs';
 import { qbankLifecycleApiTests } from './qbank-lifecycle-api.mjs';
 import { exactImportSkipApiTests } from './exact-import-skip-api.mjs';
+import { sharedNoteImageApiTests } from './shared-note-images-api.mjs';
+import { contributionEconomyApiTests } from './contribution-economy-api.mjs';
 
 function decodeBase32(value) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -245,6 +247,8 @@ print(json.dumps(out))`,
     uid,
     name = 'scan.png',
     content = 'png-test-content',
+    kind = 'notes',
+    qbankId = 'smle-gs',
   ) => {
     const body = new FormData();
     body.append(
@@ -258,13 +262,13 @@ print(json.dumps(out))`,
         { type: 'image/png' },
       ),
     );
-    body.append('qbankId', 'smle-gs');
+    body.append('qbankId', qbankId);
     body.append('questionId', 'gs-001');
     const encoded = new Request('https://qraft.test/upload-body', {
       method: 'POST',
       body,
     });
-    return mf.dispatchFetch('https://qraft.test/api/cloudflare/media/notes', {
+    return mf.dispatchFetch(`https://qraft.test/api/cloudflare/media/${kind}`, {
       method: 'POST',
       headers: {
         cookie: `__Host-qraft_session=fixture-${uid}`,
@@ -577,6 +581,7 @@ print(json.dumps(out))`,
     assert.equal(usage.class_a_operations, 1);
     assert.equal(usage.class_b_operations, 1);
   });
+  await sharedNoteImageApiTests(t, { db, call, mf, uploadImage });
   await t.test(
     'Members can update their profile and securely change their password',
     async () => {
@@ -962,14 +967,14 @@ print(json.dumps(out))`,
       const adjustment = await call('admin', '/platform/economy-admin', {
         operation: 'adjust-credits',
         userId: 'trial',
-        amount: 700,
+        amount: 850,
         reason: 'Reward integration fixture',
         requestId: randomUUID(),
       });
       assert.equal(adjustment.status, 200, JSON.stringify(adjustment));
       assert.equal(
         (await call('trial', '/platform/contributions')).data.creditsBalance,
-        700,
+        850,
       );
       const requestId = randomUUID();
       const redemption = await call('trial', '/platform/rewards', {
@@ -1017,14 +1022,23 @@ print(json.dumps(out))`,
     },
   );
   await t.test(
-    'Paid subscription prepares WhatsApp without upgrading',
+    'Paid subscription requires explicit agreement before preparing WhatsApp without upgrading',
     async () => {
-      const r = await call('other', '/platform/checkout', {
-        code: '',
-        requestId: randomUUID(),
-      });
-      assert.equal(r.status, 200);
-      assert.match(r.data.url, /wa\.me\/966537043984/);
+      const before = await db.prepare('SELECT count(*) n FROM subscription_events WHERE user_id=?').bind('other').first();
+      for (const plan of ['full_monthly', 'full_quarterly']) {
+        for (const acceptedTerms of [undefined, false, 'true', 1]) {
+          const rejected = await call('other', '/platform/checkout', { code: '', requestId: randomUUID(), plan, acceptedTerms });
+          assert.equal(rejected.status, 400);
+          assert.match(rejected.data.error, /agree.*terms/i);
+          assert.equal(rejected.data.url, undefined);
+        }
+        const r = await call('other', '/platform/checkout', {
+          code: '', requestId: randomUUID(), plan, acceptedTerms: true,
+        });
+        assert.equal(r.status, 200);
+        assert.match(r.data.url, /wa\.me\/966537043984/);
+      }
+      assert.deepEqual(await db.prepare('SELECT count(*) n FROM subscription_events WHERE user_id=?').bind('other').first(), before);
       assert.equal(
         (await call('other', '/auth/session')).data.user.tier,
         'free',
@@ -2573,7 +2587,7 @@ print(json.dumps(out))`,
         )
         .bind(proposalId)
         .first();
-      assert.deepEqual(reward, { amount: 15, lifetime_delta: 15 });
+      assert.deepEqual(reward, { amount: 10, lifetime_delta: 10 });
     },
   );
   await t.test(
@@ -2613,6 +2627,11 @@ print(json.dumps(out))`,
       );
       assert.equal(imported.data.proposals.length, 150);
       const approved = imported.data.proposals;
+      const balanceBeforeApproval = (await call('quarterly', '/platform/contributions')).data;
+      const modifiedOrigin = await call('quarterly', '/collaboration', {
+        operations: [{ collection: 'questionProposals', type: 'set', id: approved[0].id, value: { ...approved[0], submissionMethod: 'manual', importBatchId: undefined } }],
+      }, 'PUT');
+      assert.equal(modifiedOrigin.status, 403);
       const approval = await call('reviewer', '/platform/bulk-review', {
         proposalIds: approved.map((proposal) => proposal.id),
         status: 'approved',
@@ -2625,6 +2644,10 @@ print(json.dumps(out))`,
       assert.equal(approval.data.reviewerCompletedDelta, 150);
       assert.equal(approval.data.updatedProposals.length, 150);
       assert.equal(approval.data.updatedQuestions.length, 150);
+      const balanceAfterApproval = (await call('quarterly', '/platform/contributions')).data;
+      assert.equal(balanceAfterApproval.creditsBalance, balanceBeforeApproval.creditsBalance);
+      assert.equal(balanceAfterApproval.lifetimeContributionScore, balanceBeforeApproval.lifetimeContributionScore);
+      assert.equal((await db.prepare('SELECT count(*) n FROM credit_transactions WHERE reference_id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(approved.map(proposal => proposal.id))).first()).n, 0);
       const rejectedImport = await call('quarterly', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
@@ -3233,7 +3256,9 @@ print(json.dumps(out))`,
         )
         .bind(id)
         .first();
-      assert.deepEqual(reportReward, { amount: 3, lifetime_delta: 3 });
+      assert.deepEqual(reportReward, { amount: 2, lifetime_delta: 2 });
+      for (const status of ['open', 'resolved']) assert.equal((await call('admin', '/contact', { id, operation: 'status', status })).status, 200);
+      assert.equal((await db.prepare("SELECT count(*) n FROM credit_transactions WHERE reference_type='ticket' AND reference_id=?").bind(id).first()).n, 1);
     },
   );
   await t.test(
@@ -3370,12 +3395,45 @@ print(json.dumps(out))`,
       1,
     );
   });
+  await t.test('refund policy defaults, Superadmin updates and legacy saves preserve the configured link', async () => {
+    const stored = await db.prepare("SELECT * FROM records WHERE type='system' AND id='legalLinks'").first();
+    const defaultRefund = 'https://qraftbank.netlify.app/policies/refund.html';
+    const legacy = { termsUrl: 'https://example.test/terms', privacyUrl: 'https://example.test/privacy' };
+    try {
+      await db.prepare("DELETE FROM records WHERE type='system' AND id='legalLinks'").run();
+      const defaults = await call('free', '/platform/legal-links');
+      assert.equal(defaults.status, 200);
+      assert.equal(defaults.data.refundUrl, defaultRefund);
+      await db.prepare("INSERT INTO records(type,id,owner_id,payload,updated_at) VALUES('system','legalLinks',?,?,?)")
+        .bind('admin', JSON.stringify(legacy), new Date().toISOString()).run();
+      assert.deepEqual((await call('free', '/platform/legal-links')).data, { ...legacy, refundUrl: defaultRefund });
+      const custom = { ...legacy, refundUrl: 'https://example.test/refund' };
+      for (const uid of ['free', 'reviewer', 'moderator']) assert.equal((await call(uid, '/platform/legal-links', custom, 'PUT')).status, 403);
+      assert.equal((await call('admin', '/platform/legal-links', { ...custom, refundUrl: 'javascript:alert(1)' }, 'PUT')).status, 400);
+      assert.equal((await call('admin', '/platform/legal-links', custom, 'PUT')).status, 200);
+      assert.deepEqual((await call('free', '/platform/legal-links')).data, custom);
+      assert.equal(JSON.parse((await db.prepare("SELECT payload FROM records WHERE type='system' AND id='legalLinks'").first()).payload).refundUrl, custom.refundUrl);
+      const replay = await call('admin', '/platform/legal-links', custom, 'PUT');
+      assert.equal(replay.data.unchanged, true);
+      const oldClient = await call('admin', '/platform/legal-links', legacy, 'PUT');
+      assert.equal(oldClient.status, 200);
+      assert.equal(oldClient.data.refundUrl, custom.refundUrl);
+      const disabled = await call('admin', '/platform/legal-links', { ...custom, refundUrl: '' }, 'PUT');
+      assert.equal(disabled.status, 200);
+      assert.equal((await call('free', '/platform/legal-links')).data.refundUrl, '');
+    } finally {
+      await db.prepare("DELETE FROM records WHERE type='system' AND id='legalLinks'").run();
+      if (stored) await db.prepare("INSERT INTO records(type,id,owner_id,payload,updated_at) VALUES('system','legalLinks',?,?,?)")
+        .bind(stored.owner_id, stored.payload, stored.updated_at).run();
+    }
+  });
   await preproductionApiTests(t, { db, call });
   await improvementsApiTests(t, db, call, {
     assets,
     fetch: (url, init) => mf.dispatchFetch(url, init),
   });
   await directQuestionEditApiTests(t, { db, call });
+  await contributionEconomyApiTests(t, { db, call });
   await serverEfficiencyApiTests(t, { db, call, mf, assets });
   await t.test(
     'Read-only integrity checks find no contradictions in the local fixture',

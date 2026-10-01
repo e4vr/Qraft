@@ -1,4 +1,5 @@
 'use client';
+import { ExplanationImages } from '@/components/explanation-images';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 
 /* oxlint-disable next/no-img-element */
@@ -146,7 +147,7 @@ function DuplicateQuestionPanel({
       <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
         <div><dt className="text-xs font-bold text-muted-foreground">Correct answer</dt><dd>{payload.options[payload.answer] ?? optionLabel(payload.answer)}</dd></div>
         <div><dt className="text-xs font-bold text-muted-foreground">Specialty / topic</dt><dd>{payload.specialty} · {payload.topic}</dd></div>
-        <div className="sm:col-span-2"><dt className="text-xs font-bold text-muted-foreground">Explanation</dt><dd className="whitespace-pre-wrap">{payload.explanation || 'No explanation provided.'}</dd></div>
+        <div className="sm:col-span-2"><dt className="text-xs font-bold text-muted-foreground">Explanation</dt><dd className="whitespace-pre-wrap">{payload.explanation || 'No explanation provided.'}<ExplanationImages images={payload.explanationImages} /></dd></div>
         <div className="sm:col-span-2"><dt className="text-xs font-bold text-muted-foreground">Source</dt><dd>{readQuestionSource(payload).sourceReference || '—'}</dd></div>
       </dl>
       {payload.images?.length > 0 && (
@@ -900,6 +901,7 @@ export function ReviewWorkspace({
                         const candidatePayload: QuestionProposal['payload'] = {
                           ...candidateQuestion,
                           explanation: candidateQuestion.explanation ?? '',
+                          explanationImages: candidateQuestion.explanationImages ?? [],
                           sourceReference: readQuestionSource(candidateQuestion).sourceReference,
                           images: candidateQuestion.images ?? [],
                         };
@@ -969,6 +971,7 @@ export function ReviewWorkspace({
                       current={readQuestionSource(current).sourceReference}
                       proposed={readQuestionSource(proposal.payload).sourceReference}
                     />
+                    <section className="rounded-xl border p-3"><h4 className="text-sm font-bold">Explanation images · current</h4><ExplanationImages images={current.explanationImages} /><h4 className="mt-3 text-sm font-bold">Explanation images · proposed</h4><ExplanationImages images={proposal.payload.explanationImages ?? current.explanationImages} /></section>
                   </div>}
                   {proposal.payload.images?.length > 0 && (
                     <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">

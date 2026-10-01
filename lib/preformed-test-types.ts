@@ -6,6 +6,7 @@ export interface PreformedQuestion {
   options: string[];
   answer: number;
   explanation: string;
+  explanationImages?: NoteImage[];
   sourceReference: string;
   images: NoteImage[];
 }

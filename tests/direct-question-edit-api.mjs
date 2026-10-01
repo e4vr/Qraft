@@ -105,6 +105,58 @@ export async function directQuestionEditApiTests(t, { db, call }) {
       assert.equal((await save('admin', { ...body, qbankId: 'smle-gs', baseRevision: cleared.data.question.revision, payload: { ...withoutPage, sourcePage: 0 } })).status, 400);
       assert.equal(Object.hasOwn(await read('sharedQuestions', questionId), 'sourcePage'), false);
     });
+    await t.test('explanation images round-trip through direct edits, legacy edits and clearing', async () => {
+      const image = { id: 'solution', url: 'https://example.test/solution.png', name: 'solution.png', caption: 'Clinical reasoning' };
+      let current = await read('sharedQuestions', questionId);
+      const withImages = await save('admin', { ...body, qbankId: 'smle-gs', baseRevision: current.revision, payload: { ...current, explanationImages: [image] } });
+      assert.equal(withImages.status, 200, JSON.stringify(withImages));
+      assert.deepEqual((await read('sharedQuestions', questionId)).explanationImages, [image]);
+      current = withImages.data.question;
+      const { explanationImages, ...legacy } = current;
+      const preserved = await save('admin', { ...body, qbankId: 'smle-gs', baseRevision: current.revision, payload: { ...legacy, explanation: 'Legacy correction' } });
+      assert.equal(preserved.status, 200);
+      assert.deepEqual(preserved.data.question.explanationImages, explanationImages);
+      const invalid = await save('admin', { ...body, qbankId: 'smle-gs', baseRevision: preserved.data.question.revision, payload: { ...preserved.data.question, explanationImages: [{ ...image, url: 'javascript:alert(1)' }] } });
+      assert.equal(invalid.status, 400);
+      const cleared = await save('admin', { ...body, qbankId: 'smle-gs', baseRevision: preserved.data.question.revision, payload: { ...preserved.data.question, explanationImages: [] } });
+      assert.equal(cleared.status, 200);
+      assert.deepEqual(cleared.data.question.explanationImages, []);
+    });
+    await t.test('new question contributions and reviewed edits preserve explanation images', async () => {
+      const image = { id: 'diagram', url: '/api/cloudflare/media/shared-notes/fixture.png', name: 'diagram.png', caption: 'Solution diagram' };
+      const newId = 'explanation-image-proposal', editId = 'explanation-image-edit';
+      const newProposal = { ...proposal, id: newId, questionId: undefined, type: 'new_question', proposedById: 'admin', proposedByName: 'admin', payload: { ...question, stem: 'New illustrated question', explanationImages: [image] } };
+      let published;
+      try {
+        const submit = value => call('admin', '/collaboration', { operations: [{ collection: 'questionProposals', id: value.id, type: 'set', value }] }, 'PUT');
+        const invalid = await submit({ ...newProposal, payload: { ...newProposal.payload, explanationImages: [{ ...image, url: 'data:image/png;base64,bad' }] } });
+        assert.equal(invalid.status, 403);
+        assert.equal((await submit(newProposal)).status, 200);
+        const accepted = await call('reviewer', '/platform/bulk-review', { proposalIds: [newId], status: 'approved' });
+        assert.equal(accepted.status, 200, JSON.stringify(accepted));
+        published = accepted.data.updatedQuestions.find(item => item.stem === newProposal.payload.stem);
+        assert.ok(published);
+        assert.deepEqual(published.explanationImages, [image]);
+        assert.deepEqual((await read('sharedQuestions', published.id)).explanationImages, [image]);
+        const { explanationImages: _images, ...legacyPayload } = newProposal.payload;
+        const edit = { ...newProposal, id: editId, type: 'question_edit', questionId: published.id, editKinds: ['explanation'], payload: { ...legacyPayload, explanation: 'Edited text from an older client' } };
+        assert.equal((await submit(edit)).status, 200);
+        const reviewed = await call('reviewer', '/platform/bulk-review', { proposalIds: [editId], status: 'approved' });
+        assert.equal(reviewed.status, 200, JSON.stringify(reviewed));
+        assert.deepEqual((await read('sharedQuestions', published.id)).explanationImages, [image]);
+      } finally {
+        for (const id of [newId, editId]) {
+          await db.prepare('DELETE FROM contribution_reviews WHERE proposal_id=?').bind(id).run();
+          await db.prepare('DELETE FROM review_completion_claims WHERE proposal_id=?').bind(id).run();
+          await db.prepare('DELETE FROM credit_transactions WHERE reference_id=?').bind(id).run();
+          await db.prepare("DELETE FROM records WHERE type='questionProposals' AND id=?").bind(id).run();
+        }
+        if (published) {
+          await db.prepare("DELETE FROM records WHERE type='sharedQuestions' AND id=?").bind(published.id).run();
+          await db.prepare('DELETE FROM question_ids WHERE question_id=?').bind(published.questionId).run();
+        }
+      }
+    });
   } finally {
     await db.prepare('UPDATE sessions SET verified=1 WHERE user_id=?').bind('admin').run();
     await db.prepare('DELETE FROM contribution_reviews WHERE proposal_id IN (?,?)').bind(proposal.id, 'direct-edit-reject').run();

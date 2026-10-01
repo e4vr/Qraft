@@ -5,6 +5,8 @@ import { Award, Check, Coins, Gift, LoaderCircle, PartyPopper, Play, Sparkles, T
 import { api, setApiCache } from '@/lib/api-client';
 import {
   PLAN_LIMITS,
+  rewardDurationLabel,
+  type RewardCatalogEntry,
   type PlanId,
 } from '@/features/subscriptions/domain/plan-config';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
@@ -31,13 +33,7 @@ type RewardPass = {
   source: string;
 };
 
-type Reward = {
-  id: string;
-  plan: Exclude<PlanId, 'free'>;
-  credits: number;
-  duration: number;
-  durationUnit: 'month' | 'year';
-};
+type Reward = RewardCatalogEntry;
 
 type CenterData = {
   creditsBalance: number;
@@ -69,7 +65,7 @@ type CelebrationMemory = {
 };
 
 function rewardLabel(reward: Pick<RewardPass, 'plan' | 'duration' | 'duration_unit' | 'duration_days'>) {
-  return `${PLAN_LIMITS[reward.plan].name} · ${reward.duration_days ? `${reward.duration_days} days` : `${reward.duration} ${reward.duration_unit}`}`;
+  return `${PLAN_LIMITS[reward.plan].name} · ${rewardDurationLabel({ duration: reward.duration, durationUnit: reward.duration_unit, durationDays: reward.duration_days })}`;
 }
 
 function findNewCelebrations(data: CenterData, userId: string): Celebration[] {
@@ -114,7 +110,7 @@ function findNewCelebrations(data: CenterData, userId: string): Celebration[] {
       kind: 'goal',
       title: 'You reached your reward goal!',
       description: 'Your contributions earned enough credits for this reward. It is ready to redeem now.',
-      rewardLabel: `${PLAN_LIMITS[reachedReward.plan].name} · ${reachedReward.duration} ${reachedReward.durationUnit}`,
+      rewardLabel: `${PLAN_LIMITS[reachedReward.plan].name} · ${rewardDurationLabel(reachedReward)}`,
     });
   }
 
@@ -331,7 +327,7 @@ export function ContributionCenter({
             <article className="rounded-2xl border bg-card p-5">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <strong>Next reward</strong>
-                <span>{nextReward.credits - data.creditsBalance} credits left for {PLAN_LIMITS[nextReward.plan].name} {nextReward.durationUnit}</span>
+                <span>{nextReward.credits - data.creditsBalance} credits left for {PLAN_LIMITS[nextReward.plan].name} · {rewardDurationLabel(nextReward)}</span>
               </div>
               <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
                 <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, (data.creditsBalance / nextReward.credits) * 100)}%` }} />
@@ -345,7 +341,7 @@ export function ContributionCenter({
                 {data.rewards.map((reward) => (
                   <div key={reward.id} className="flex items-center gap-3 rounded-xl border p-3">
                     <div className="min-w-0 flex-1">
-                      <strong className="block">{PLAN_LIMITS[reward.plan].name} · {reward.duration} {reward.durationUnit}</strong>
+                      <strong className="block">{PLAN_LIMITS[reward.plan].name} · {rewardDurationLabel(reward)}</strong>
                       <span className="text-sm text-muted-foreground">{reward.credits.toLocaleString()} credits</span>
                     </div>
                     <button className="q-button bg-primary text-primary-foreground" disabled={busy !== '' || data.creditsBalance < reward.credits} onClick={() => void redeem(reward.id)}>

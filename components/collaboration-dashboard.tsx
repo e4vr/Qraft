@@ -36,6 +36,7 @@ import {
   UserRoundX,
 } from 'lucide-react';
 import { QraftBrand } from '@/components/brand/qraft-brand';
+import { DEFAULT_LEGAL_LINKS } from '@/lib/legal-links';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -305,7 +306,7 @@ function memberMatchesBlocklist(
 }
 
 function LegalLinksAdmin() {
-  const [links, setLinks] = useState({ termsUrl: '', privacyUrl: '' });
+  const [links, setLinks] = useState(DEFAULT_LEGAL_LINKS);
   const original = useRef(links);
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState('');
@@ -314,8 +315,9 @@ function LegalLinksAdmin() {
     void api<typeof links>('/platform/legal-links')
       .then((value) => {
         if (active) {
-          setLinks(value);
-          original.current = value;
+          const loaded = { ...DEFAULT_LEGAL_LINKS, ...value };
+          setLinks(loaded);
+          original.current = loaded;
         }
       })
       .catch((error) => {
@@ -335,6 +337,7 @@ function LegalLinksAdmin() {
     const normalized = {
       termsUrl: links.termsUrl.trim(),
       privacyUrl: links.privacyUrl.trim(),
+      refundUrl: links.refundUrl.trim(),
     };
     if (JSON.stringify(normalized) === JSON.stringify(original.current)) {
       setMessage('No changes to save.');
@@ -361,7 +364,7 @@ function LegalLinksAdmin() {
   };
   return (
     <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
-      <h2 className="font-bold">Terms & privacy links</h2>
+      <h2 className="font-bold">Terms, privacy & refund links</h2>
       <p className="mt-1 text-sm leading-6 text-muted-foreground">
         These links appear in Settings for every approved user. Use HTTPS links
         or internal paths beginning with /.
@@ -394,6 +397,16 @@ function LegalLinksAdmin() {
               }))
             }
             placeholder="https://example.com/privacy"
+            className="h-11 rounded-xl border bg-background px-3 font-normal"
+          />
+        </label>
+        <label className="grid gap-2 text-sm font-semibold">
+          Refund policy URL
+          <input
+            type="url"
+            value={links.refundUrl}
+            onChange={event => setLinks(current => ({ ...current, refundUrl: event.target.value }))}
+            placeholder={DEFAULT_LEGAL_LINKS.refundUrl}
             className="h-11 rounded-xl border bg-background px-3 font-normal"
           />
         </label>

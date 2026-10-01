@@ -69,6 +69,7 @@ export interface Question {
   isCustom?: boolean;
   qbankId?: string;
   explanation?: string;
+  explanationImages?: NoteImage[];
   sourceReference?: string;
   images: NoteImage[];
   writtenById?: string;
@@ -395,6 +396,7 @@ export interface QuestionProposalPayload {
   specialtyId?: string;
   topicId?: string;
   explanation: string;
+  explanationImages?: NoteImage[];
   sourceReference: string;
   sourceFile?: string;
   sourcePage?: number;

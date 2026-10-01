@@ -1,9 +1,14 @@
 {
   "name": "medguard-smle-qbank",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
+  },
+  "overrides": {
+    "shadcn": {
+      "undici": "7.30.0"
+    }
   },
   "scripts": {
     "dev": "vinext dev",

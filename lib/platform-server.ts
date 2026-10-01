@@ -1,5 +1,7 @@
 import { detectImportDuplication, ImportDuplicateIndex, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
 import { env } from 'cloudflare:workers';
+import { DEFAULT_LEGAL_LINKS } from './legal-links';
+import { contributionReward } from '@/features/contributions/domain/contribution-reward';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 import { directQuestionEdit } from '@/features/qbanks/server/direct-question-edit';
 import { importSettings } from '@/features/imports/server/import-settings';
@@ -36,7 +38,6 @@ import { bankAccessState } from './qbank-access-repository';
 import { allocateQuestionIds } from './question-id-repository';
 import { applyEffectiveEntitlement, getEffectiveEntitlement } from './entitlement-server';
 import {
-  CONTRIBUTION_CREDITS,
   REWARD_CATALOG,
   PLAN_DURATION_MONTHS,
   contributionBadge,
@@ -295,35 +296,6 @@ function normalizeClassificationName(value: string) {
 
 function validClassificationName(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 120;
-}
-
-function contributionReward(proposal: QuestionProposal) {
-  if (proposal.type === 'new_question')
-    return { amount: CONTRIBUTION_CREDITS.newQuestion, reason: 'New approved question' };
-  if (proposal.editKinds.includes('correct_answer'))
-    return {
-      amount: CONTRIBUTION_CREDITS.medicalFactOrCorrectAnswer,
-      reason: 'Corrected wrong answer or medical fact',
-    };
-  if (proposal.editKinds.includes('question_text') || proposal.editKinds.includes('options'))
-    return {
-      amount: CONTRIBUTION_CREDITS.substantialCorrection,
-      reason: 'Substantial question correction',
-    };
-  if (proposal.editKinds.includes('explanation'))
-    return {
-      amount: CONTRIBUTION_CREDITS.explanationImprovement,
-      reason: 'Useful explanation improvement',
-    };
-  if (proposal.editKinds.includes('source'))
-    return {
-      amount: CONTRIBUTION_CREDITS.sourceReference,
-      reason: 'Valid source or reference',
-    };
-  return {
-    amount: CONTRIBUTION_CREDITS.typoFormatting,
-    reason: 'Typo or formatting correction',
-  };
 }
 
 function proposalRequiresTwoReviewers(proposal: QuestionProposal) {
@@ -1188,7 +1160,7 @@ export async function platformApi(request: Request, action: string) {
       return json({ ok: true, restored: records.length });
     }
     if (action === 'legal-links') {
-      const defaults = { termsUrl: '', privacyUrl: '' };
+      const defaults = DEFAULT_LEGAL_LINKS;
       const record = await env.DB.prepare(
         "SELECT payload FROM records WHERE type='system' AND id='legalLinks' LIMIT 1",
       ).first<{ payload: string }>();
@@ -1210,8 +1182,9 @@ export async function platformApi(request: Request, action: string) {
       const next = {
         termsUrl: text('termsUrl').slice(0, 1000),
         privacyUrl: text('privacyUrl').slice(0, 1000),
+        refundUrl: input.refundUrl === undefined ? current.refundUrl : text('refundUrl').slice(0, 1000),
       };
-      if (!validLink(next.termsUrl) || !validLink(next.privacyUrl))
+      if (!validLink(next.termsUrl) || !validLink(next.privacyUrl) || !validLink(next.refundUrl))
         return json({ error: 'Use a secure HTTPS URL or an internal path beginning with /.' }, 400);
       if (JSON.stringify(next) === JSON.stringify(current)) return json({ ...next, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
       const now = new Date().toISOString();
@@ -1356,8 +1329,8 @@ export async function platformApi(request: Request, action: string) {
           await env.DB.batch([
             env.DB.prepare('INSERT INTO credit_transactions(id,user_id,amount,lifetime_delta,type,reason,reference_type,reference_id,created_by,created_at,metadata) VALUES(?,?,?,0,?,?,?,?,?,?,?)')
               .bind(requestId, user.uid, -reward.credits, 'reward_redemption', `Redeemed ${reward.id}`, 'reward', requestId, user.uid, now, JSON.stringify({ rewardId: reward.id })),
-            env.DB.prepare("INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,source,credit_transaction_id,metadata) VALUES(?,?,?,?,?,'available',?,'credits',?,?)")
-              .bind(passId, user.uid, reward.plan, reward.duration, reward.durationUnit, now, requestId, JSON.stringify({ rewardId: reward.id })),
+            env.DB.prepare("INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,duration_days,status,created_at,source,credit_transaction_id,metadata) VALUES(?,?,?,?,?,?,'available',?,'credits',?,?)")
+              .bind(passId, user.uid, reward.plan, reward.duration, reward.durationUnit, reward.durationDays, now, requestId, JSON.stringify({ rewardId: reward.id })),
             auditStatement(user, 'reward_redeemed', passId, null, { rewardId: reward.id, credits: reward.credits }),
           ]);
         } catch (error) {
@@ -1618,6 +1591,7 @@ export async function platformApi(request: Request, action: string) {
             specialtyId: source.specialtyId,
             topicId: source.topicId,
             explanation: source.explanation ?? '',
+            explanationImages: source.explanationImages ?? [],
             sourceReference: source.sourceReference ?? source.sourceFile,
             sourceFile: source.sourceFile,
             sourcePage: source.sourcePage,
@@ -1632,6 +1606,7 @@ export async function platformApi(request: Request, action: string) {
             specialtyId: source.specialtyId,
             topicId: source.topicId,
             explanation: source.explanation ?? '',
+            explanationImages: source.explanationImages ?? [],
             sourceReference: source.sourceReference ?? source.sourceFile,
             sourceFile: source.sourceFile,
             sourcePage: source.sourcePage,
@@ -2025,6 +2000,7 @@ export async function platformApi(request: Request, action: string) {
             answer: proposal.payload.answer,
             answerLetter: optionLabel(proposal.payload.answer),
             explanation: proposal.payload.explanation,
+            explanationImages: proposal.payload.explanationImages ?? existing?.explanationImages ?? [],
             ...readQuestionSource(proposal.payload),
             revision: (existing?.revision ?? 0) + 1,
             isCustom: true,
@@ -2039,7 +2015,7 @@ export async function platformApi(request: Request, action: string) {
           statements.push(env.DB.prepare("INSERT INTO records(type,id,qbank_id,payload,updated_at) VALUES('sharedQuestions',?,?,?,?) ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,payload=excluded.payload,updated_at=excluded.updated_at")
             .bind(question.id, question.qbankId, JSON.stringify(question), now));
           const reward = contributionReward(proposal);
-          statements.push(
+          if (reward.amount > 0) statements.push(
             env.DB.prepare(
               'INSERT OR IGNORE INTO credit_transactions(id,user_id,amount,lifetime_delta,type,reason,reference_type,reference_id,created_by,created_at,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
             ).bind(
@@ -2228,6 +2204,8 @@ export async function platformApi(request: Request, action: string) {
           { error: 'A valid discount code is required for a free activation.' },
           400,
         );
+      if (input.acceptedTerms !== true)
+        return json({ error: 'Please read and agree to all terms and policies before continuing to WhatsApp.' }, 400);
       const message = `I would like a ${PLAN_DURATION_MONTHS[plan]}-month ${price.planName} subscription.\nName: ${user.displayName}\nEmail: ${user.email}\nUser ID: ${user.uid}\nOriginal: ${price.original / 100} SAR\nCode: ${price.code || 'None'}\nDiscount: ${price.discount / 100} SAR\nFinal: ${price.final / 100} SAR`;
       return json({
         url: `https://wa.me/966537043984?text=${encodeURIComponent(message)}`,

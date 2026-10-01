@@ -5,12 +5,16 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { QuestionSourceFields } from '@/components/question-source-fields';
 import { optionLabel, type ProposalEditKind } from '@/lib/medguard-types';
 import { cn } from '@/lib/utils';
+import { useState } from 'react';
+import { ExplanationImageEditor } from '@/components/explanation-image-editor';
+import type { NoteImage } from '@/lib/medguard-types';
 
 export interface QuestionEditDraft {
   stem: string;
   options: string[];
   answer: number | undefined;
   explanation: string;
+  explanationImages: NoteImage[];
   sourceFile: string;
   sourcePage: string;
   rationale: string;
@@ -24,7 +28,7 @@ const EDIT_KINDS: Array<[ProposalEditKind, string]> = [
   ['duplicate', 'Duplicate question'], ['outdated_guideline', 'Outdated guideline'],
 ];
 
-export function QuestionEditDialog({ open, onClose, questionNumber, immediate, draft, onChange, busy, error, onSubmit }: {
+export function QuestionEditDialog({ open, onClose, questionNumber, immediate, draft, onChange, busy, error, onSubmit, uid, qbankId, questionId }: {
   open: boolean;
   onClose: () => void;
   questionNumber: number;
@@ -34,7 +38,12 @@ export function QuestionEditDialog({ open, onClose, questionNumber, immediate, d
   busy: boolean;
   error: string;
   onSubmit: () => Promise<void>;
+  uid: string;
+  qbankId: string;
+  questionId: string;
 }) {
+  const [imagesBusy, setImagesBusy] = useState(false);
+  const blocked = busy || imagesBusy;
   const valid = draft.stem.trim() && draft.sourceFile.trim() && draft.rationale.trim()
     && draft.kinds.length > 0 && draft.options.length >= 2 && draft.options.length <= 10
     && draft.options.every(option => option.trim()) && draft.answer !== undefined
@@ -47,16 +56,16 @@ export function QuestionEditDialog({ open, onClose, questionNumber, immediate, d
   }
 
   return (
-    <Dialog open={open} onOpenChange={next => { if (!next && !busy) onClose(); }}>
+    <Dialog open={open} onOpenChange={next => { if (!next && !blocked) onClose(); }}>
       <DialogContent showCloseButton={false} className="q-question-edit-dialog flex h-[min(920px,calc(100dvh-2rem))] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-6xl">
-        <form onSubmit={event => { event.preventDefault(); if (valid && !busy) void onSubmit(); }} className="flex min-h-0 flex-1 flex-col">
+        <form onSubmit={event => { event.preventDefault(); if (valid && !blocked) void onSubmit(); }} className="flex min-h-0 flex-1 flex-col">
           <header className="q-edit-dialog-header flex shrink-0 items-start justify-between gap-4 px-4 py-4 sm:px-6">
             <div className="min-w-0">
               <p className="text-xs font-semibold uppercase tracking-wider text-primary">Question {questionNumber} · {immediate ? 'Direct edit' : 'Edit request'}</p>
               <DialogTitle className="mt-1 text-xl font-bold leading-tight">{immediate ? 'Edit question' : 'Suggest an edit'}</DialogTitle>
               <DialogDescription className="mt-1.5 text-xs leading-5">{immediate ? 'Changes are saved immediately.' : 'Your suggestion will be reviewed before publishing.'}</DialogDescription>
             </div>
-            <button type="button" disabled={busy} onClick={onClose} aria-label="Close question edit" className="q-edit-dialog-close"><X className="size-5" /></button>
+            <button type="button" disabled={blocked} onClick={onClose} aria-label="Close question edit" className="q-edit-dialog-close"><X className="size-5" /></button>
           </header>
 
           <fieldset disabled={busy} className="q-edit-dialog-body min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6">
@@ -109,7 +118,8 @@ export function QuestionEditDialog({ open, onClose, questionNumber, immediate, d
                     <span className="q-edit-label">Explanation <span className="q-edit-field-note">Optional</span></span>
                     <textarea dir="auto" rows={4} value={draft.explanation} onChange={event => onChange({ explanation: event.target.value })} placeholder="Explain the medically correct answer." className="q-edit-input min-h-28 w-full resize-y" />
                   </label>
-                  {!draft.explanation.trim() && <p className="mt-2 text-xs leading-5 text-muted-foreground">You can save without an explanation. Leaving this empty removes the existing explanation.</p>}
+                  {!draft.explanation.trim() && <p className="mt-2 text-xs leading-5 text-muted-foreground">You can save without an explanation. Leaving this empty removes the existing explanation text.</p>}
+                  <ExplanationImageEditor key={`${qbankId}:${questionId}`} uid={uid} qbankId={qbankId} questionId={questionId} images={draft.explanationImages} onChange={explanationImages => onChange({ explanationImages })} onBusyChange={setImagesBusy} disabled={busy} />
                 </section>
               </div>
 
@@ -137,8 +147,8 @@ export function QuestionEditDialog({ open, onClose, questionNumber, immediate, d
             {error && <p role="alert" className="mb-3 rounded-xl bg-red-500/10 p-3 text-sm text-red-700 dark:text-red-200">{error}</p>}
             <div className="flex flex-wrap items-center justify-end gap-3">
               <p className="mr-auto text-xs text-muted-foreground">{immediate ? 'Changes apply to this question.' : 'Your request stays pending until reviewed.'}</p>
-              <button type="button" disabled={busy} onClick={onClose} className="q-button q-button-secondary">Cancel</button>
-              <button type="submit" disabled={busy || !valid} className="q-button q-button-primary"><Save className="size-4" />{busy ? 'Saving…' : immediate ? 'Save changes now' : 'Submit for review'}</button>
+              <button type="button" disabled={blocked} onClick={onClose} className="q-button q-button-secondary">Cancel</button>
+              <button type="submit" disabled={blocked || !valid} className="q-button q-button-primary"><Save className="size-4" />{busy ? 'Saving…' : immediate ? 'Save changes now' : 'Submit for review'}</button>
             </div>
           </footer>
         </form>

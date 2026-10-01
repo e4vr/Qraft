@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { json } from '@/server/http/response';
 import { optionLabel, type AppUser, type Question } from '@/lib/medguard-types';
 import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
+import { validOptionalExplanationImages } from '@/features/media/domain/image-attachments';
 
 // An explicit administrative edit path. Creation and user contributions still
 // use their existing review workflow; pending proposals are never touched here.
@@ -16,6 +17,7 @@ export async function directQuestionEdit(user: AppUser, input: Record<string, un
       !payload.options.every(option => typeof option === 'string' && option.trim()) ||
       !Number.isInteger(payload.answer) || (payload.answer as number) < 0 || (payload.answer as number) >= payload.options.length ||
       typeof payload.explanation !== 'string' ||
+      !validOptionalExplanationImages(payload.explanationImages) ||
       !Array.isArray(payload.images) ||
       !payload.images.every(image => image && typeof image === 'object' &&
         ['id', 'url', 'name', 'caption'].every(key => typeof image[key] === 'string')))
@@ -35,13 +37,14 @@ export async function directQuestionEdit(user: AppUser, input: Record<string, un
     answer: payload.answer as number,
     answerLetter: optionLabel(payload.answer as number),
     explanation: payload.explanation.trim(),
+    explanationImages: (payload.explanationImages as Question['explanationImages']) ?? existing.explanationImages ?? [],
     ...source,
     sourcePage: source.sourcePage,
     images: payload.images as Question['images'],
     revision: existing.revision + 1,
   };
-  const fields = ['stem', 'options', 'answer', 'explanation', 'sourceFile', 'sourcePage', 'originalQuestionNumber', 'sourceReference', 'images'] as const;
-  if (fields.every(field => JSON.stringify(existing[field]) === JSON.stringify(next[field])))
+  const fields = ['stem', 'options', 'answer', 'explanation', 'explanationImages', 'sourceFile', 'sourcePage', 'originalQuestionNumber', 'sourceReference', 'images'] as const;
+  if (fields.every(field => JSON.stringify(field === 'explanationImages' ? existing[field] ?? [] : existing[field]) === JSON.stringify(next[field])))
     return json({ ok: true, question: existing, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
   if (existing.revision !== input.baseRevision)
     return json({ error: 'This question changed. Refresh it before saving; your draft has been kept.' }, 409);

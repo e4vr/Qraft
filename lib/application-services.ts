@@ -26,6 +26,7 @@ export {
   reserveQuestionIds,
   uploadNoteImage,
   uploadQuestionImage,
+  uploadSharedNoteImage,
   type QBankLinkInvitation,
 } from '@/features/qbanks/client/qbank-client';
 export {

@@ -16,6 +16,7 @@ import { withoutQBank } from '@/features/qbanks/domain/bank-state';
 import { saveDirectQuestionEdit } from '@/features/qbanks/client/direct-question-edit';
 import { readQuestionSource, validateQuestionSource, questionSourceKey, questionSourceOptions } from '@/features/qbanks/domain/question-source';
 import { uploadQuestionImage } from '@/lib/application-services';
+import { ExplanationImageEditor } from '@/components/explanation-image-editor';
 import {
   bankRoleFor,
   canEditBank,
@@ -49,6 +50,7 @@ interface QuestionDraft {
   specialty: string;
   topic: string;
   explanation: string;
+  explanationImages: NoteImage[];
   sourceFile: string;
   sourcePage: string;
   images: NoteImage[];
@@ -61,6 +63,7 @@ const emptyDraft = (): QuestionDraft => ({
   specialty: 'General',
   topic: 'General',
   explanation: '',
+  explanationImages: [],
   sourceFile: '',
   sourcePage: '',
   images: [],
@@ -100,6 +103,7 @@ export function QBankManagement({
   const [editing, setEditing] = useState<Question | 'new'>();
   const [draft, setDraft] = useState<QuestionDraft>(emptyDraft);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [explanationImagesBusy, setExplanationImagesBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -259,6 +263,7 @@ export function QBankManagement({
             specialty: question.specialty,
             topic: question.topic,
             explanation: question.explanation ?? '',
+            explanationImages: question.explanationImages ?? [],
             sourceFile: readQuestionSource(question).sourceFile,
             sourcePage: String(readQuestionSource(question).sourcePage ?? ''),
             images: [...(question.images ?? [])],
@@ -336,6 +341,7 @@ export function QBankManagement({
 
   async function saveQuestion(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (explanationImagesBusy) return;
     if (!editing || !draft.stem.trim() || draft.options.length < 2 || draft.options.length > 10 || draft.answer >= draft.options.length || draft.options.some((item) => !item.trim()) || (editing === 'new' && !draft.explanation.trim()) || !draft.sourceFile.trim()) return;
     setBusy(true);
     setError('');
@@ -348,6 +354,7 @@ export function QBankManagement({
         JSON.stringify(existing.options) !== JSON.stringify(draft.options.map((item) => item.trim())) ||
         existing.answer !== draft.answer ||
         (existing.explanation ?? '') !== draft.explanation.trim() ||
+        JSON.stringify(existing.explanationImages ?? []) !== JSON.stringify(draft.explanationImages) ||
         readQuestionSource(existing).sourceReference !== source.sourceReference ||
         JSON.stringify(existing.images ?? []) !== JSON.stringify(draft.images) ||
         imageFiles.length > 0;
@@ -374,6 +381,7 @@ export function QBankManagement({
         topicId: classification.topic.id,
         topic: classification.topic.name,
         explanation: draft.explanation.trim(),
+        explanationImages: draft.explanationImages,
         ...source,
         images: [...draft.images, ...uploaded],
       };
@@ -407,6 +415,7 @@ export function QBankManagement({
               specialtyId: classification.specialty.id,
               topicId: classification.topic.id,
               explanation: existing.explanation ?? '',
+              explanationImages: existing.explanationImages ?? [],
               ...readQuestionSource(existing),
               images: existing.images ?? [],
             } : undefined,
@@ -745,7 +754,7 @@ export function QBankManagement({
         {section === 'import' && (
           <section className="min-w-0 rounded-2xl bg-card p-3 ring-1 ring-border sm:p-6">
             <h2 className="mb-4 text-lg font-bold">Import</h2>
-            <QuestionImportReview bankId={bankId} adminImportPrivileges={user.role === 'super_admin'} onImported={result=>confirmUpdate(current=>({
+            <QuestionImportReview uid={user.uid} bankId={bankId} adminImportPrivileges={user.role === 'super_admin'} onImported={result=>confirmUpdate(current=>({
               ...current,
               proposals:[...result.proposals,...current.proposals.filter(p=>!result.proposals.some(n=>n.id===p.id))],
               specialties:[...current.specialties,...result.specialties.filter(item=>!current.specialties.some(existing=>existing.id===item.id))],
@@ -757,7 +766,7 @@ export function QBankManagement({
       </div>
 
       {editing && (
-        <Dialog open onOpenChange={open => { if (!open && !busy) setEditing(undefined); }}>
+        <Dialog open onOpenChange={open => { if (!open && !busy && !explanationImagesBusy) setEditing(undefined); }}>
           <DialogContent showCloseButton={false} className="q-question-editor flex h-[min(860px,calc(100dvh-2rem))] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl bg-card p-0 sm:max-w-4xl">
             <form onSubmit={event => void saveQuestion(event)} className="flex min-h-0 flex-1 flex-col">
               <header className="flex shrink-0 items-start justify-between gap-4 border-b px-4 py-4 sm:px-6">
@@ -766,7 +775,7 @@ export function QBankManagement({
                   <DialogTitle className="mt-1 text-xl font-bold leading-tight">{editing === 'new' ? 'Add question manually' : 'Edit question'}</DialogTitle>
                   <DialogDescription className="mt-1.5 truncate text-sm">{bankName} · {editing !== 'new' && user.role === 'super_admin' ? 'Changes are saved immediately.' : 'Submitted questions are reviewed before publishing.'}</DialogDescription>
                 </div>
-                <button type="button" disabled={busy} onClick={() => setEditing(undefined)} className="grid size-11 shrink-0 place-items-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40" aria-label="Close question editor">
+                <button type="button" disabled={busy || explanationImagesBusy} onClick={() => setEditing(undefined)} className="grid size-11 shrink-0 place-items-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-40" aria-label="Close question editor">
                   <X className="size-5" />
                 </button>
               </header>
@@ -817,6 +826,7 @@ export function QBankManagement({
                         <textarea dir="auto" required={editing === 'new'} rows={5} value={draft.explanation} onChange={event => setDraft({ ...draft, explanation: event.target.value })} placeholder="Explain why the selected answer is correct." className="q-question-control min-h-32 w-full resize-y" />
                         {editing !== 'new' && !draft.explanation.trim() && <p className="mt-2 text-xs leading-5 text-muted-foreground">Saving an empty explanation removes the existing explanation.</p>}
                       </label>
+                      <ExplanationImageEditor key={`${bankId}:${editing === 'new' ? 'new' : editing?.id}`} uid={user.uid} qbankId={bankId} questionId={editing === 'new' ? 'new-question' : editing?.id ?? ''} images={draft.explanationImages} onChange={explanationImages => setDraft(current => ({ ...current, explanationImages }))} onBusyChange={setExplanationImagesBusy} disabled={busy} />
                     </section>
                   </div>
 
@@ -878,8 +888,8 @@ export function QBankManagement({
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-xs text-muted-foreground">Fields marked Required must be completed.</p>
                   <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 sm:flex">
-                    <button type="button" disabled={busy} onClick={() => setEditing(undefined)} className="q-button q-button-secondary">Cancel</button>
-                    <button type="submit" disabled={busy} className="q-button q-button-contribute">
+                    <button type="button" disabled={busy || explanationImagesBusy} onClick={() => setEditing(undefined)} className="q-button q-button-secondary">Cancel</button>
+                    <button type="submit" disabled={busy || explanationImagesBusy} className="q-button q-button-contribute">
                       {busy ? <RefreshCw className="size-4 animate-spin" /> : <Save className="size-4" />}
                       {busy ? 'Saving…' : editing !== 'new' && user.role === 'super_admin' ? 'Save changes now' : 'Submit for review'}
                     </button>

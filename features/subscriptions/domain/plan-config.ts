@@ -123,36 +123,56 @@ export const PLAN_LIMITS: Record<PlanId, PlanLimits> = {
 
 export const CONTRIBUTION_CREDITS = {
   newQuestion: 1,
-  typoFormatting: 2,
-  sourceReference: 3,
-  validReport: 3,
-  explanationImprovement: 5,
-  substantialCorrection: 10,
-  medicalFactOrCorrectAnswer: 15,
+  importedQuestion: 0,
+  typoFormatting: 1,
+  sourceReference: 1,
+  validReport: 2,
+  explanationImprovement: 4,
+  substantialCorrection: 8,
+  medicalFactOrCorrectAnswer: 10,
 } as const;
+
+export type RewardCatalogEntry = {
+  id: string;
+  plan: Exclude<PlanId, 'free'>;
+  credits: number;
+  duration: number;
+  durationUnit: 'month' | 'year';
+  durationDays?: number | null;
+};
 
 export const REWARD_CATALOG = [
   {
-    id: 'full-access-month',
+    id: 'full-access-week',
     plan: 'full_monthly',
-    credits: 300,
+    credits: 200,
     duration: 1,
     durationUnit: 'month',
+    durationDays: 7,
+  },
+  {
+    id: 'full-access-month',
+    plan: 'full_monthly',
+    credits: 400,
+    duration: 1,
+    durationUnit: 'month',
+    durationDays: null,
   },
   {
     id: 'full-access-quarter',
     plan: 'full_quarterly',
-    credits: 700,
+    credits: 850,
     duration: 3,
     durationUnit: 'month',
+    durationDays: null,
   },
-] as const satisfies readonly {
-  id: string;
-  plan: PlanId;
-  credits: number;
-  duration: number;
-  durationUnit: 'month' | 'year';
-}[];
+] as const satisfies readonly RewardCatalogEntry[];
+
+export function rewardDurationLabel(reward: Pick<RewardCatalogEntry, 'duration' | 'durationUnit' | 'durationDays'>): string {
+  if (reward.durationDays === 7) return '1 week (7 days)';
+  if (reward.durationDays) return `${reward.durationDays} days`;
+  return `${reward.duration} ${reward.durationUnit}${reward.duration === 1 ? '' : 's'}`;
+}
 
 export const CONTRIBUTION_BADGES = [
   { score: 7_000, name: 'Master Contributor' },

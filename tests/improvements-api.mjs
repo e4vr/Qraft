@@ -741,6 +741,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
           options: ['Correct', 'Wrong'],
           answer: 0,
           explanation: 'A short explanation.',
+          explanationImages: [{ id: 'solution-diagram', url: `/api/cloudflare/media/${mediaKey}`, name: 'solution.png', caption: 'Reasoning diagram' }],
           sourceReference: 'Fixture',
           images: [
             {
@@ -836,6 +837,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
         `/preformed/open?code=${privatePublished.data.test.code}`,
       );
       assert.equal(privateOpened.status, 200, JSON.stringify(privateOpened));
+      assert.deepEqual(privateOpened.data.test.questions[0].explanationImages, []);
       const securedImageUrl = privateOpened.data.test.questions[0].images[0].url;
       assert.match(securedImageUrl, /\?attempt=[a-f0-9]{64}$/);
       await db
@@ -880,6 +882,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
       assert.equal(opened.status, 200, JSON.stringify(opened));
       assert.equal(opened.data.test.questions[0].answer, -1);
       assert.equal(opened.data.test.questions[0].explanation, '');
+      assert.deepEqual(opened.data.test.questions[0].explanationImages, []);
       const tokenIssued = await db.prepare('SELECT issued_at FROM preformed_attempt_tokens WHERE token_hash=?')
         .bind(createHash('sha256').update(opened.data.test.attemptToken).digest('hex')).first();
       await db.prepare('UPDATE preformed_attempt_tokens SET issued_at=? WHERE token_hash=?')
@@ -894,6 +897,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
       assert.equal(submitted.status, 200, JSON.stringify(submitted));
       assert.equal(submitted.data.score, 1);
       assert.equal(submitted.data.questions[0].answer, 0);
+      assert.deepEqual(submitted.data.questions[0].explanationImages, questions[0].explanationImages);
       const persistedDuration = await db.prepare('SELECT duration_seconds FROM preformed_leaderboard WHERE id=?').bind(submissionId).first();
       assert.ok(persistedDuration.duration_seconds >= 60, JSON.stringify(persistedDuration));
       assert.ok(tokenIssued.issued_at);
@@ -928,6 +932,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
       });
       assert.equal(duplicate.status, 200, JSON.stringify(duplicate));
       assert.equal(duplicate.data.duplicate, true);
+      assert.deepEqual(duplicate.data.questions[0].explanationImages, questions[0].explanationImages);
       assert.equal(
         (await call('free', `/preformed/leaderboard?id=${test.id}`)).status,
         200,

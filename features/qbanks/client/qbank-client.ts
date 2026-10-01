@@ -50,7 +50,7 @@ async function upload(
   file: File,
   qbankId: string,
   questionId: string,
-  kind: 'notes' | 'questions',
+  kind: 'notes' | 'questions' | 'shared-notes',
 ): Promise<string> {
   const form = new FormData();
   form.append('file', file);
@@ -84,6 +84,15 @@ export async function uploadQuestionImage(
   questionId: string,
 ): Promise<string> {
   return upload(_uid, file, qbankId, questionId, 'questions');
+}
+
+export async function uploadSharedNoteImage(
+  uid: string,
+  file: File,
+  qbankId: string,
+  questionId: string,
+): Promise<string> {
+  return upload(uid, file, qbankId, questionId, 'shared-notes');
 }
 
 export async function deleteQBankImages(qbankId: string): Promise<void> {

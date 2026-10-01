@@ -1,6 +1,8 @@
 'use client';
 /* oxlint-disable next/no-img-element */
 import { useEffect, useId, useRef, useState, useMemo } from 'react';
+import { ExplanationImageEditor } from '@/components/explanation-image-editor';
+import { ExplanationImages } from '@/components/explanation-images';
 import { Check, ChevronDown, Copy, FileJson, GraduationCap, Upload, LoaderCircle, Eye, ListFilter, Undo2, RotateCcw, CheckCheck, Trash2, Pencil } from 'lucide-react';
 import { duplicateFingerprint } from '@/features/duplicates/domain/duplicate-detection';
 import { subscribeLive } from '@/lib/realtime-client';
@@ -63,10 +65,12 @@ function splitImport(
 }
 
 export function QuestionImportReview({
+  uid,
   bankId,
   adminImportPrivileges = false,
   onImported,
 }: {
+  uid: string;
   bankId: string;
   adminImportPrivileges?: boolean;
   onImported: (result: { proposals: QuestionProposal[]; specialties: QBankSpecialty[]; topics: QBankTopic[]; classificationRevision?: number }) => void;
@@ -76,11 +80,13 @@ export function QuestionImportReview({
     [open, setOpen] = useState(false),
     [error, setError] = useState(''),
     [message, setMessage] = useState(''),
-    [busy, setBusy] = useState(false),
+    [requestBusy, setBusy] = useState(false),
     [requestId, setRequestId] = useState(() => crypto.randomUUID()),
     [uploadSessionId, setUploadSessionId] = useState(() =>
       crypto.randomUUID(),
     );
+  const [explanationImagesBusy, setExplanationImagesBusy] = useState(false);
+  const busy = requestBusy || explanationImagesBusy;
   const [matches,setMatches]=useState<ImportMatch[][]>([]);
   const [choices,setChoices]=useState<Record<number,ImportChoice>>({});
   const [excluded,setExcluded]=useState<number[]>([]);
@@ -693,6 +699,7 @@ export function QuestionImportReview({
                   />
                 </label>
               ))}
+              <ExplanationImageEditor key={`${uploadSessionId}:${index}`} uid={uid} qbankId={bankId} questionId={`import-${uploadSessionId}-${index}`} images={draft.explanationImages ?? []} onChange={explanationImages => edit({ explanationImages })} onBusyChange={setExplanationImagesBusy} disabled={requestBusy || checking} />
               <div className="rounded-xl bg-muted p-3 text-sm" dir="auto">
                 <span className="font-semibold">Source file name · required</span>
                 <input required aria-label="Question source name" maxLength={240} className="mt-2 min-h-11 w-full rounded-xl border bg-background px-3" value={draft.sourceFile ?? ''} onChange={event => edit({ sourceFile: event.target.value, sourceReference: importedSourceReference(event.target.value, draft.sourcePage, draft.originalQuestionNumber) })} />
@@ -736,7 +743,7 @@ export function QuestionImportReview({
           <DialogTitle>View the duplication</DialogTitle>
           {matches[index]?.length>1&&<select aria-label="Existing question" className="min-h-11 w-full rounded-xl border bg-background px-3" value={comparisonIndex} onChange={e=>setComparisonIndex(Number(e.target.value))}>{matches[index].map((m,n)=><option key={m.entityId} value={n}>Existing question {n+1}</option>)}</select>}
           <div className="grid min-w-0 gap-4 md:grid-cols-2">
-            {[{title:'Existing question',payload:matches[index]?.[comparisonIndex]?.payload},{title:'New question',payload:draft}].map(item=><article key={item.title} className="min-w-0 space-y-3 rounded-xl border p-4"><h3 className="font-bold">{item.title}</h3><p dir="auto" className="whitespace-pre-wrap break-words">{item.payload?.stem}</p><ol className="space-y-2">{item.payload?.options.map((option,n)=><li key={n} dir="auto" className={`break-words rounded-lg p-2 ${item.payload?.answer===n?'bg-emerald-500/15':'bg-muted'}`}>{optionLabel(n)}. {option}{item.payload?.answer===n?' ✓':''}</li>)}</ol><p dir="auto" className="whitespace-pre-wrap break-words text-sm">{item.payload?.explanation}</p><p dir="auto" className="break-words text-xs text-muted-foreground">{item.payload?.sourceReference}</p></article>)}
+            {[{title:'Existing question',payload:matches[index]?.[comparisonIndex]?.payload},{title:'New question',payload:draft}].map(item=><article key={item.title} className="min-w-0 space-y-3 rounded-xl border p-4"><h3 className="font-bold">{item.title}</h3><p dir="auto" className="whitespace-pre-wrap break-words">{item.payload?.stem}</p><ol className="space-y-2">{item.payload?.options.map((option,n)=><li key={n} dir="auto" className={`break-words rounded-lg p-2 ${item.payload?.answer===n?'bg-emerald-500/15':'bg-muted'}`}>{optionLabel(n)}. {option}{item.payload?.answer===n?' ✓':''}</li>)}</ol><p dir="auto" className="whitespace-pre-wrap break-words text-sm">{item.payload?.explanation}</p><ExplanationImages images={item.payload?.explanationImages} /><p dir="auto" className="break-words text-xs text-muted-foreground">{item.payload?.sourceReference}</p></article>)}
           </div>
           {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
           <div className="grid gap-2 sm:grid-cols-2">

@@ -1,4 +1,5 @@
 import { auditStatement } from './platform-server';
+import { validOptionalExplanationImages } from '@/features/media/domain/image-attachments';
 import { bankDeletionStatements } from '@/features/qbanks/server/bank-deletion';
 import { bankAccessState, bankAccessStates } from './qbank-access-repository';
 import { allocateQuestionIds } from './question-id-repository';
@@ -2043,6 +2044,7 @@ function proposalPayloadIsComplete(proposal: Record<string, unknown>) {
     proposal.editKinds.length > 0 &&
     proposal.editKinds.every((item) => typeof item === 'string') &&
     typeof payload?.explanation === 'string' &&
+    validOptionalExplanationImages(payload.explanationImages) &&
     typeof payload.stem === 'string' &&
     Boolean(payload.stem.trim()) &&
     options.length >= 2 &&
@@ -2122,6 +2124,8 @@ function proposalChangeAllowed(
     current.status !== 'approved' &&
     value.proposedById === user.uid &&
     value.qbankId === current.qbankId &&
+    sameJson(value.submissionMethod, current.submissionMethod) &&
+    sameJson(value.importBatchId, current.importBatchId) &&
     value.proposedAt === current.proposedAt &&
     value.status === 'pending'
   );
@@ -2786,13 +2790,14 @@ export async function saveCollaboration(request: Request) {
         'specialty',
         'topic',
         'explanation',
+        'explanationImages',
         'sourceReference',
         'images',
       ].some(
         (key) =>
           !sameJson(
-            question[key] ?? (key === 'images' ? [] : undefined),
-            proposal.payload![key] ?? (key === 'images' ? [] : undefined),
+            question[key] ?? (key === 'images' || key === 'explanationImages' ? [] : undefined),
+            proposal.payload![key] ?? (key === 'explanationImages' ? existing?.explanationImages ?? [] : key === 'images' ? [] : undefined),
           ),
       )
     )
@@ -3053,7 +3058,7 @@ export async function previewBankInvite(request: Request) {
 
 export async function uploadMedia(
   request: Request,
-  kind: 'notes' | 'questions',
+  kind: 'notes' | 'questions' | 'shared-notes',
 ) {
   assertSameOrigin(request);
   const authorization = imageKitAuthorization();
@@ -3075,7 +3080,7 @@ export async function uploadMedia(
         error:
           kind === 'notes'
             ? 'Private Notes are available with Full Access.'
-            : 'Image Upload is available with Full Access.',
+            : 'Image uploads are not enabled for this account.',
       },
       403,
     );
@@ -3156,9 +3161,9 @@ export async function uploadMedia(
     );
   const fileHash = await sha256Bytes(bytes);
   const duplicate = await env.DB.prepare(
-    "SELECT key,provider FROM media WHERE owner_id=? AND qbank_id=? AND file_hash=? AND provider='r2' AND status='ready' LIMIT 1",
+    "SELECT key,provider FROM media WHERE owner_id=? AND qbank_id=? AND file_hash=? AND provider='r2' AND status='ready' AND (?!='shared-notes' OR purpose='shared-notes') LIMIT 1",
   )
-    .bind(user.uid, qbankId, fileHash)
+    .bind(user.uid, qbankId, fileHash, kind)
     .first<{ key: string; provider: string }>();
   if (duplicate)
     return json({

@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { validOptionalExplanationImages } from '@/features/media/domain/image-attachments';
 import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { currentUser } from '@/features/auth/server/auth-service';
 import { assertSameOrigin, readJson } from '@/server/http/request';
@@ -150,7 +151,7 @@ function participantDocument(test: PreformedTestDocument, token: string, started
   const hidden = test.settings.mode === 'exam';
   return {
     ...test, attemptToken: token, attemptStartedAt: startedAt, answersHidden: hidden,
-    questions: hidden ? test.questions.map(question => ({ ...question, answer: -1, explanation: '', sourceReference: '' })) : test.questions,
+    questions: hidden ? test.questions.map(question => ({ ...question, answer: -1, explanation: '', explanationImages: [], sourceReference: '' })) : test.questions,
   };
 }
 
@@ -162,6 +163,7 @@ function authorizePrivateMedia(
     ...test,
     questions: test.questions.map((question) => ({
       ...question,
+      explanationImages: (question.explanationImages ?? []).map(image => image.url.startsWith('/api/cloudflare/media/') ? { ...image, url: `${image.url}${image.url.includes('?') ? '&' : '?'}attempt=${encodeURIComponent(attemptToken)}` } : image),
       images: question.images.map((image) =>
         image.url.startsWith('/api/cloudflare/media/')
           ? {
@@ -240,6 +242,7 @@ function validQuestions(value: unknown): value is PreformedQuestion[] {
       Number(item.answer) < options.length &&
       typeof item.explanation === 'string' &&
       item.explanation.length <= 30_000 &&
+      validOptionalExplanationImages(item.explanationImages, 5) &&
       typeof item.sourceReference === 'string' &&
       item.sourceReference.length <= 2_000 &&
       Array.isArray(images) &&
@@ -697,10 +700,10 @@ export async function preformedTestApi(request: Request, action: string) {
         return json({
           ...(JSON.parse(receipt.result_json) as Record<string, unknown>),
           duplicate: true,
-          questions: document(row).questions,
+          questions: (row.visibility === 'private' ? authorizePrivateMedia(document(row), input.attemptToken) : document(row)).questions,
         }, 200, { 'x-qraft-unchanged': '1' });
       }
-      const questions = JSON.parse(row.questions_json) as PreformedQuestion[];
+      const questions = (row.visibility === 'private' ? authorizePrivateMedia(document(row), input.attemptToken) : document(row)).questions;
       if (token.submitted_at)
         return json({ error: 'This attempt has already been submitted.' }, 409);
       const answers =

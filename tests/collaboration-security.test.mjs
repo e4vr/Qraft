@@ -638,7 +638,6 @@ void test('the revealed explanation is read-only and resizable', async () => {
   assert.match(app, /ResizablePanelGroup/);
   assert.match(app, /<ResizableHandle\s+withHandle/);
   assert.match(app, /READ ONLY/);
-  assert.match(app, /Drag the divider to control the explanation space/);
   assert.match(
     app,
     /sharedNote\?\.content\.trim\(\)\s*\|\|\s*question\?\.explanation/,

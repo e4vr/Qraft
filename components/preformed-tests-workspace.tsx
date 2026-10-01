@@ -3,6 +3,8 @@
 /* oxlint-disable next/no-img-element */
 
 import { ApiError, api } from '@/lib/api-client';
+import { ExplanationImageEditor } from '@/components/explanation-image-editor';
+import { ExplanationImages } from '@/components/explanation-images';
 import { WorkspaceHeader } from '@/components/workspace-header';
 import { QuestionNavigator } from '@/components/exams/question-navigator';
 import {
@@ -83,12 +85,14 @@ function emptyQuestion(): PreformedQuestion {
     options: ['', '', '', ''],
     answer: 0,
     explanation: '',
+    explanationImages: [],
     sourceReference: '',
     images: [],
   };
 }
 
 function questionValidationMessage(question: PreformedQuestion) {
+  if ((question.explanationImages?.length ?? 0) > 5) return 'Keep at most five explanation images per question.';
   if (!question.stem.trim()) return 'Write the question before saving it.';
   if (question.options.length < 2) return 'Add at least two answer options.';
   const emptyOption = question.options.findIndex((option) => !option.trim());
@@ -234,7 +238,9 @@ function TestEditor({
   const [passcode, setPasscode] = useState<string | undefined>(undefined);
   const [passcodeEnabled, setPasscodeEnabled] = useState(initial.hasPasscode);
   const [selected, setSelected] = useState(0);
-  const [busy, setBusy] = useState(false);
+  const [requestBusy, setBusy] = useState(false);
+  const [explanationImagesBusy, setExplanationImagesBusy] = useState(false);
+  const busy = requestBusy || explanationImagesBusy;
   const [message, setMessage] = useState('');
   const [messageKind, setMessageKind] = useState<'success' | 'error' | 'info'>(
     'info',
@@ -298,6 +304,7 @@ function TestEditor({
   };
 
   const close = async () => {
+    if (busy) return;
     if (
       !dirty ||
       (await confirmEditorAction({
@@ -357,6 +364,7 @@ function TestEditor({
         options: item.options,
         answer: item.answer,
         explanation: item.explanation,
+        explanationImages: item.explanationImages ?? [],
         sourceReference: item.sourceReference,
         images: item.images,
       }));
@@ -407,6 +415,7 @@ function TestEditor({
     nextDraft: PreformedTestDocument = draft,
     successMessage = 'Test saved.',
   ) => {
+    if (explanationImagesBusy) return undefined;
     if (!nextDraft.title.trim()) {
       setMessageKind('error');
       setMessage('Add a test title before saving.');
@@ -521,6 +530,7 @@ function TestEditor({
           onClick={() => void close()}
           className="grid size-10 place-items-center rounded-xl hover:bg-muted"
           aria-label="Close editor"
+          disabled={busy}
         >
           <X className="size-5" />
         </button>
@@ -879,6 +889,7 @@ function TestEditor({
               {draft.questions.map((item, index) => (
                 <button
                   key={item.id}
+                  disabled={busy}
                   onClick={() => setSelected(index)}
                   className={`shrink-0 rounded-xl px-3 py-2 text-sm font-bold ${selected === index ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
                 >
@@ -907,6 +918,7 @@ function TestEditor({
                 <h3 className="text-lg font-bold">Question {selected + 1}</h3>
                 <button
                   className="q-button q-button-secondary text-red-600"
+                  disabled={busy}
                   onClick={() => {
                     const next = draft.questions.filter(
                       (_, index) => index !== selected,
@@ -1014,7 +1026,8 @@ function TestEditor({
                 </label>
               </div>
               <div>
-                <p className="text-sm font-semibold">Images</p>
+                <ExplanationImageEditor key={question.id} uid={user.uid} qbankId={`preformed-${draft.id}`} questionId={question.id} images={question.explanationImages ?? []} onChange={explanationImages => updateQuestion({ explanationImages })} onBusyChange={setExplanationImagesBusy} disabled={requestBusy} maximum={5} upload={file => uploadQuestionImage(user.uid, file, `preformed-${draft.id}`, question.id)} />
+                <p className="mt-4 text-sm font-semibold">Question images</p>
                 <div className="mt-2 flex flex-wrap gap-3">
                   {question.images.map((image) => (
                     <div
@@ -1814,7 +1827,7 @@ export function PreformedTestRunner({
                   })}
                 </div>
                 {reveal &&
-                  (question.explanation || question.sourceReference) && (
+                  (question.explanation || question.sourceReference || question.explanationImages?.length) && (
                     <div className="mt-6 rounded-2xl bg-muted p-5">
                       <p className="font-bold">Explanation</p>
                       {question.explanation && (
@@ -1822,6 +1835,7 @@ export function PreformedTestRunner({
                           {question.explanation}
                         </p>
                       )}
+                      <ExplanationImages images={question.explanationImages} />
                       {question.sourceReference && (
                         <p className="mt-3 text-xs text-muted-foreground">
                           Source: {question.sourceReference}
