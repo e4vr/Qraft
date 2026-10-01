@@ -103,7 +103,11 @@ export const records = sqliteTable(
   (table) => [
     uniqueIndex('idx_records_type_id').on(table.type, table.id),
     index('idx_records_type_email').on(table.type, table.email),
-    index('idx_records_type_owner_updated').on(table.type, table.ownerId, table.updatedAt),
+    index('idx_records_type_owner_updated').on(table.type, table.ownerId, sql`${table.updatedAt} DESC`),
+    index('idx_records_qbank_type').on(table.qbankId, table.type),
+    index('idx_records_type_updated_at').on(table.type, sql`${table.updatedAt} DESC`),
+    index('idx_records_pending_owner_updated').on(table.ownerId, sql`${table.updatedAt} DESC`).where(sql`${table.type}='questionProposals' AND json_extract(${table.payload},'$.status')='pending'`),
+    index('idx_records_membership_user_role').on(sql`json_extract(${table.payload},'$.userId')`, sql`json_extract(${table.payload},'$.role')`, table.qbankId).where(sql`${table.type}='qbankMemberships'`),
   ],
 );
 
@@ -145,7 +149,11 @@ export const media = sqliteTable('media', {
   expiresAt: text('expires_at'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at'),
-});
+}, table => [
+  index('idx_media_qbank_created').on(table.qbankId, table.createdAt),
+  index('idx_media_owner_hash').on(table.ownerId, table.fileHash),
+  index('idx_media_expiry').on(table.status, table.expiresAt),
+]);
 
 export const r2UsagePeriods = sqliteTable('r2_usage_periods', {
   periodStart: text('period_start').primaryKey(),
@@ -175,7 +183,7 @@ export const discountCodes = sqliteTable(
     allowedPlans: text('allowed_plans').notNull().default('["full_monthly","full_quarterly"]'),
     updatedAt: text('updated_at').notNull(),
   },
-  (table) => [uniqueIndex('idx_discount_codes_code').on(table.code)],
+  (table) => [uniqueIndex('idx_discount_codes_code').on(sql`${table.code} COLLATE NOCASE`)],
 );
 
 export const accountPlanOverrides = sqliteTable('account_plan_overrides', {
@@ -298,7 +306,7 @@ export const preformedLeaderboard = sqliteTable(
     submittedAt: text('submitted_at').notNull(),
   },
   table => [
-    index('idx_preformed_leaderboard_rank').on(table.testId, table.version, table.score, table.durationSeconds, table.submittedAt),
+    index('idx_preformed_leaderboard_rank').on(table.testId, table.version, sql`${table.score} DESC`, table.durationSeconds, table.submittedAt),
     index('idx_preformed_leaderboard_participant').on(table.testId, table.version, table.participantKey),
     index('idx_preformed_leaderboard_user').on(table.participantUserId),
   ],
@@ -336,7 +344,7 @@ export const preformedAttemptTokens = sqliteTable('preformed_attempt_tokens', {
   issuedAt: text('issued_at').notNull(),
   expiresAt: text('expires_at').notNull(),
   submittedAt: text('submitted_at'),
-}, table => [index('idx_preformed_attempt_tokens_user').on(table.userId)]);
+}, table => [index('idx_preformed_attempt_tokens_user').on(table.userId), index('idx_preformed_attempt_tokens_expiry').on(table.expiresAt)]);
 
 export const preformedSubmissionReceipts = sqliteTable('preformed_submission_receipts', {
   submissionId: text('submission_id').primaryKey(),
@@ -349,6 +357,7 @@ export const preformedSubmissionReceipts = sqliteTable('preformed_submission_rec
 }, table => [
   uniqueIndex('idx_preformed_submission_receipts_attempt_token').on(table.attemptTokenHash),
   index('idx_preformed_receipts_user').on(table.userId),
+  index('idx_preformed_submission_receipts_created').on(table.createdAt),
 ]);
 
 export const preformedParticipantQuestionStats = sqliteTable('preformed_participant_question_stats', {
@@ -463,10 +472,13 @@ export const importedFiles = sqliteTable(
     uploadedAt: text('uploaded_at').notNull(),
     dailyLimit: integer('daily_limit').notNull().default(1_000_000),
     pendingLimit: integer('pending_limit').notNull().default(1_000_000),
+    runId: text('run_id'),
+    questionLimit: integer('question_limit').notNull().default(1_000_000),
   },
   (table) => [
     uniqueIndex('idx_imported_files_batch').on(table.batchId),
     index('idx_imported_files_user_uploaded').on(table.userId, table.uploadedAt),
+    index('idx_imported_files_user_run').on(table.userId, table.runId, table.uploadedAt),
   ],
 );
 
@@ -566,6 +578,8 @@ export const planPrices = sqliteTable('plan_prices', {
   plan: text('plan').primaryKey(),
   priceSarPeriod: integer('price_sar_period').notNull(),
   updatedAt: text('updated_at').notNull(),
+  priceHalalas: integer('price_halalas'),
+  policyJson: text('policy_json'),
 });
 
 export const contributionAccounts = sqliteTable('contribution_accounts', {
@@ -598,8 +612,9 @@ export const creditTransactions = sqliteTable(
   (table) => [
     index('idx_credit_transactions_user_created').on(
       table.userId,
-      table.createdAt,
+      sql`${table.createdAt} DESC`,
     ),
+    uniqueIndex('idx_credit_transactions_reference').on(table.userId, table.type, table.referenceType, table.referenceId).where(sql`${table.referenceId} IS NOT NULL`),
   ],
 );
 
@@ -618,7 +633,8 @@ export const rewardPasses = sqliteTable(
     activatedAt: text('activated_at'),
     expiresAt: text('expires_at'),
     source: text('source').notNull(),
-    creditTransactionId: text('credit_transaction_id'),
+    creditTransactionId: text('credit_transaction_id').unique().references(() => creditTransactions.id),
+    durationDays: integer('duration_days'),
     metadata: text('metadata').notNull().default('{}'),
   },
   (table) => [
@@ -627,6 +643,7 @@ export const rewardPasses = sqliteTable(
       table.status,
       table.expiresAt,
     ),
+    check('reward_passes_duration_days', sql`${table.durationDays} BETWEEN 1 AND 730`),
   ],
 );
 
@@ -778,10 +795,7 @@ export const contributionReviews = sqliteTable(
       table.reviewerId,
       table.createdAt,
     ),
-    index('idx_contribution_reviews_author_created').on(
-      table.authorId,
-      table.createdAt,
-    ),
+    index('idx_contribution_reviews_author_created').on(table.authorId, sql`${table.createdAt} DESC`),
   ],
 );
 
@@ -796,3 +810,56 @@ export const reviewCompletionClaims = sqliteTable('review_completion_claims', {
   reviewerId: text('reviewer_id').notNull(),
   createdAt: text('created_at').notNull(),
 });
+
+export const importDefaults = sqliteTable('import_defaults', {
+  id: integer('id').primaryKey(),
+  questionsPerImport: integer('questions_per_import'),
+  importsPerDay: integer('imports_per_day'),
+}, table => [
+  check('import_defaults_singleton', sql`${table.id}=1`),
+  check('import_defaults_questions', sql`${table.questionsPerImport} BETWEEN 1 AND 5000`),
+  check('import_defaults_daily', sql`${table.importsPerDay} BETWEEN 1 AND 100`),
+]);
+
+export const importPolicies = sqliteTable('import_policies', {
+  userId: text('user_id').primaryKey().references(() => profiles.uid, { onDelete: 'cascade' }),
+  questionsPerImport: integer('questions_per_import').notNull(),
+  importsPerDay: integer('imports_per_day').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, table => [
+  check('import_policies_questions', sql`${table.questionsPerImport} BETWEEN 1 AND 5000`),
+  check('import_policies_daily', sql`${table.importsPerDay} BETWEEN 1 AND 100`),
+]);
+
+export const siteOperations = sqliteTable('site_operations', {
+  id: integer('id').primaryKey(),
+  maintenance: integer('maintenance').notNull().default(0),
+  message: text('message').notNull().default('Qraft is undergoing scheduled maintenance. Please check back shortly.'),
+  endsAt: text('ends_at'),
+  revision: integer('revision').notNull().default(0),
+  updatedAt: text('updated_at').notNull(),
+  updatedBy: text('updated_by'),
+}, table => [check('site_operations_singleton', sql`${table.id}=1`), check('site_operations_maintenance', sql`${table.maintenance} IN (0,1)`)]);
+
+export const monitoringIdentities = sqliteTable('monitoring_identities', {
+  telemetryId: text('telemetry_id').primaryKey(),
+  userId: text('user_id').notNull().unique().references(() => profiles.uid, { onDelete: 'cascade' }),
+});
+
+export const monitoringSnapshots = sqliteTable('monitoring_snapshots', {
+  period: integer('period').primaryKey(),
+  payload: text('payload'),
+  refreshedAt: text('refreshed_at'),
+  refreshAfter: text('refresh_after').notNull().default(''),
+  source: text('source').notNull().default('unavailable'),
+}, table => [check('monitoring_snapshots_period', sql`${table.period} IN (1,7,30)`)]);
+
+export const monitoringQueryBudget = sqliteTable('monitoring_query_budget', {
+  day: text('day').primaryKey(),
+  used: integer('used').notNull().default(0),
+}, table => [check('monitoring_query_budget_used', sql`${table.used} BETWEEN 0 AND 60`)]);
+
+export const collaborationWriteGuards = sqliteTable('collaboration_write_guards', {
+  id: text('id').primaryKey(),
+  valid: integer('valid').notNull(),
+}, table => [check('collaboration_snapshot_matches', sql`${table.valid}=1`)]);

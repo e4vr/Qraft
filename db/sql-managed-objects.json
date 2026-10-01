@@ -1,0 +1,13 @@
+{
+  "virtualTables": ["import_question_search"],
+  "triggers": [
+    "apply_credit_transaction", "capture_review_completion", "claim_review_completion",
+    "complete_discount", "credit_balance_guard", "enforce_app_state_revision",
+    "enforce_json_import_limits", "enforce_preformed_attempt_limit",
+    "enforce_preformed_attempt_limit_update", "enforce_preformed_edit_revision",
+    "enforce_qbank_classification_revision", "import_question_search_delete",
+    "import_question_search_insert", "import_question_search_update", "purge_question_state",
+    "question_id_release_to_pool", "question_identity_delete", "question_identity_insert",
+    "question_identity_update", "redeem_discount", "sync_plan_period_price", "update_question_bank"
+  ]
+}

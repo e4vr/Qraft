@@ -11,7 +11,9 @@ class FullAccessMigrationTests(unittest.TestCase):
         self.db = sqlite3.connect(':memory:')
         self.db.execute('PRAGMA foreign_keys=ON')
         paths = sorted((ROOT/'drizzle').glob('*.sql'))
-        for path in paths[:-1]: self.db.executescript(path.read_text(encoding='utf-8'))
+        target = ROOT/'drizzle'/'0028_full_access_plans.sql'
+        for path in paths:
+            if path.name < target.name: self.db.executescript(path.read_text(encoding='utf-8'))
         now = '2026-09-30T00:00:00Z'
         self.expiry = '2027-04-01T00:00:00Z'
         for plan in ['free','lite','pro','unlimited']:
@@ -27,7 +29,7 @@ class FullAccessMigrationTests(unittest.TestCase):
         self.db.execute("INSERT INTO discount_codes(id,code,kind,amount,updated_at,allowed_plans) VALUES('quarterly-code','QUARTER','percent',20,?,'[\"unlimited\"]')",(now,))
         self.db.execute("INSERT INTO subscription_events(id,user_id,email,name,action,original,discount,final,status,created_at,detail,plan) VALUES('old-payment','pro','pro@test.invalid','pro','subscription_manually_activated',5000,0,5000,'success',?,'original payment','pro')",(now,))
         self.db.commit()
-        self.db.executescript(paths[-1].read_text(encoding='utf-8'))
+        self.db.executescript(target.read_text(encoding='utf-8'))
     def tearDown(self): self.db.close()
     def test_catalog_only_contains_new_periods(self):
         self.assertEqual(self.db.execute('SELECT plan,price_halalas FROM plan_prices ORDER BY plan').fetchall(), [('free',0),('full_monthly',10000),('full_quarterly',23000)])

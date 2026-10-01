@@ -9,6 +9,7 @@ import {
 } from '@/lib/local-db';
 import { withStateSyncLock } from '@/lib/tab-sync';
 import type { CollaborationSyncSnapshot } from '../domain/collaboration-outbox';
+import { collaborationBaseHash } from '../domain/collaboration-values';
 
 export const COLLABORATION_SYNC_NOTICE = 'qraft-collaboration-sync';
 export type CollaborationSyncNotice = {
@@ -53,12 +54,14 @@ export function collaborationChangeSet(
   const writes: Array<{
     collection: string;
     id: string;
+    baseValue: unknown;
     value: unknown;
     type: 'set';
   }> = [];
   const deletes: Array<{
     collection: string;
     id: string;
+    baseValue: unknown;
     type: 'delete';
   }> = [];
   const collect = <T>(
@@ -68,10 +71,16 @@ export function collaborationChangeSet(
     key: (item: T) => string,
     deleteMissing = false,
   ) => {
+    const baseValues = new Map<string, T>();
+    for (const item of old) {
+      const id = key(item);
+      if (!baseValues.has(id)) baseValues.set(id, item);
+    }
     changed(values, old, key).forEach((item) =>
       writes.push({
         collection,
         id: key(item),
+        baseValue: baseValues.get(key(item)) ?? null,
         value: item,
         type: 'set',
       }),
@@ -81,7 +90,7 @@ export function collaborationChangeSet(
       old
         .filter((item) => !currentKeys.has(key(item)))
         .forEach((item) =>
-          deletes.push({ collection, id: key(item), type: 'delete' }),
+          deletes.push({ collection, id: key(item), type: 'delete', baseValue: item }),
         );
     }
   };
@@ -105,6 +114,7 @@ export function collaborationChangeSet(
       writes.push({
         collection: 'qbankShareLinks',
         id: bank.shareToken,
+        baseValue: null,
         value: {
           id: bank.shareToken,
           qbankId: bank.id,
@@ -125,6 +135,7 @@ export function collaborationChangeSet(
       deletes.push({
         collection: 'qbankShareLinks',
         id: oldBank.shareToken,
+        baseValue: null,
         type: 'delete',
       });
     }
@@ -157,6 +168,7 @@ export function collaborationChangeSet(
     writes.push({
       collection: 'system',
       id: 'accessControl',
+      baseValue: previous.blockedAccess,
       value: {
         id: 'accessControl',
         ...next.blockedAccess,
@@ -288,10 +300,14 @@ async function sendCollaborationState(
   const rejectedGroups: Array<{ group: string; error: unknown }> = [];
   const pending = [...groups];
   const send = async (batch: CollaborationOperation[]) => {
+    const operations = await Promise.all(batch.map(async ({ baseValue, ...operation }) => ({
+      ...operation,
+      ...(operation.collection === 'answerStats' && operation.type === 'set' ? {} : { baseHash: await collaborationBaseHash(baseValue) }),
+    })));
     const result = await api<{ ok?: boolean }>('/collaboration', {
       method: 'PUT',
       expectedUserId: uid,
-      body: JSON.stringify({ operations: batch }),
+      body: JSON.stringify({ operations }),
     });
     if (result.ok !== true)
       throw new ApiError(
@@ -310,7 +326,7 @@ async function sendCollaborationState(
       const candidate = [...batch, ...group[1]];
       if (
         candidate.length > 500 ||
-        new TextEncoder().encode(JSON.stringify({ operations: candidate }))
+        new TextEncoder().encode(JSON.stringify({ operations: candidate.map(({ baseValue: _baseValue, ...operation }) => ({ ...operation, baseHash: '0'.repeat(64) })) }))
           .byteLength > 1_700_000
       ) {
         if (!batch.length) {

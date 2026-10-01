@@ -1,0 +1,346 @@
+{
+  "date": "2026-10-01",
+  "scope": "Synthetic local evidence; no production data or capacity certification",
+  "beforeP2": {
+    "label": "p1",
+    "at": "2026-10-01T05:16:05.597Z",
+    "environment": {
+      "node": "v22.14.0",
+      "platform": "win32",
+      "cpu": "Intel(R) Core(TM) i7-3770 CPU @ 3.40GHz",
+      "samples": 60,
+      "warmup": 10
+    },
+    "limitations": "Synthetic local Node CPU timings; not browser frame times or production capacity. Index construction is measured separately. Existing D1 load test results are separate.",
+    "sourceSha256": "e8af23d0a71afb8a55bd60dddabd2801f274677de533c606b6a51140513f47a7",
+    "completion": [
+      {
+        "catalogCount": 1000,
+        "examCount": 200,
+        "progressCount": 500,
+        "p50Ms": 2.344,
+        "p95Ms": 4.837,
+        "indexConstruction": {
+          "p50Ms": 0.076,
+          "p95Ms": 0.108
+        },
+        "checksum": "c2bd0e1f7cc349fe218aea8f9738b354cc9f1e6917eac3c6fac834b50f37269b"
+      },
+      {
+        "catalogCount": 5000,
+        "examCount": 500,
+        "progressCount": 2000,
+        "p50Ms": 17.835,
+        "p95Ms": 18.593,
+        "indexConstruction": {
+          "p50Ms": 0.51,
+          "p95Ms": 0.613
+        },
+        "checksum": "4d7c787e1ff150aa4e84df6c5c408f9728ad3edab13675cdfb04a5e659bf01e5"
+      },
+      {
+        "catalogCount": 20000,
+        "examCount": 2000,
+        "progressCount": 4000,
+        "p50Ms": 216.081,
+        "p95Ms": 233.443,
+        "indexConstruction": {
+          "p50Ms": 2.502,
+          "p95Ms": 6.657
+        },
+        "checksum": "1a8af813f36b010c005df880d55f487c07c72e489e2aa6581e88b38903171b82"
+      }
+    ],
+    "snapshots": [
+      {
+        "entries": 222,
+        "bytes": 98593,
+        "stringify": {
+          "p50Ms": 0.228,
+          "p95Ms": 0.251
+        },
+        "clone": {
+          "p50Ms": 0.59,
+          "p95Ms": 1.206
+        },
+        "normalizeAndMerge": {
+          "p50Ms": 0.291,
+          "p95Ms": 0.35
+        }
+      },
+      {
+        "entries": 1666,
+        "bytes": 737507,
+        "stringify": {
+          "p50Ms": 2.228,
+          "p95Ms": 2.703
+        },
+        "clone": {
+          "p50Ms": 5.122,
+          "p95Ms": 5.999
+        },
+        "normalizeAndMerge": {
+          "p50Ms": 3.172,
+          "p95Ms": 4.171
+        }
+      },
+      {
+        "entries": 3000,
+        "bytes": 1328469,
+        "stringify": {
+          "p50Ms": 4.555,
+          "p95Ms": 6.077
+        },
+        "clone": {
+          "p50Ms": 11.332,
+          "p95Ms": 19.632
+        },
+        "normalizeAndMerge": {
+          "p50Ms": 5.684,
+          "p95Ms": 6.686
+        }
+      }
+    ],
+    "bundle": {
+      "file": "_next/static/chunks/medguard-app-iqZwmezO.js",
+      "rawBytes": 867013,
+      "gzipBytes": 234084,
+      "brotliBytes": 180554,
+      "staticImports": 5,
+      "dynamicImports": 1
+    }
+  },
+  "afterP2": {
+    "label": "final",
+    "at": "2026-10-01T05:37:42.293Z",
+    "environment": {
+      "node": "v22.14.0",
+      "platform": "win32",
+      "cpu": "Intel(R) Core(TM) i7-3770 CPU @ 3.40GHz",
+      "samples": 60,
+      "warmup": 10
+    },
+    "limitations": "Synthetic local Node CPU timings; not browser frame times or production capacity. Index construction is measured separately. Existing D1 load test results are separate.",
+    "sourceSha256": "5fe7bc7b617c064f26ac1bf4341db86b0e4b9f66ac578de950e88238dae546f1",
+    "completion": [
+      {
+        "catalogCount": 1000,
+        "examCount": 200,
+        "progressCount": 500,
+        "p50Ms": 0.749,
+        "p95Ms": 1.186,
+        "indexConstruction": {
+          "p50Ms": 0.075,
+          "p95Ms": 0.176
+        },
+        "checksum": "c2bd0e1f7cc349fe218aea8f9738b354cc9f1e6917eac3c6fac834b50f37269b"
+      },
+      {
+        "catalogCount": 5000,
+        "examCount": 500,
+        "progressCount": 2000,
+        "p50Ms": 2.412,
+        "p95Ms": 3.657,
+        "indexConstruction": {
+          "p50Ms": 0.482,
+          "p95Ms": 0.559
+        },
+        "checksum": "4d7c787e1ff150aa4e84df6c5c408f9728ad3edab13675cdfb04a5e659bf01e5"
+      },
+      {
+        "catalogCount": 20000,
+        "examCount": 2000,
+        "progressCount": 4000,
+        "p50Ms": 8.125,
+        "p95Ms": 10.277,
+        "indexConstruction": {
+          "p50Ms": 2.251,
+          "p95Ms": 4.168
+        },
+        "checksum": "1a8af813f36b010c005df880d55f487c07c72e489e2aa6581e88b38903171b82"
+      }
+    ],
+    "snapshots": [
+      {
+        "entries": 222,
+        "bytes": 98593,
+        "stringify": {
+          "p50Ms": 0.221,
+          "p95Ms": 0.24
+        },
+        "clone": {
+          "p50Ms": 0.596,
+          "p95Ms": 0.663
+        },
+        "normalizeAndMerge": {
+          "p50Ms": 0.283,
+          "p95Ms": 0.35
+        }
+      },
+      {
+        "entries": 1666,
+        "bytes": 737507,
+        "stringify": {
+          "p50Ms": 2.348,
+          "p95Ms": 3.195
+        },
+        "clone": {
+          "p50Ms": 5.542,
+          "p95Ms": 6.855
+        },
+        "normalizeAndMerge": {
+          "p50Ms": 3.244,
+          "p95Ms": 5.08
+        }
+      },
+      {
+        "entries": 3000,
+        "bytes": 1328469,
+        "stringify": {
+          "p50Ms": 4.656,
+          "p95Ms": 6.261
+        },
+        "clone": {
+          "p50Ms": 10.975,
+          "p95Ms": 13.42
+        },
+        "normalizeAndMerge": {
+          "p50Ms": 5.639,
+          "p95Ms": 7.619
+        }
+      }
+    ],
+    "bundle": {
+      "file": "_next/static/chunks/medguard-app-B08GRKYj.js",
+      "rawBytes": 867864,
+      "gzipBytes": 234414,
+      "brotliBytes": 180794,
+      "staticImports": 5,
+      "dynamicImports": 1
+    }
+  },
+  "retiredQueries": {
+    "environment": "local in-memory SQLite; synthetic data, not production D1 timings",
+    "cases": [
+      {
+        "retiredCount": 1000,
+        "referencedCount": 201,
+        "measurements": {
+          "global": {
+            "p50Ms": 0.496,
+            "p95Ms": 0.603,
+            "returnedRows": 1000
+          },
+          "scoped": {
+            "p50Ms": 0.163,
+            "p95Ms": 0.21,
+            "returnedRows": 200
+          }
+        },
+        "scopedQueryPlan": [
+          [
+            3,
+            0,
+            0,
+            "SCAN requested VIRTUAL TABLE INDEX 1:"
+          ],
+          [
+            8,
+            0,
+            0,
+            "SEARCH retired USING COVERING INDEX sqlite_autoindex_retired_questions_1 (id=?)"
+          ]
+        ]
+      },
+      {
+        "retiredCount": 10000,
+        "referencedCount": 201,
+        "measurements": {
+          "global": {
+            "p50Ms": 5.657,
+            "p95Ms": 5.972,
+            "returnedRows": 10000
+          },
+          "scoped": {
+            "p50Ms": 0.195,
+            "p95Ms": 0.247,
+            "returnedRows": 200
+          }
+        },
+        "scopedQueryPlan": [
+          [
+            3,
+            0,
+            0,
+            "SCAN requested VIRTUAL TABLE INDEX 1:"
+          ],
+          [
+            8,
+            0,
+            0,
+            "SEARCH retired USING COVERING INDEX sqlite_autoindex_retired_questions_1 (id=?)"
+          ]
+        ]
+      },
+      {
+        "retiredCount": 100000,
+        "referencedCount": 201,
+        "measurements": {
+          "global": {
+            "p50Ms": 60.491,
+            "p95Ms": 61.588,
+            "returnedRows": 100000
+          },
+          "scoped": {
+            "p50Ms": 0.225,
+            "p95Ms": 0.239,
+            "returnedRows": 200
+          }
+        },
+        "scopedQueryPlan": [
+          [
+            3,
+            0,
+            0,
+            "SCAN requested VIRTUAL TABLE INDEX 1:"
+          ],
+          [
+            8,
+            0,
+            0,
+            "SEARCH retired USING COVERING INDEX sqlite_autoindex_retired_questions_1 (id=?)"
+          ]
+        ]
+      }
+    ]
+  },
+  "localLoad": {
+    "environment": "local workerd + disposable D1; not production capacity certification",
+    "at": "2026-10-01T05:34:53.230Z",
+    "concurrentUsers": 100,
+    "measuredRequests": 500,
+    "failures": 0,
+    "elapsedMs": 10378,
+    "p50Ms": 1379,
+    "p95Ms": 3065,
+    "p99Ms": 3278,
+    "preservedAnswers": 100,
+    "checks": [
+      "private-state isolation",
+      "idempotent replay",
+      "shared-answer concurrency",
+      "same-revision conflict"
+    ],
+    "realtimeConnections": 100,
+    "realtimeRecipientsVerified": 100
+  },
+  "postReviewBundle": {
+    "at": "2026-10-01T05:50:49.230Z",
+    "note": "Final production build after linear base-value indexing; CPU timings above retained from the measured run.",
+    "file": "_next/static/chunks/medguard-app-sZyaTQAc.js",
+    "rawBytes": 867280,
+    "gzipBytes": 234263,
+    "brotliBytes": 180675,
+    "collaborationClientSha256": "ede9bedb7b4a546695b9252253f0f4090ad8a7d2c77c89bc10b9f19615c88329"
+  }
+}

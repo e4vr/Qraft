@@ -178,8 +178,9 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
   assert.equal(firstReusableImport.status, 200, JSON.stringify(firstReusableImport.data));
   assert.equal(firstReusableImport.data.successful, 1);
 
+  const currentBank = (await call('admin', '/collaboration')).data.collaboration.qbanks.find(bank => bank.id === recreatedBank.id);
   const removeBank = await call('admin', '/collaboration', {
-    operations: [{ collection: 'qbanks', id: recreatedBank.id, type: 'delete' }],
+    operations: [{ collection: 'qbanks', id: recreatedBank.id, type: 'delete', baseValue: currentBank }],
   }, 'PUT');
   assert.equal(removeBank.status, 200, JSON.stringify(removeBank.data));
   assert.equal((await db.prepare("SELECT count(*) AS count FROM records WHERE qbank_id=?").bind(recreatedBank.id).first()).count, 0);

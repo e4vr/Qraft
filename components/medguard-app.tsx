@@ -1,5 +1,6 @@
 'use client';
 import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
+import { indexQuestionsById } from '@/features/qbanks/domain/question-index';
 import { QuestionEditDialog } from '@/components/question-edit-dialog';
 import { QuestionSourceFields } from '@/components/question-source-fields';
 import { SharedNoteImages } from '@/components/shared-note-images';
@@ -42,6 +43,7 @@ import { loadRejectedCollaboration } from '@/lib/local-db';
 import { saveDirectQuestionEdit } from '@/features/qbanks/client/direct-question-edit';
 import { mergeLiveState } from '@/lib/merge-live-state';
 import { appStateFreshness, mergeAppStates } from '@/lib/merge-app-state';
+import { resolvePersonalStateReceipt, type PersonalStateReceipt, type PersonalStateSession } from '@/features/state/client/state-receipt';
 import { recordStudyActivity } from '@/lib/study-streak';
 import { preserveNewerLocalAnswers } from '@/features/collaboration/domain/preserve-personal-answers';
 import {
@@ -2380,6 +2382,7 @@ function TestView({
   const { mode: presentationMode } = usePresentationEnvironment();
   const handheld = presentationMode === 'handheld';
   const stemRef = useRef<HTMLParagraphElement>(null);
+  const examQuestionsById = useMemo(() => indexQuestionsById(questions), [questions]);
   const activeQuestions = useMemo(() => {
     const questionsById = new Map(
       questions.map((question) => [question.id, question]),
@@ -2601,13 +2604,14 @@ function TestView({
       const currentTest =
         current.tests.find((item) => item.id === test.id) ?? test;
       const nextProgress = { ...current.progress };
+      const graded = new Set(currentTest.graded);
       currentTest.questionIds.forEach((questionId) => {
         if (
-          currentTest.graded.includes(questionId) ||
+          graded.has(questionId) ||
           currentTest.answers[questionId] === undefined
         )
           return;
-        const sourceQuestion = questions.find((item) => item.id === questionId);
+        const sourceQuestion = examQuestionsById.get(questionId);
         if (!sourceQuestion) return;
         const answer = currentTest.answers[questionId];
         const old = getQuestionProgress(current, questionId);
@@ -2655,7 +2659,7 @@ function TestView({
       const answerStats = { ...current.answerStats };
       test.questionIds.forEach((questionId) => {
         const answer = test.answers[questionId];
-        const source = questions.find((item) => item.id === questionId);
+        const source = examQuestionsById.get(questionId);
         if (answer === undefined || !source) return;
         const sourceBankId = source.qbankId ?? test.qbankId ?? 'smle-gs';
         const key = `${sourceBankId}:${questionId}`;
@@ -5783,12 +5787,15 @@ export default function MedGuardApp({
   initialQBankId?: string;
 }) {
   const presentation = usePresentationEnvironment();
-  const [user, setUser] = useState<AppUser | null | undefined>(undefined);
+  const [user, setUserRaw] = useState<AppUser | null | undefined>(undefined);
+  const personalStateSession = useRef<PersonalStateSession>({ uid: undefined });
   const [state, setStateRaw] = useState<AppState>(initialAppState);
+  const stateSnapshot = useRef(state);
+  const stateDirty = useRef(false);
   const setState = useCallback((update: React.SetStateAction<AppState>) => {
-    setStateRaw((current) => {
+      const current = stateSnapshot.current;
       const next = typeof update === 'function' ? update(current) : update;
-      if (next === current) return current;
+      if (next === current) return;
       const updatedAt = new Date().toISOString();
       const progress = Object.fromEntries(
         Object.entries(next.progress).map(([id, value]) => [
@@ -5796,8 +5803,10 @@ export default function MedGuardApp({
           value === current.progress[id] ? value : { ...value, updatedAt },
         ]),
       );
-      return { ...next, progress, clientUpdatedAt: updatedAt };
-    });
+      const edited = { ...next, progress, clientUpdatedAt: updatedAt };
+      stateSnapshot.current = edited;
+      stateDirty.current = true;
+      setStateRaw(edited);
   }, []);
   const recordStudyVisit = useCallback(() => {
     setState((current) => {
@@ -5880,16 +5889,14 @@ export default function MedGuardApp({
     registration.waiting.postMessage({ type: 'QRAFT_SKIP_WAITING' });
   }, []);
   const saveTimer = useRef<number | undefined>(undefined);
-  const stateDirty = useRef(false);
   const stateSyncInFlight = useRef(false);
-  const checkpointInFlight = useRef(false);
+  const checkpointInFlight = useRef(0);
   const flashcardReviewActive = useRef(false);
   const viewSnapshot = useRef<View>(initialView);
   const activeTestIdSnapshot = useRef<string | undefined>(undefined);
   const outboxReplayedFor = useRef('');
   const lastLeaveCheckpoint = useRef('');
   const flashcardCrudSnapshot = useRef('');
-  const stateSnapshot = useRef(state);
   const cloudStateSnapshot = useRef<AppState | undefined>(undefined);
   const collaborationSaveTimer = useRef<number | undefined>(undefined);
   const lastSavedCollaboration = useRef<CollaborationState>(
@@ -5916,6 +5923,37 @@ export default function MedGuardApp({
   const handledInvitationLink = useRef('');
   const hydratedIdentity = useRef('');
   const cloudLoaded = useRef(false);
+  const setUser = useCallback((update: React.SetStateAction<AppUser | null | undefined>) => {
+    const next = typeof update === 'function' ? update(liveSnapshot.current.user) : update;
+    if (personalStateSession.current.uid !== next?.uid) {
+      personalStateSession.current = { uid: next?.uid };
+      const empty = initialAppState();
+      stateSnapshot.current = empty;
+      cloudStateSnapshot.current = undefined;
+      stateDirty.current = false;
+      stateSyncInFlight.current = false;
+      checkpointInFlight.current = 0;
+      cloudLoaded.current = false;
+      hydratedIdentity.current = '';
+      outboxReplayedFor.current = '';
+      setHydrated(false);
+      setCollaborationHydrated(false);
+      setStateRaw(empty);
+    }
+    liveSnapshot.current = { ...liveSnapshot.current, user: next };
+    setUserRaw(next);
+  }, []);
+  const acceptPersonalStateReceipt = useCallback((receipt: PersonalStateReceipt, remote: AppState | undefined) => {
+    const result = resolvePersonalStateReceipt(receipt, personalStateSession.current, stateSnapshot.current, remote);
+    if (!result) return undefined;
+    stateDirty.current = result.dirty;
+    if (result.state !== stateSnapshot.current) {
+      stateSnapshot.current = result.state;
+      cloudStateSnapshot.current = result.dirty ? undefined : result.state;
+      setStateRaw(result.state);
+    }
+    return result;
+  }, []);
   const confirmUpdate = (
     updater: (current: CollaborationState) => CollaborationState,
   ) => {
@@ -5983,7 +6021,7 @@ export default function MedGuardApp({
     return () => {
       window.removeEventListener('qraft-account-updated', changed);
     };
-  }, [user]);
+  }, [setUser, user]);
 
   useEffect(() => {
     if (!user || !collaborationHydrated || user.status !== 'approved') return;
@@ -6046,6 +6084,7 @@ export default function MedGuardApp({
     examPool,
     view,
   ]);
+  const allQuestionsById = useMemo(() => indexQuestionsById(allQuestions), [allQuestions]);
   const accessibleQBanks = useMemo(
     () =>
       collaboration.qbanks.filter(
@@ -6327,12 +6366,13 @@ export default function MedGuardApp({
     let cleanup: (() => void) | undefined;
     let cancelled = false;
     async function initialize() {
+      const session = personalStateSession.current;
       try {
         cleanup = await observeCloudflareUser((account) => {
-          if (!cancelled) setUser(account ?? null);
+          if (!cancelled && personalStateSession.current === session) setUser(account ?? null);
         });
       } catch {
-        if (!cancelled) setUser(null);
+        if (!cancelled && personalStateSession.current === session) setUser(null);
       }
     }
     void initialize();
@@ -6340,7 +6380,7 @@ export default function MedGuardApp({
       cancelled = true;
       cleanup?.();
     };
-  }, []);
+  }, [setUser]);
 
   useEffect(() => {
     if (!user) return;
@@ -6349,6 +6389,7 @@ export default function MedGuardApp({
     if (hydratedIdentity.current === identity) return;
     cloudLoaded.current = false;
     let cancelled = false;
+    const session = personalStateSession.current;
     async function hydrate() {
       let localState: AppState | undefined;
       let localCollaboration: CollaborationState | undefined;
@@ -6399,12 +6440,13 @@ export default function MedGuardApp({
           cloudLoaded.current = true;
           setSyncStatus('synced');
         }
-        if (!cancelled) {
+        if (!cancelled && personalStateSession.current === session) {
           hydratedIdentity.current = identity;
           const accountTheme =
             loadLocalTheme(user!.uid) ?? resolved.settings.theme;
           saveLocalTheme(user!.uid, accountTheme);
           setTheme(accountTheme);
+          stateSnapshot.current = resolved;
           setStateRaw(resolved);
           setCollaboration(shared);
           lastSavedCollaboration.current = shared;
@@ -6416,9 +6458,10 @@ export default function MedGuardApp({
           const shared = normalizeCollaborationState(
             localCollaboration ?? (await loadLocalCollaboration(user!.uid)),
           );
-          setStateRaw(
-            normalizeAppState(localState ?? (await loadLocalState(user!.uid))),
-          );
+          const fallback = normalizeAppState(localState ?? (await loadLocalState(user!.uid)));
+          if (cancelled || personalStateSession.current !== session) return;
+          stateSnapshot.current = fallback;
+          setStateRaw(fallback);
           setCollaboration(shared);
           lastSavedCollaboration.current = shared;
           setHydrated(true);
@@ -6538,15 +6581,18 @@ export default function MedGuardApp({
     )
       return;
     outboxReplayedFor.current = user.uid;
+    const session = personalStateSession.current;
     void flushPendingCloudState(user.uid)
       .then((remote) => {
-        if (!remote) return;
+        if (!remote || personalStateSession.current !== session || stateDirty.current) return;
         const merged = mergeAppStates(stateSnapshot.current, remote);
+        stateSnapshot.current = merged;
         cloudStateSnapshot.current = merged;
         setStateRaw(merged);
         void saveLocalState(user.uid, merged).catch(() => setSyncStatus('error'));
       })
       .catch(() => {
+        if (personalStateSession.current !== session) return;
         outboxReplayedFor.current = '';
         setSyncStatus('local');
       });
@@ -6554,8 +6600,11 @@ export default function MedGuardApp({
 
   useEffect(() => {
     if (!user || !hydrated) return;
+    const session = personalStateSession.current;
     return observeCloudStateSync(user.uid, (remote) => {
+      if (personalStateSession.current !== session || stateDirty.current) return;
       const merged = mergeAppStates(stateSnapshot.current, remote);
+      stateSnapshot.current = merged;
       cloudStateSnapshot.current = merged;
       setStateRaw(merged);
       void saveLocalState(user.uid, merged).catch(() => setSyncStatus('error'));
@@ -6580,22 +6629,20 @@ export default function MedGuardApp({
     )
       return;
     stateSyncInFlight.current = true;
+    const receipt: PersonalStateReceipt = { session: personalStateSession.current, snapshot, dirtyBefore: stateDirty.current, full: true };
     setSyncStatus('syncing');
     try {
       const remote = await saveCloudState(account.uid, snapshot);
-      if (remote && stateSnapshot.current === snapshot) {
-        const merged = mergeAppStates(snapshot, remote);
-        cloudStateSnapshot.current = merged;
-        setStateRaw(merged);
-      }
-      if (stateSnapshot.current === snapshot) stateDirty.current = false;
-      setSyncStatus('synced');
+      const result = acceptPersonalStateReceipt(receipt, remote);
+      if (!result) return;
+      setSyncStatus(result.dirty ? 'local' : 'synced');
     } catch (error) {
+      if (personalStateSession.current !== receipt.session) return;
       reportSyncError(error);
     } finally {
-      stateSyncInFlight.current = false;
+      if (personalStateSession.current === receipt.session) stateSyncInFlight.current = false;
     }
-  }, [reportSyncError]);
+  }, [acceptPersonalStateReceipt, reportSyncError]);
 
   const flashcardCrudVersion = useMemo(
     () => JSON.stringify([state.flashcardDecks, state.flashcards]),
@@ -6650,9 +6697,7 @@ export default function MedGuardApp({
           : undefined;
       const answerSelections = activeCheckpointTest
         ? activeCheckpointTest.questionIds.flatMap((questionId) => {
-            const question = allQuestions.find(
-              (item) => item.id === questionId,
-            );
+            const question = allQuestionsById.get(questionId);
             const qbankId =
               question?.qbankId ?? activeCheckpointTest.qbankId ?? 'smle-gs';
             const answer =
@@ -6683,7 +6728,7 @@ export default function MedGuardApp({
       window.removeEventListener('pagehide', pageHideHandler);
       document.removeEventListener('visibilitychange', visibilityHandler);
     };
-  }, [allQuestions, flushCloudState, hydrated, user]);
+  }, [allQuestionsById, flushCloudState, hydrated, user]);
 
   useEffect(() => {
     if (!user || !collaborationHydrated || user.status !== 'approved') return;
@@ -6787,8 +6832,9 @@ export default function MedGuardApp({
     const refreshAccount = async () => {
       if (stopped || !navigator.onLine || document.visibilityState === 'hidden')
         return;
+      const session = personalStateSession.current;
       await observeCloudflareUser((account) => {
-        if (!stopped) setUser(account ?? null);
+        if (!stopped && personalStateSession.current === session) setUser(account ?? null);
       }).catch(() => undefined);
     };
     const refreshCollaboration = async () => {
@@ -6853,12 +6899,13 @@ export default function MedGuardApp({
       requestCollaborationRefresh.current = undefined;
       disconnect();
     };
-  }, [liveChannels, collaborationHydrated]);
+  }, [liveChannels, collaborationHydrated, setUser]);
 
   const checkpointPersonalState = useCallback(
     async (kind: 'exam' | 'flashcards', testId?: string) => {
       if (!user) return;
       const snapshot = stateSnapshot.current;
+      const receipt: PersonalStateReceipt = { session: personalStateSession.current, snapshot, dirtyBefore: stateDirty.current, full: false };
       const checkpointTest =
         kind === 'exam'
           ? (snapshot.tests.find((item) => item.id === testId) ??
@@ -6866,9 +6913,7 @@ export default function MedGuardApp({
           : undefined;
       const answerSelections = checkpointTest
         ? checkpointTest.questionIds.flatMap((questionId) => {
-            const question = allQuestions.find(
-              (item) => item.id === questionId,
-            );
+            const question = allQuestionsById.get(questionId);
             const qbankId =
               question?.qbankId ?? checkpointTest.qbankId ?? 'smle-gs';
             const answer =
@@ -6881,10 +6926,11 @@ export default function MedGuardApp({
           })
         : [];
       const checkpointAnswerStats = liveSnapshot.current.collaboration.answerStats;
-      checkpointInFlight.current = true;
+      checkpointInFlight.current += 1;
       setSyncStatus('syncing');
       try {
         await saveLocalState(user.uid, snapshot);
+        if (personalStateSession.current !== receipt.session) return;
         if (!snapshot.settings.autoSync) {
           setSyncStatus(navigator.onLine ? 'local' : 'offline');
           return;
@@ -6893,27 +6939,25 @@ export default function MedGuardApp({
           kind === 'exam'
             ? await saveExamCheckpoint(user.uid, snapshot, answerSelections)
             : await saveFlashcardCheckpoint(user.uid, snapshot);
+        const result = acceptPersonalStateReceipt(receipt, remote);
+        if (!result) return;
         if (kind === 'exam')
           lastSavedCollaboration.current = {
             ...lastSavedCollaboration.current,
             answerStats: checkpointAnswerStats,
           };
-        if (remote) {
-          if (stateSnapshot.current === snapshot) stateDirty.current = false;
-          const merged = mergeAppStates(stateSnapshot.current, remote);
-          cloudStateSnapshot.current = merged;
-          setStateRaw(merged);
-          await saveLocalState(user.uid, merged);
-        }
-        setSyncStatus(navigator.onLine ? 'synced' : 'offline');
+        if (remote && result.state !== snapshot) await saveLocalState(user.uid, result.state);
+        if (personalStateSession.current !== receipt.session) return;
+        setSyncStatus(navigator.onLine ? (result.dirty ? 'local' : 'synced') : 'offline');
       } catch {
+        if (personalStateSession.current !== receipt.session) return;
         stateDirty.current = true;
         setSyncStatus(navigator.onLine ? 'local' : 'offline');
       } finally {
-        checkpointInFlight.current = false;
+        if (personalStateSession.current === receipt.session) checkpointInFlight.current -= 1;
       }
     },
-    [allQuestions, user],
+    [acceptPersonalStateReceipt, allQuestionsById, user],
   );
   const setFlashcardReviewActivity = useCallback((active: boolean) => {
     flashcardReviewActive.current = active;
@@ -6937,31 +6981,35 @@ export default function MedGuardApp({
   const persistDailyGoal = useCallback(
     async (dailyGoal: number) => {
       if (!user) throw new Error('Sign in to save your daily goal.');
+      const session = personalStateSession.current;
+      const dirtyBefore = stateDirty.current;
       const next: AppState = {
         ...stateSnapshot.current,
         clientUpdatedAt: new Date().toISOString(),
         settings: { ...stateSnapshot.current.settings, dailyGoal },
       };
-      cloudStateSnapshot.current = next;
+      const receipt: PersonalStateReceipt = { session, snapshot: next, dirtyBefore, full: false };
+      stateSnapshot.current = next;
+      stateDirty.current = true;
+      cloudStateSnapshot.current = undefined;
       setStateRaw(next);
-      await saveLocalState(user.uid, next);
-      stateDirty.current = false;
       setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
       try {
+        await saveLocalState(user.uid, next);
+        if (personalStateSession.current !== session) return;
         const remote = await saveDailyGoal(user.uid, next, dailyGoal);
-        if (remote) {
-          const merged = mergeAppStates(next, remote);
-          cloudStateSnapshot.current = merged;
-          setStateRaw(merged);
-          await saveLocalState(user.uid, merged);
-        }
-        setSyncStatus(navigator.onLine ? 'synced' : 'offline');
+        const result = acceptPersonalStateReceipt(receipt, remote);
+        if (!result) return;
+        if (remote && result.state !== next) await saveLocalState(user.uid, result.state);
+        if (personalStateSession.current !== session) return;
+        setSyncStatus(navigator.onLine ? (result.dirty ? 'local' : 'synced') : 'offline');
       } catch (error) {
+        if (personalStateSession.current !== session) return;
         setSyncStatus(navigator.onLine ? 'local' : 'offline');
         if (navigator.onLine) throw error;
       }
     },
-    [user],
+    [acceptPersonalStateReceipt, user],
   );
 
   async function manualSync() {
@@ -6970,8 +7018,10 @@ export default function MedGuardApp({
       return;
     }
     setSyncStatus('syncing');
+    const snapshot = stateSnapshot.current;
+    const receipt: PersonalStateReceipt = { session: personalStateSession.current, snapshot, dirtyBefore: stateDirty.current, full: true };
     try {
-      const next = { ...state, lastSyncAt: new Date().toISOString() };
+      const next = { ...snapshot, lastSyncAt: new Date().toISOString() };
       const [remote, confirmed] = await Promise.all([
         saveCloudState(user.uid, next),
         saveCollaborationState(
@@ -6980,21 +7030,22 @@ export default function MedGuardApp({
           user.uid,
         ),
       ]);
-      if (liveSnapshot.current.user?.uid !== user.uid) return;
-      const synchronized = remote ? mergeAppStates(next, remote) : next;
+      const result = acceptPersonalStateReceipt(receipt, remote);
+      if (!result) return;
+      const synchronized = result.state;
       const localCollaboration = mergeLiveState(collaboration, liveSnapshot.current.collaboration, confirmed);
       await Promise.all([
         saveLocalState(user.uid, synchronized),
         saveLocalCollaboration(localCollaboration, user.uid),
       ]);
+      if (personalStateSession.current !== receipt.session) return;
       lastSavedCollaboration.current = confirmed;
-      stateDirty.current = false;
-      cloudStateSnapshot.current = synchronized;
-      setStateRaw(synchronized);
       const drafts = await loadRejectedCollaboration(user.uid);
+      if (personalStateSession.current !== receipt.session) return;
       setSyncIssue(drafts.length ? 'Some changes need review. Download the preserved drafts from Settings.' : '');
-      setSyncStatus('synced');
+      setSyncStatus(stateDirty.current ? 'local' : 'synced');
     } catch (error) {
+      if (personalStateSession.current !== receipt.session) return;
       reportSyncError(error);
     }
   }

@@ -1,4 +1,6 @@
 import { auditStatement } from './platform-server';
+import { collaborationValue, sameCollaborationValue, collaborationBaseHash } from '@/features/collaboration/domain/collaboration-values';
+import { collaborationWriteGuard, type CollaborationWriteSnapshot } from '@/server/db/collaboration-write-guard';
 import { announcementSettings } from '@/features/announcements/server/announcement-settings';
 import { validOptionalExplanationImages } from '@/features/media/domain/image-attachments';
 import { bankDeletionStatements } from '@/features/qbanks/server/bank-deletion';
@@ -10,6 +12,7 @@ import { accountBlocked } from '@/features/administration/domain/account-block';
 import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { appStateFreshness } from './merge-app-state';
 import { stateBudgetError, stateBytes, STATE_BUDGET_BYTES } from '@/features/state/domain/state-budget';
+import { stateQuestionReferences } from '@/features/state/domain/question-references';
 import {
   hasR2Storage,
   R2QuotaExceededError,
@@ -94,10 +97,13 @@ type RecordOperation = {
   collection: string;
   id: string;
   value?: unknown;
+  baseValue?: unknown;
+  baseHash?: string;
 };
 type CollaborationAuthorizationState = CollaborationState & {
   shareLinkBankIds?: Record<string, string>;
   deletedBanks?: Record<string, { id: string; ownerId: string }>;
+  writeSnapshots?: CollaborationWriteSnapshot[];
 };
 type StoredRecord = {
   type: string;
@@ -758,9 +764,12 @@ export async function logout(request: Request) {
 }
 
 export async function cleanDeletedState(state: AppState): Promise<AppState> {
-  const rows = await env.DB.prepare('SELECT id FROM retired_questions').all<{
-    id: string;
-  }>();
+  const referenced = stateQuestionReferences(state);
+  const rows = referenced.length
+    ? await env.DB.prepare(`SELECT retired.id FROM json_each(?) AS requested
+        CROSS JOIN retired_questions AS retired WHERE retired.id=requested.value`)
+        .bind(JSON.stringify(referenced)).all<{ id: string }>()
+    : { results: [] as Array<{ id: string }> };
   const deleted = new Set(rows.results.map((x) => x.id));
   const keep = (id: string) => !deleted.has(id);
   return {
@@ -778,19 +787,22 @@ export async function cleanDeletedState(state: AppState): Promise<AppState> {
     revisions: (state.revisions ?? []).map((r) =>
       keep(r.questionId) ? r : { ...r, questionId: '#deleted' },
     ),
-    tests: state.tests.map((t) => ({
+    tests: state.tests.map((t) => {
+      const questionIds = t.questionIds.filter(keep);
+      return {
       ...t,
-      questionIds: t.questionIds.filter(keep),
+      questionIds,
       currentIndex: Math.max(
         0,
-        Math.min(t.currentIndex, t.questionIds.filter(keep).length - 1),
+        Math.min(t.currentIndex, questionIds.length - 1),
       ),
       answers: Object.fromEntries(
         Object.entries(t.answers).filter(([id]) => keep(id)),
       ),
       revealed: t.revealed.filter(keep),
       graded: t.graded.filter(keep),
-    })),
+      };
+    }),
   };
 }
 
@@ -1477,6 +1489,7 @@ type StateRecord = {
   collection: string;
   id: string;
   value: unknown;
+  payload?: string;
 };
 
 async function recordsByKeys(
@@ -1503,6 +1516,7 @@ async function recordsByKeys(
     collection: row.type,
     id: row.id,
     value: JSON.parse(row.payload) as unknown,
+    payload: row.payload,
   }));
 }
 
@@ -1611,7 +1625,16 @@ async function collaborationStateForOperations(
     ).values(),
   ];
   const tombstones = await recordsByKeys([...qbankIds].map(id => ({ collection: 'qbankTombstones', id })));
+  const storedPayloads = new Map(directRows.map(row => [`${row.collection}\u0000${row.id}`, row.payload]));
+  const storedProfiles = new Map(profilesResult.results.map(row => [(JSON.parse(row.profile_json) as MemberProfile).uid, row.profile_json]));
   return Object.assign(recordsToState([...rows, ...tombstones], profiles), {
+    writeSnapshots: operations.filter(operation => operation.collection !== 'answerStats' || operation.type === 'delete').map(operation => ({
+      collection: operation.collection,
+      id: operation.id,
+      payload: operation.collection === 'profiles'
+        ? storedProfiles.get(operation.id) ?? null
+        : storedPayloads.get(`${operation.collection}\u0000${operation.id}`) ?? null,
+    })),
     shareLinkBankIds: Object.fromEntries(directRows.filter(row => row.collection === 'qbankShareLinks' && isRecord(row.value))
       .map(row => [row.id, (row.value as { qbankId: string }).qbankId])),
     deletedBanks: Object.fromEntries(tombstones.map(row => [row.id, row.value])),
@@ -2418,36 +2441,6 @@ function reviewedQuestionWriteAllowed(
   });
 }
 
-function collaborationValue(
-  state: CollaborationState,
-  collection: string,
-  id: string,
-): unknown {
-  const arrays: Record<string, unknown[]> = {
-    qbanks: state.qbanks,
-    qbankFolders: state.qbankFolders,
-    qbankMemberships: state.memberships,
-    qbankInvitations: state.invitations,
-    profiles: state.members,
-    universityIds: state.allowedUniversityIds,
-    adminInvites: state.adminInvites,
-    questionProposals: state.proposals,
-    roleApplications: state.roleApplications,
-    sharedQuestions: state.approvedQuestions,
-    qbankSpecialties: state.specialties,
-    qbankTopics: state.topics,
-    auditLog: state.auditLog,
-  };
-  if (collection === 'answerStats') return state.answerStats[id];
-  if (collection === 'sharedNotes') return state.sharedNotes[id];
-  if (collection === 'system' && id === 'accessControl')
-    return state.blockedAccess;
-  if (collection === 'system' && id === 'security') return state.security;
-  return arrays[collection]?.find(
-    (value) => isRecord(value) && (value.id === id || value.uid === id),
-  );
-}
-
 function qbankFolderChangeSetValid(
   operations: RecordOperation[],
   state: CollaborationState,
@@ -2532,6 +2525,10 @@ export async function saveCollaboration(request: Request) {
   );
   if (!Array.isArray(input.operations) || input.operations.length > 500)
     return json({ error: 'Invalid collaboration change set.' }, 400);
+  if (input.operations.some(operation => !isRecord(operation) || typeof operation.id !== 'string' || typeof operation.collection !== 'string' || !['set', 'delete'].includes(operation.type) ||
+      (Object.hasOwn(operation, 'baseHash') && (typeof operation.baseHash !== 'string' || !/^[a-f0-9]{64}$/.test(operation.baseHash)))) ||
+      new Set(input.operations.map(operation => `${operation.collection}\u0000${operation.id}`)).size !== input.operations.length)
+    return json({ error: 'Invalid or repeated collaboration operation.' }, 400);
   const state = await collaborationStateForOperations(user, input.operations);
   const deletedBanks = new Set(input.operations.filter(operation =>
     operation.collection === 'qbanks' && operation.type === 'delete').map(operation => operation.id));
@@ -2639,6 +2636,25 @@ export async function saveCollaboration(request: Request) {
       { error: 'Each account can have only one membership per QBank.' },
       409,
     );
+  const conflictChecks = await Promise.all(input.operations.map(async operation => {
+    if ((operation.collection === 'answerStats' && operation.type === 'set') || operation.collection === 'qbankShareLinks') return false;
+    let current = collaborationValue(state, operation.collection, operation.id);
+    if (operation.collection === 'profiles' && user.role !== 'super_admin' && current)
+      current = accessManagerProfile(current as MemberProfile);
+    if (Object.hasOwn(operation, 'baseHash'))
+      return operation.baseHash !== await collaborationBaseHash(current ?? null);
+    if (Object.hasOwn(operation, 'baseValue'))
+      return !sameCollaborationValue(operation.baseValue, current ?? null);
+    // Existing clients already carry an explicit shared-note version. Keep
+    // that contract; the transaction assertion below closes the read/write race.
+    if (operation.collection === 'sharedNotes' && operation.type === 'set') return false;
+    // A legacy client may create a record, but must refresh before replacing or
+    // deleting an existing record without an expected base. Never silently win.
+    return current !== undefined;
+  }));
+  const conflicts = input.operations.filter((_operation, index) => conflictChecks[index]);
+  if (conflicts.length)
+    return json({ error: 'This data changed elsewhere. Refresh and review your preserved draft.', code: 'COLLABORATION_CONFLICT', conflicts: conflicts.map(({ collection, id }) => ({ collection, id })) }, 409);
   const proposalOperations = input.operations.filter(
     (operation) =>
       operation.collection === 'questionProposals' && operation.type === 'set',
@@ -2847,7 +2863,11 @@ export async function saveCollaboration(request: Request) {
         payload: JSON.stringify(value),
       };
     });
-  const statements: D1PreparedStatement[] = [];
+  const guardId = crypto.randomUUID();
+  const changedKeys = new Set(input.operations.map(operation => `${operation.collection}\u0000${operation.id}`));
+  const guardedSnapshots = (state.writeSnapshots ?? []).filter(snapshot => changedKeys.has(`${snapshot.collection}\u0000${snapshot.id}`));
+  const statements: D1PreparedStatement[] = guardedSnapshots.length
+    ? [collaborationWriteGuard(env.DB, guardedSnapshots, guardId)] : [];
   const deletedQBankIds = input.operations
     .filter(
       (operation) =>
@@ -2915,7 +2935,14 @@ export async function saveCollaboration(request: Request) {
           : { collection: operation.collection },
       ),
     );
-  if (statements.length) await env.DB.batch(statements);
+  if (guardedSnapshots.length) statements.push(env.DB.prepare('DELETE FROM collaboration_write_guards WHERE id=?').bind(guardId));
+  try {
+    if (statements.length) await env.DB.batch(statements);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('collaboration_snapshot_matches'))
+      return json({ error: 'This data changed while saving. Review your preserved draft.', code: 'COLLABORATION_CONFLICT' }, 409);
+    throw error;
+  }
   await emitUsage(user.uid, { privateBanksCreated: input.operations.filter(operation => operation.collection === 'qbanks' && operation.type === 'set' && (operation.value as QBank)?.visibility === 'private' && !state.qbanks.some(bank => bank.id === operation.id)).length });
   return json({ ok: true, operations: input.operations }, 200, deletedQBankIds.length ? { 'x-qraft-media-cleanup': '1' } : undefined);
 }

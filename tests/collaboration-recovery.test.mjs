@@ -61,7 +61,7 @@ void test('deleting a large bank produces one parent operation rather than hundr
     ),
   };
   assert.deepEqual(m.collaborationChangeSet(empty(), before), [
-    { collection: 'qbanks', id: 'a', type: 'delete' },
+    { collection: 'qbanks', id: 'a', type: 'delete', baseValue: before.qbanks[0] },
   ]);
 });
 

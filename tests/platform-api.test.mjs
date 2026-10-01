@@ -16,6 +16,7 @@ import { exactImportSkipApiTests } from './exact-import-skip-api.mjs';
 import { sharedNoteImageApiTests } from './shared-note-images-api.mjs';
 import { announcementApiTests } from './announcement-api.mjs';
 import { contributionEconomyApiTests } from './contribution-economy-api.mjs';
+import { collaborationConflictApiTests } from './collaboration-conflicts-api.mjs';
 
 function decodeBase32(value) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -208,7 +209,23 @@ print(json.dumps(out))`,
       )
       .run();
   }
-  const call = async (uid, path, body, method = body ? 'POST' : 'GET') => {
+  const call = async (uid, path, body, method = body ? 'POST' : 'GET', { withBaseValues = true } = {}) => {
+    // Model the snapshot carried by current clients. Security/concurrency tests
+    // can opt out to exercise missing or explicitly stale preconditions.
+    if (withBaseValues && path === '/collaboration' && method === 'PUT' && body?.operations?.some(op => op.collection !== 'answerStats' && !Object.hasOwn(op, 'baseValue'))) {
+      const response = await call(uid, '/collaboration');
+      const state = response.data.collaboration;
+      if (state) {
+        const fields = { qbanks: 'qbanks', qbankFolders: 'qbankFolders', qbankMemberships: 'memberships', qbankInvitations: 'invitations', profiles: 'members', universityIds: 'allowedUniversityIds', adminInvites: 'adminInvites', questionProposals: 'proposals', roleApplications: 'roleApplications', sharedQuestions: 'approvedQuestions', qbankSpecialties: 'specialties', qbankTopics: 'topics' };
+        body = { ...body, operations: body.operations.map(op => {
+          if (Object.hasOwn(op, 'baseValue') || op.collection === 'answerStats') return op;
+          const value = op.collection === 'system' ? (op.id === 'accessControl' ? state.blockedAccess : state.security)
+            : op.collection === 'sharedNotes' ? state.sharedNotes[op.id]
+            : state[fields[op.collection]]?.find(item => item.id === op.id || item.uid === op.id);
+          return { ...op, baseValue: value ?? null };
+        }) };
+      }
+    }
     const response = await mf.dispatchFetch(
       `https://qraft.test/api/cloudflare${path}`,
       {
@@ -281,6 +298,7 @@ print(json.dumps(out))`,
   };
   let codeId;
   await saasApiTests(t, { db, call, mf, emptyState });
+  await collaborationConflictApiTests(t, { db, call });
   await t.test(
     'Superadmin plan assignments override every entitlement, including Free, and preserve billing and gifts',
     async () => {

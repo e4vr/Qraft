@@ -42,7 +42,7 @@ void test('QBank changes sync without client-authored audit records', async () =
     auditLog: [{ id: 'local-create', action: 'qbank_created' }],
   };
   assert.deepEqual(collaborationChangeSet(created, base), [
-    { collection: 'qbanks', id: bank.id, value: bank, type: 'set' },
+    { collection: 'qbanks', id: bank.id, value: bank, type: 'set', baseValue: null },
   ]);
 
   const edited = {
@@ -54,10 +54,10 @@ void test('QBank changes sync without client-authored audit records', async () =
     ],
   };
   assert.deepEqual(collaborationChangeSet(edited, created), [
-    { collection: 'qbanks', id: bank.id, value: edited.qbanks[0], type: 'set' },
+    { collection: 'qbanks', id: bank.id, value: edited.qbanks[0], type: 'set', baseValue: bank },
   ]);
   assert.deepEqual(collaborationChangeSet({ ...created, qbanks: [] }, created), [
-    { collection: 'qbanks', id: bank.id, type: 'delete' },
+    { collection: 'qbanks', id: bank.id, type: 'delete', baseValue: bank },
   ]);
   assert.deepEqual(
     collaborationChangeSet({ ...base, auditLog: created.auditLog }, base),

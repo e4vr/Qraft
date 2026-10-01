@@ -227,7 +227,10 @@ async function queueStateOperation(
   const payload = operationPayload(kind, state, dailyGoal, extra);
   const capacityError = stateBudgetError(state);
   if (capacityError) throw new Error(capacityError);
-  if (operationMatchesSaved(uid, kind, payload)) return undefined;
+  if (operationMatchesSaved(uid, kind, payload)) {
+    const saved = JSON.parse(lastSavedState.get(uid)!) as AppState;
+    return { ok: true, state: saved, revision: stateRevision.get(uid) ?? 0, updatedAt: saved.lastSyncAt ?? '', unchanged: true };
+  }
   const operation: StateSyncOperation = {
     id: crypto.randomUUID(),
     uid,
