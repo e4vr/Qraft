@@ -11,18 +11,23 @@ export class RealtimeChannel extends DurableObject<Cloudflare.Env> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('Upgrade required', { status: 426 });
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
-    pair[1].serializeAttachment({ clientId: request.headers.get('x-qraft-client-id') ?? '' });
+    pair[1].serializeAttachment({ clientId: request.headers.get('x-qraft-client-id') ?? '',
+      version: request.headers.get('x-qraft-live-version') === '2' ? 2 : 1 });
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
-  publish(resources: string[], originClientId = '') {
+  publish(resources: string[], originClientId = '', legacyOnly = false) {
     const message = JSON.stringify({ type: 'resources_changed', resources: [...new Set(resources)].slice(0, 20) });
     for (const socket of this.ctx.getWebSockets()) {
       try {
-        const { clientId } = socket.deserializeAttachment() as { clientId?: string };
+        const { clientId, version } = socket.deserializeAttachment() as { clientId?: string; version?: number };
+        if (legacyOnly && version === 2) continue;
         if (originClientId && clientId === originClientId) continue;
         else socket.send(message);
       } catch { /* A disconnected client will refresh after reconnecting. */ }
     }
+  }
+  publishLegacy(resources: string[], originClientId = '') {
+    this.publish(resources, originClientId, true);
   }
   async reserveUsageBudget(count: number) {
     if (!Number.isInteger(count) || count < 1 || count > 256) return false;

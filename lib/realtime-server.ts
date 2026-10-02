@@ -12,6 +12,7 @@ import {
 
 type RealtimeStub = DurableObjectStub & {
   publish(resources: string[], originClientId?: string): Promise<void>;
+  publishLegacy(resources: string[], originClientId?: string): Promise<void>;
 };
 
 function realtimeStub(channel: string): RealtimeStub {
@@ -35,12 +36,19 @@ export async function connectRealtime(request: Request) {
       const bank = state.qbanks.find(b => b.id === channel.slice(5));
       allowed = Boolean(bank && (canAccessBank(user, bank, state.memberships) || canReviewBank(user, bank, state.memberships)));
     }
+    if (channel.startsWith('review:bank:')) {
+      const bankId = channel.slice('review:bank:'.length);
+      const state = await bankAccessState(bankId);
+      const bank = state.qbanks.find(item => item.id === bankId);
+      allowed = Boolean(bank && canReviewBank(user, bank, state.memberships));
+    }
   }
   if (!allowed) return json({ error: 'Channel not available.' }, 403);
   if (!env.REALTIME) return json({ error: 'Live connection is temporarily unavailable.' }, 503);
   // Do not forward cookies or accept client-selected publishing actions.
   const clientId = url.searchParams.get('client') ?? '';
   const headers = new Headers({ Upgrade: 'websocket' });
+  if (url.searchParams.get('v') === '2') headers.set('x-qraft-live-version', '2');
   if (/^[a-f0-9-]{20,80}$/i.test(clientId)) headers.set('x-qraft-client-id', clientId);
   return realtimeStub(channel).fetch(new Request('https://channel/connect', { headers }));
 }
@@ -48,8 +56,13 @@ export async function connectRealtime(request: Request) {
 export async function publishChanges(channels: Iterable<string>, topics: Iterable<string> = ['collaboration'], originClientId = '') {
   if (!env.REALTIME) return;
   const resources = [...new Set(topics)];
-  const results = await Promise.allSettled([...new Set(channels)].map(channel => realtimeStub(channel).publish(resources, originClientId)));
-  if (results.some(result => result.status === 'rejected')) console.error(JSON.stringify({ event: 'realtime_publish_failed' }));
+  const audience = [...new Set(channels)];
+  const results = await Promise.allSettled(audience.map(channel => realtimeStub(channel).publish(resources, originClientId)));
+  const failed = audience.filter((_, index) => results[index].status === 'rejected');
+  if (failed.length) {
+    const retries = await Promise.allSettled(failed.map(channel => realtimeStub(channel).publish(resources, originClientId)));
+    if (retries.some(result => result.status === 'rejected')) console.error(JSON.stringify({ event: 'realtime_publish_failed' }));
+  }
 }
 
 // Called only after a mutation has succeeded. No content, names or record IDs
@@ -79,6 +92,26 @@ export async function notifyMutation(request: Request, response?: Response) {
     if (owner) audience.add(`user:${owner}`);
     if (user) audience.add(`user:${user.uid}`);
     await publishChanges(audience, ['preformed-results'], request.headers.get('x-qraft-client-id') ?? '');
+    return;
+  }
+  if (path[0] === 'platform' && path[1] === 'import') {
+    const bankId = typeof input.qbankId === 'string' ? input.qbankId : '';
+    const origin = request.headers.get('x-qraft-client-id') ?? '';
+    if (response?.headers.get('x-qraft-import-content-changed') === '0') {
+      await publishChanges(['admin', ...(user ? [`user:${user.uid}`] : [])], ['json-import-monitor', 'audit'], origin);
+      return;
+    }
+    const reviewers = ['admin', ...(user ? [`user:${user.uid}`] : []), ...(bankId ? [`review:bank:${bankId}`] : [])];
+    await publishChanges(reviewers, ['review-queue', 'contributions', 'audit'], origin);
+    await publishChanges(['admin', ...(user ? [`user:${user.uid}`] : [])], ['json-import-monitor'], origin);
+    if (bankId && response?.headers.get('x-qraft-classification-changed') === '1')
+      await publishChanges([`bank:${bankId}`], ['classification'], origin);
+    // Older open tabs do not have the new reviewer channel. Preserve their
+    // existing notifications until they reconnect with protocol version 2.
+    if (bankId && env.REALTIME) {
+      try { await realtimeStub(`bank:${bankId}`).publishLegacy(['review-queue', 'question-catalog'], origin); }
+      catch { await publishChanges([`bank:${bankId}`], ['review-queue', 'question-catalog'], origin); }
+    }
     return;
   }
   const channels = new Set<string>(['admin']);

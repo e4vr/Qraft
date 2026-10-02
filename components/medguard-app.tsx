@@ -6814,6 +6814,8 @@ export default function MedGuardApp({
             ? [
                 'catalog',
                 ...collaboration.qbanks.map((bank) => `bank:${bank.id}`),
+                ...collaboration.qbanks.filter(bank => canReviewBank(user, bank, collaboration.memberships))
+                  .map(bank => `review:bank:${bank.id}`),
               ]
             : []),
           ...(hasModeratorRole(user) &&
@@ -6889,7 +6891,7 @@ export default function MedGuardApp({
     requestCollaborationRefresh.current = collaborationRefresh.request;
     const disconnect = openLiveChannels(channels, (topic) => {
       if (['account', 'access', 'subscriptions', 'connected'].includes(topic)) accountRefresh.request();
-      if (['collaboration', 'question-catalog', 'catalog', 'review-queue', 'shared-notes', 'access', 'connected'].includes(topic))
+      if (['collaboration', 'question-catalog', 'classification', 'catalog', 'review-queue', 'shared-notes', 'access', 'connected'].includes(topic))
         collaborationRefresh.request();
     });
     return () => {

@@ -67,6 +67,30 @@ export const qbankClassificationRevisions = sqliteTable(
   },
 );
 
+export const collaborationChanges = sqliteTable('collaboration_changes', {
+  sequence: integer('sequence').primaryKey({ autoIncrement: true }),
+  collection: text('collection').notNull(),
+  recordId: text('record_id').notNull(),
+  qbankId: text('qbank_id'),
+  ownerId: text('owner_id'),
+  resetRequired: integer('reset_required').notNull().default(0),
+});
+
+export const importQuestionKeys = sqliteTable('import_question_keys', {
+  recordType: text('record_type').notNull(), recordId: text('record_id').notNull(),
+  qbankId: text('qbank_id').notNull(), stemKey: text('stem_key').notNull(), contentKey: text('content_key'),
+}, table => [
+  primaryKey({ columns: [table.recordType, table.recordId] }),
+  index('idx_import_question_keys_stem').on(table.qbankId, table.stemKey),
+  index('idx_import_question_keys_content').on(table.qbankId, table.contentKey),
+]);
+export const importSearchState = sqliteTable('import_search_state', {
+  id: integer('id').primaryKey().notNull(), revision: integer('revision').notNull().default(0),
+}, table => [check('import_search_state_singleton', sql`${table.id}=1`)]);
+export const importSearchGuards = sqliteTable('import_search_guards', {
+  id: text('id').primaryKey().notNull(), valid: integer('valid').notNull(),
+}, table => [check('import_search_snapshot_matches', sql`${table.valid}=1`)]);
+
 export const classificationOperations = sqliteTable(
   'classification_operations',
   {
@@ -108,6 +132,9 @@ export const records = sqliteTable(
     index('idx_records_type_updated_at').on(table.type, sql`${table.updatedAt} DESC`),
     index('idx_records_pending_owner_updated').on(table.ownerId, sql`${table.updatedAt} DESC`).where(sql`${table.type}='questionProposals' AND json_extract(${table.payload},'$.status')='pending'`),
     index('idx_records_membership_user_role').on(sql`json_extract(${table.payload},'$.userId')`, sql`json_extract(${table.payload},'$.role')`, table.qbankId).where(sql`${table.type}='qbankMemberships'`),
+    index('idx_records_type_question_reference').on(table.type, sql`json_extract(${table.payload},'$.questionId')`).where(sql`json_extract(${table.payload},'$.questionId') IS NOT NULL`),
+    index('idx_records_audit_entity_reference').on(sql`json_extract(${table.payload},'$.entityId')`).where(sql`${table.type}='auditLog'`),
+    index('idx_records_share_link_bank').on(sql`json_extract(${table.payload},'$.qbankId')`).where(sql`${table.type}='qbankShareLinks'`),
   ],
 );
 
@@ -116,7 +143,7 @@ export const questionIds = sqliteTable('question_ids', {
   qbankId: text('qbank_id').notNull(),
   createdById: text('created_by_id').notNull(),
   createdAt: text('created_at').notNull(),
-});
+}, table => [index('idx_question_ids_qbank').on(table.qbankId)]);
 
 export const questionIdAllocator = sqliteTable('question_id_allocator', {
   scope: text('scope').primaryKey(),

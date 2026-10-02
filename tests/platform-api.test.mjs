@@ -17,6 +17,7 @@ import { sharedNoteImageApiTests } from './shared-note-images-api.mjs';
 import { announcementApiTests } from './announcement-api.mjs';
 import { contributionEconomyApiTests } from './contribution-economy-api.mjs';
 import { collaborationConflictApiTests } from './collaboration-conflicts-api.mjs';
+import { collaborationDeltaApiTests } from './collaboration-delta-api.mjs';
 
 function decodeBase32(value) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -299,6 +300,7 @@ print(json.dumps(out))`,
   let codeId;
   await saasApiTests(t, { db, call, mf, emptyState });
   await collaborationConflictApiTests(t, { db, call });
+  await collaborationDeltaApiTests(t, { db, call, mf });
   await t.test(
     'Superadmin plan assignments override every entitlement, including Free, and preserve billing and gifts',
     async () => {

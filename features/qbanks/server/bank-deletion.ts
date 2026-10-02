@@ -38,13 +38,13 @@ export function bankDeletionStatements(
     env.DB.prepare(
       "DELETE FROM review_completion_claims WHERE proposal_id IN (SELECT id FROM records WHERE type='questionProposals' AND qbank_id=?)",
     ).bind(id),
-    env.DB.prepare(`DELETE FROM records WHERE qbank_id=?
-      OR (type='qbanks' AND id=?)
-      OR (type='qbankShareLinks' AND json_extract(payload,'$.qbankId')=?)`).bind(
-      id,
-      id,
-      id,
-    ),
+    // Separate indexed predicates; the legacy JSON share-link fallback must
+    // not force a full records scan. All statements remain in one D1 batch.
+    env.DB.prepare('DELETE FROM records WHERE qbank_id=?').bind(id),
+    env.DB.prepare("DELETE FROM records WHERE type='qbanks' AND id=?").bind(id),
+    env.DB.prepare(
+      "DELETE FROM records WHERE type='qbankShareLinks' AND json_extract(payload,'$.qbankId')=?",
+    ).bind(id),
     ...[
       'qbank_classification_revisions',
       'classification_operations',

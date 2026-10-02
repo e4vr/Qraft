@@ -1,4 +1,6 @@
-import { ApiError, api, setApiCache } from '@/lib/api-client';
+import { ApiError, api, apiTransport, setApiCache } from '@/lib/api-client';
+import { policyFor, readThrough, resourceKey, resourceCacheGeneration } from '@/lib/resource-data';
+import { applyCollaborationDelta, type CollaborationReadResponse } from '../domain/collaboration-delta';
 import type { AppUser, CollaborationState } from '@/lib/medguard-types';
 import {
   acknowledgeCollaborationSync,
@@ -6,6 +8,9 @@ import {
   loadCollaborationSyncOutbox,
   noteCollaborationSyncAttempt,
   preserveRejectedCollaboration,
+  loadConfirmedCollaboration,
+  saveConfirmedCollaboration,
+  type ConfirmedCollaborationSnapshot,
 } from '@/lib/local-db';
 import { withStateSyncLock } from '@/lib/tab-sync';
 import type { CollaborationSyncSnapshot } from '../domain/collaboration-outbox';
@@ -22,14 +27,38 @@ export type CollaborationSyncNotice = {
 type CollaborationResponse = { collaboration: CollaborationState };
 
 let collaborationScope = '';
+const confirmedReads = new Map<string, ConfirmedCollaborationSnapshot>();
+let confirmedGeneration = resourceCacheGeneration();
 
 function collaborationRequest(user: AppUser, force = false) {
   collaborationScope = user.uid;
-  return api<CollaborationResponse>('/collaboration', {
-    cacheScope: user.uid,
-    expectedUserId: user.uid,
-    forceRefresh: force,
-    requestReason: force ? 'explicit-refresh' : undefined,
+  if (confirmedGeneration !== resourceCacheGeneration()) {
+    confirmedReads.clear();
+    confirmedGeneration = resourceCacheGeneration();
+  }
+  const generation = confirmedGeneration;
+  return readThrough<CollaborationResponse>({
+    key: resourceKey('/collaboration', 'GET', undefined, user.uid),
+    tags: policyFor('/collaboration').tags,
+    force,
+    reason: force ? 'explicit-refresh' : undefined,
+    load: async reason => {
+      const base = confirmedReads.get(user.uid) ?? await loadConfirmedCollaboration(user.uid).catch(() => undefined);
+      const valid = base?.cursor?.version === 1 && base.cursor.uid === user.uid && Boolean(base.cursor.scope);
+      const path = valid ? `/collaboration?since=${base.cursor.sequence}&syncUid=${encodeURIComponent(user.uid)}&syncScope=${encodeURIComponent(base.cursor.scope)}` : '/collaboration';
+      const response = await apiTransport<CollaborationReadResponse>(path, { expectedUserId: user.uid }, reason);
+      // Plain full snapshots keep older servers compatible during rollout.
+      const snapshot: ConfirmedCollaborationSnapshot = 'delta' in response && base
+        ? { collaboration: applyCollaborationDelta(base.collaboration, response.delta), cursor: response.delta.cursor }
+        : response as ConfirmedCollaborationSnapshot;
+      if (resourceCacheGeneration() === generation && snapshot.cursor?.uid === user.uid) {
+        // Persistence failure leaves the old cursor, so changes are replayed.
+        await saveConfirmedCollaboration(user.uid, snapshot).then(() => {
+          if (resourceCacheGeneration() === generation) confirmedReads.set(user.uid, snapshot);
+        }).catch(() => undefined);
+      }
+      return { collaboration: snapshot.collaboration };
+    },
   });
 }
 

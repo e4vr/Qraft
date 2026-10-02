@@ -130,6 +130,15 @@ async function network<T>(path: string, init: RequestInit, reason: RequestReason
   return payload as T;
 }
 
+// Custom resource loaders use readThrough for coalescing/invalidation. This
+// exposes the account-bound transport without introducing another cache.
+export function apiTransport<T>(path: string, init: ApiRequestInit, reason: RequestReason) {
+  const { expectedUserId, ...requestInit } = init;
+  const headers = new Headers(requestInit.headers);
+  if (expectedUserId) headers.set('x-qraft-account', expectedUserId);
+  return network<T>(path, { ...requestInit, headers }, reason);
+}
+
 export async function api<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
   const { resourceQuery, forceRefresh, requestReason, cacheScope, expectedUserId, ...requestInit } = init;
   if (expectedUserId) {

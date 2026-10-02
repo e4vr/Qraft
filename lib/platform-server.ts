@@ -1,4 +1,5 @@
 import { detectImportDuplication, ImportDuplicateIndex, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
+import { importKeyStatement, importSearchRevision, importSearchGuard, releaseImportSearchGuard } from '@/features/imports/server/import-search';
 import { env } from 'cloudflare:workers';
 import { DEFAULT_LEGAL_LINKS } from './legal-links';
 import { DEFAULT_ANNOUNCEMENT, DEFAULT_COMMUNITY_LINKS, validAnnouncementLink, validTelegramLink } from '@/features/announcements/domain/announcement';
@@ -1029,14 +1030,15 @@ export async function platformApi(request: Request, action: string) {
       if (valid.length !== backup.records.length) return json({ error: 'Backup contains invalid records.' }, 400);
       const now = new Date().toISOString();
       for (let offset = 0; offset < valid.length; offset += 400) {
-        await env.DB.batch(valid.slice(offset, offset + 400).map((record) => {
+        const chunk = valid.slice(offset, offset + 400);
+        await env.DB.batch([...chunk.map((record) => {
           const value = record.payload as Record<string, unknown>;
           const qbankId = typeof value.qbankId === 'string' ? value.qbankId : record.qbank_id ?? null;
           const ownerId = typeof value.ownerId === 'string' ? value.ownerId : record.owner_id ?? null;
           return env.DB.prepare(
             'INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,owner_id=excluded.owner_id,payload=excluded.payload,updated_at=excluded.updated_at',
           ).bind(record.type!, record.id!, qbankId, ownerId, JSON.stringify(record.payload), record.updated_at || now);
-        }));
+        }), await importKeyStatement(chunk.map(record => ({ collection: record.type!, id: record.id!, payload: JSON.stringify(record.payload) })))]);
       }
       await auditStatement(user, 'content_backup_restored', 'content-backup', null, { records: valid.length }).run();
       return json({ ok: true, restored: valid.length });
@@ -1176,7 +1178,8 @@ export async function platformApi(request: Request, action: string) {
         );
       const now = new Date().toISOString();
       for (let offset = 0; offset < records.length; offset += 400) {
-        await env.DB.batch(records.slice(offset, offset + 400).map((record) => {
+        const chunk = records.slice(offset, offset + 400);
+        await env.DB.batch([...chunk.map((record) => {
           const value = record.payload as Record<string, unknown>;
           const qbankId = record.type === 'qbanks' ? record.id! : String(value.qbankId);
           return env.DB.prepare(`INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES(?,?,?,?,?,?)
@@ -1186,7 +1189,7 @@ export async function platformApi(request: Request, action: string) {
                  SELECT 1 FROM records AS bank
                  WHERE bank.type='qbanks' AND bank.id=excluded.qbank_id AND json_extract(bank.payload,'$.ownerId')=?
                ))`).bind(record.type!, record.id!, qbankId, user.uid, JSON.stringify(record.payload), record.updated_at || now, user.uid, user.uid);
-        }));
+        }), await importKeyStatement(chunk.map(record => ({ collection: record.type!, id: record.id!, payload: JSON.stringify(record.payload) })))]);
       }
       if (limits.canUseFlashcards && backup.flashcards) {
         const stored = await env.DB.prepare('SELECT payload,revision FROM app_states WHERE user_id=?').bind(user.uid).first<{ payload: string; revision: number }>();
@@ -1679,6 +1682,7 @@ export async function platformApi(request: Request, action: string) {
         runId, cursor, nextCursor, scanned: end - cursor, flagged: proposals.length, status,
         detectorVersion: DUPLICATE_DETECTION_CONFIG.detectorVersion,
       }));
+      statements.push(await importKeyStatement(proposals.map(proposal => ({ collection: 'questionProposals', id: proposal.id, payload: JSON.stringify(proposal) }))));
       await env.DB.batch(statements);
       return json({ ok: true, runId, cursor: nextCursor, status, scanned: end - cursor, flagged: proposals.length, proposals });
     }
@@ -2109,6 +2113,11 @@ export async function platformApi(request: Request, action: string) {
         submitters: [...new Set(proposals.map(proposal => proposal.proposedById))],
         rebasedDuplicateCases: dependentUpdates.length,
       }));
+      statements.push(await importKeyStatement([
+        ...updatedQuestions.map(question => ({ collection: 'sharedQuestions', id: question.id, payload: JSON.stringify(question) })),
+        ...updatedProposals.map(proposal => ({ collection: 'questionProposals', id: proposal.id, payload: JSON.stringify(proposal) })),
+        ...dependentUpdates.map(({ proposal }) => ({ collection: 'questionProposals', id: proposal.id, payload: JSON.stringify(proposal) })),
+      ]));
       const batchResults = await env.DB.batch(statements);
       await emitUsage(user.uid, { reviewContributions: proposalsToFinalize.length + awaitingSecond.size });
       return json({
@@ -2593,7 +2602,7 @@ export async function platformApi(request: Request, action: string) {
         .first<{ user_id: string; result: string }>();
       if (previous)
         return previous.user_id === user.uid
-          ? json(JSON.parse(previous.result))
+          ? json(JSON.parse(previous.result), 200, { 'x-qraft-unchanged': '1' })
           : json({ error: 'Invalid import ID.' }, 409);
       const plan = user.effectivePlan ?? user.tier;
       const limits = user.planLimits ?? getPlanLimits(plan);
@@ -2713,7 +2722,8 @@ export async function platformApi(request: Request, action: string) {
           `This account allows at most ${controlledLimits.questionsPerImport} questions per import; upload in batches of at most 150.`,
           403,
         );
-      const candidates = await importCandidates(bank.id,report.questions);
+      const searchRevision = await importSearchRevision();
+      const candidates = await importCandidates(bank.id,report.questions,user.uid,searchRevision);
       const preparedCandidates: ReturnType<typeof prepareDuplicateCandidate>[] = [...candidates];
       const duplicateIndex = new ImportDuplicateIndex(preparedCandidates);
       let skippedDuplicates = 0;
@@ -2874,18 +2884,27 @@ export async function platformApi(request: Request, action: string) {
         'import_exact_duplicates_skipped', bank.id, null,
         { batchId, skippedDuplicates, explicitlyRequested: true }));
       if (!proposals.length) {
-        await env.DB.batch([
+        try { await env.DB.batch([
+          importSearchGuard(batchId, searchRevision),
           env.DB.prepare(
             'INSERT INTO import_batches(id,user_id,result) VALUES(?,?,?)',
           ).bind(batchId, user.uid, JSON.stringify(result)),
           ...monitoringStatements,
-        ]);
+          releaseImportSearchGuard(batchId),
+        ]); } catch (error) {
+          if (String(error).includes('import_search_snapshot_matches')) {
+            activeImportContext = undefined;
+            return rejectImport(context, 'IMPORT_SEARCH_CONFLICT', 'Questions changed during duplicate review. Retry this preserved batch.', 409);
+          }
+          throw error;
+        }
         activeImportContext = undefined;
       await emitUsage(user.uid, { questionsImported:proposals.length });
-        return json(result);
+        return json(result, 200, { 'x-qraft-import-content-changed': '0' });
       }
       try {
         await env.DB.batch([
+          importSearchGuard(batchId, searchRevision),
           env.DB.prepare(
             'INSERT INTO import_batches(id,user_id,result) VALUES(?,?,?)',
           ).bind(batchId, user.uid, JSON.stringify(result)),
@@ -2895,6 +2914,7 @@ export async function platformApi(request: Request, action: string) {
           env.DB.prepare(
             "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'questionProposals',json_extract(value,'$.id'),?,?,value,? FROM json_each(?)",
           ).bind(bank.id, user.uid, now, JSON.stringify(proposals)),
+          await importKeyStatement(proposals.map(proposal => ({ collection: 'questionProposals', id: proposal.id, payload: JSON.stringify(proposal) }))),
           env.DB.prepare(
             "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'qbankSpecialties',json_extract(value,'$.id'),?,?,value,? FROM json_each(?) WHERE 1 ON CONFLICT(type,id) DO NOTHING",
           ).bind(bank.id, user.uid, now, JSON.stringify(createdSpecialties)),
@@ -2919,8 +2939,13 @@ export async function platformApi(request: Request, action: string) {
               })]
             : []),
           ...monitoringStatements,
+          releaseImportSearchGuard(batchId),
         ]);
       } catch (error) {
+        if (String(error).includes('import_search_snapshot_matches')) {
+          activeImportContext = undefined;
+          return rejectImport(context, 'IMPORT_SEARCH_CONFLICT', 'Questions changed during duplicate review. Retry this preserved batch.', 409);
+        }
         if (String(error).includes('JSON_IMPORT_QUESTION_LIMIT')) return rejectImport(context,'QUESTION_LIMIT_REACHED',`This account allows ${controlledLimits.questionsPerImport} questions per import.`,403);
         if (String(error).includes('JSON_IMPORT_DAILY_LIMIT'))
           return rejectImport(
@@ -2966,9 +2991,29 @@ export async function platformApi(request: Request, action: string) {
         const finalResult = { ...result, classificationRevision: classificationRevision?.revision ?? 0 };
         await env.DB.prepare('UPDATE import_batches SET result=? WHERE id=?')
           .bind(JSON.stringify(finalResult), batchId).run();
-        return json(finalResult);
+        return json(finalResult, 200, { 'x-qraft-classification-changed': '1' });
       }
       return json(result);
+    }
+    if (action === 'import-search-reindex') {
+      if (!root) return json({ error: 'Verified Superadmin access required.' }, 403);
+      if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+      const collection = input.collection ?? 'sharedQuestions';
+      const cursor = input.cursor ?? '';
+      if (typeof collection !== 'string' || !['sharedQuestions', 'questionProposals'].includes(collection) || typeof cursor !== 'string' || cursor.length > 200)
+        throw new ValidationError('Invalid indexing cursor.');
+      const rows = await env.DB.prepare(`SELECT type,id,payload FROM records INDEXED BY idx_records_type_id
+        WHERE type=? AND id>? ORDER BY id LIMIT 200`)
+        .bind(collection, cursor).all<{ type: string; id: string; payload: string }>();
+      if (rows.results.length) {
+        const statement = await importKeyStatement(rows.results.map(row => ({ collection: row.type, id: row.id, payload: row.payload })));
+        await statement.run();
+      }
+      const nextCollection = rows.results.length < 200 && collection === 'sharedQuestions' ? 'questionProposals' : collection;
+      return json({ collection: nextCollection,
+        cursor: nextCollection !== collection ? '' : rows.results.at(-1)?.id ?? cursor,
+        processed: rows.results.length, done: rows.results.length < 200 && collection === 'questionProposals' },
+        200, { 'x-qraft-unchanged': '1' });
     }
     if (action === 'reviewers') {
       const bankId = url.searchParams.get('bank') || text('bankId');

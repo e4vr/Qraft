@@ -22,6 +22,7 @@ import { getPlanLimits } from '@/features/subscriptions/domain/plan-config';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 import { ImportDuplicateIndex } from '@/features/imports/domain/import-duplicate-index';
 import { exactImportIdentity } from '@/features/imports/domain/exact-import-duplicates';
+import { cachedImportSearch, importSearchKey, importSearchRevision } from './import-search';
 export { ImportDuplicateIndex };
 
 export async function importLimits(user: AppUser) {
@@ -98,6 +99,8 @@ export function detectImportDuplication(
 export async function importCandidates(
   bankId: string,
   questions: QuestionProposalPayload[],
+  actorId = '',
+  revision?: number,
 ) {
   const unique = new Map<
     string,
@@ -107,7 +110,25 @@ export async function importCandidates(
   const stems = [
     ...new Set(questions.map((q) => normalizeDuplicateText(q.stem))),
   ];
-  const searches: D1PreparedStatement[] = [];
+  const corpusRevision = revision ?? await importSearchRevision();
+  const searches: Promise<{ id: string; type: string; payload: string }[]>[] = [];
+  const keys = await Promise.all(questions.map(async question => ({
+    stem: await importSearchKey(normalizeDuplicateText(question.stem)),
+    content: exactImportIdentity(question) ? await importSearchKey(exactImportIdentity(question)!) : null,
+  })));
+  const exactRows = await env.DB.batch<{ id: string; type: string; payload: string }>([
+    env.DB.prepare(`SELECT r.id,r.type,r.payload
+    FROM import_question_keys k JOIN records r ON r.type=k.record_type AND r.id=k.record_id
+    WHERE k.qbank_id=? AND k.content_key IN (SELECT json_extract(value,'$.content') FROM json_each(?))
+      AND (r.type='sharedQuestions' OR json_extract(r.payload,'$.status')='pending') LIMIT 1000`)
+      .bind(bankId, JSON.stringify(keys)),
+    env.DB.prepare(`SELECT r.id,r.type,r.payload
+    FROM import_question_keys k JOIN records r ON r.type=k.record_type AND r.id=k.record_id
+    WHERE k.qbank_id=? AND k.stem_key IN (SELECT json_extract(value,'$.stem') FROM json_each(?))
+      AND (r.type='sharedQuestions' OR json_extract(r.payload,'$.status')='pending') LIMIT 1000`)
+      .bind(bankId, JSON.stringify(keys)),
+  ]);
+  for (const result of exactRows) for (const row of result.results) unique.set(`${row.type}:${row.id}`, row);
   // One indexed full-text query per 25-question batch, with a bounded result.
   for (let offset = 0; offset < stems.length; offset += 25) {
     const phrases = stems.slice(offset, offset + 25).flatMap((stem) => {
@@ -118,14 +139,11 @@ export async function importCandidates(
     });
     if (!phrases.length) continue;
     const query = `bank:${quote(bankId)} AND stem:(${[...new Set(phrases)].join(' OR ')})`;
-    searches.push(env.DB.prepare(
-      `SELECT r.id,r.type,r.payload FROM import_question_search s JOIN records r ON r.rowid=s.rowid WHERE import_question_search MATCH ? AND r.qbank_id=? AND (r.type='sharedQuestions' OR json_extract(r.payload,'$.status')='pending') ORDER BY bm25(import_question_search) LIMIT 1000`,
-    )
-      .bind(query, bankId));
+    searches.push(cachedImportSearch(actorId, bankId, query, corpusRevision));
   }
   if (searches.length) {
-    const results = await env.DB.batch<{ id: string; type: string; payload: string }>(searches);
-    for (const result of results) for (const row of result.results) unique.set(`${row.type}:${row.id}`, row);
+    const results = await Promise.all(searches);
+    for (const result of results) for (const row of result) unique.set(`${row.type}:${row.id}`, row);
   }
   return [...unique.values()].map((row) => {
     const parsed = JSON.parse(row.payload) as Question & QuestionProposal;
@@ -157,7 +175,13 @@ export async function importPreview(
     return json({ error: 'QBank access required.' }, 403);
   if (questions.length > 100)
     return json({ error: 'Review at most 100 questions per request.' }, 400);
-  const candidates = await importCandidates(bankId, questions);
+  let revision = await importSearchRevision();
+  let candidates = await importCandidates(bankId, questions, user.uid, revision);
+  const currentRevision = await importSearchRevision();
+  if (currentRevision !== revision) {
+    revision = currentRevision;
+    candidates = await importCandidates(bankId, questions, user.uid, revision);
+  }
   const index = new ImportDuplicateIndex(candidates);
   const byIdentity = new Map(candidates.map(candidate => [`${candidate.entityType}:${candidate.entityId}`, candidate]));
   return json(

@@ -9,6 +9,7 @@ const topicTags: Record<string, string[]> = {
   collaboration: ['collaboration'],
   catalog: ['collaboration', 'question-catalog', 'test-pool'],
   'question-catalog': ['question-catalog', 'test-pool', 'collaboration'],
+  classification: ['question-catalog', 'test-pool', 'collaboration'],
   'question-stats': ['question-stats'],
   'shared-notes': ['collaboration'],
   'preformed-tests': ['preformed-tests'],
@@ -122,6 +123,7 @@ export function openLiveChannels(
     const url = new URL('/api/cloudflare/realtime', window.location.origin);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('channel', channel);
+    url.searchParams.set('v', '2');
     if (clientInstanceId) url.searchParams.set('client', clientInstanceId);
     const socket = new WebSocket(url);
     sockets.set(channel, socket);

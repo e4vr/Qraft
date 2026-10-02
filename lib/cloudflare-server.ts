@@ -1,4 +1,7 @@
 import { auditStatement } from './platform-server';
+import { importKeyStatement } from '@/features/imports/server/import-search';
+import { readChangeWindow } from '@/features/collaboration/server/change-journal';
+import { deltaCollections } from '@/features/collaboration/domain/collaboration-delta';
 import { collaborationValue, sameCollaborationValue, collaborationBaseHash } from '@/features/collaboration/domain/collaboration-values';
 import { collaborationWriteGuard, type CollaborationWriteSnapshot } from '@/server/db/collaboration-write-guard';
 import { announcementSettings } from '@/features/announcements/server/announcement-settings';
@@ -1386,24 +1389,26 @@ async function recordsByTypes(types: string[]) {
 async function scopedRecordsByTypes(
   qbankIds: Iterable<string>,
   types: string[],
+  includeGlobal = true,
 ) {
   const ids = [...new Set([...qbankIds].filter(Boolean))];
+  if (!ids.length && !includeGlobal) return [];
   const requestedTypes = types.map(() => '?').join(',');
   const scoped = ids.length
     ? `SELECT rowid AS source_rowid,type,id,payload
        FROM records INDEXED BY idx_records_qbank_type
        WHERE qbank_id IN (${ids.map(() => '?').join(',')})
          AND type IN (${requestedTypes})
-       UNION ALL `
+       ${includeGlobal ? 'UNION ALL ' : ''}`
     : '';
   const result = await env.DB.prepare(
     `SELECT type,id,payload FROM (
-       ${scoped}SELECT rowid AS source_rowid,type,id,payload
+       ${scoped}${includeGlobal ? `SELECT rowid AS source_rowid,type,id,payload
        FROM records INDEXED BY idx_records_qbank_type
-       WHERE qbank_id IS NULL AND type IN (${requestedTypes})
+       WHERE qbank_id IS NULL AND type IN (${requestedTypes})` : ''}
      ) ORDER BY source_rowid`,
   )
-    .bind(...(ids.length ? [...ids, ...types, ...types] : types))
+    .bind(...(ids.length ? [...ids, ...types, ...(includeGlobal ? types : [])] : types))
     .all<StoredRecord>();
   return result.results.map((row) => ({
     collection: row.type,
@@ -1585,7 +1590,6 @@ async function collaborationStateForOperations(
   ];
 
   const needsAllProfiles =
-    hasAccessManagerRole(user) ||
     operations.some((operation) => operation.collection === 'system');
   const profileIds = operations
     .filter((operation) => operation.collection === 'profiles')
@@ -1781,6 +1785,7 @@ export async function loadCollaboration(request: Request) {
   const user = await currentUser(request);
   if (!user || user.status !== 'approved')
     return json({ error: 'Approved account required.' }, 403);
+  const window = await readChangeWindow(request, user.uid);
   const catalogRows = await recordsByTypes([
     'qbanks',
     'qbankTombstones',
@@ -1818,7 +1823,31 @@ export async function loadCollaboration(request: Request) {
       .map((bank) => bank.id),
   );
   allowedBankIds.add('smle-gs');
-  const scopedRows = await scopedRecordsByTypes(allowedBankIds, [
+  // Bind the cursor to CURRENT access, including invitations. A permissions
+  // change while the journal is being read cannot leave revoked rows in a
+  // client's previous snapshot, even if the socket hint has not arrived yet.
+  window.cursor.scope = await sha256(JSON.stringify({
+    uid: user.uid, role: user.role, roles: user.platformRoles,
+    catalog: catalogRows, invitations: invitedRows,
+  }));
+  const catalogChanges = window.changes?.filter(row => ['qbanks', 'qbankTombstones', 'qbankFolders'].includes(row.collection));
+  if (new URL(request.url).searchParams.get('syncScope') !== window.cursor.scope) {
+    const head = await env.DB.prepare("SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='collaboration_changes'),0) AS head").first<number>('head');
+    // Only a complete, stable journal window can prove which catalog banks
+    // changed. Unknown permission changes still require a full snapshot.
+    if (!catalogChanges?.length || head !== window.cursor.sequence) window.changes = undefined;
+  }
+  const resetBanks = window.changes ? [...new Set(catalogChanges?.filter(row => row.collection !== 'qbankFolders').map(row => row.record_id))] : [];
+  const changedKeys = window.changes?.filter(row =>
+    row.collection in deltaCollections && (row.qbank_id === null || allowedBankIds.has(row.qbank_id)));
+  const resetReadable = resetBanks.filter(id => allowedBankIds.has(id));
+  const scopedRows = changedKeys
+    ? [...catalogRows.filter(row => row.collection === 'qbankMemberships'),
+        ...new Map([
+          ...await recordsByKeys(changedKeys.map(row => ({ collection: row.collection, id: row.record_id }))),
+          ...(resetReadable.length ? await scopedRecordsByTypes(resetReadable, Object.keys(deltaCollections), resetReadable.includes('smle-gs')) : []),
+        ].map(row => [`${row.collection}\0${row.id}`, row])).values()]
+    : await scopedRecordsByTypes(allowedBankIds, [
     'qbankMemberships',
     'qbankInvitations',
     'universityIds',
@@ -1844,7 +1873,7 @@ export async function loadCollaboration(request: Request) {
       (row) => !scopedKeys.has(`${row.collection}\0${row.id}`),
     ),
   ];
-  const profileResult = hasAccessManagerRole(user)
+  const profileResult = !changedKeys && hasAccessManagerRole(user)
     ? await env.DB.prepare('SELECT profile_json FROM profiles').all<{
         profile_json: string;
       }>()
@@ -1939,7 +1968,18 @@ export async function loadCollaboration(request: Request) {
     state.members = state.members.map((member) => accessManagerProfile(member));
     state.blockedAccess.phones = [];
   }
-  return json({ collaboration: state });
+  if (changedKeys) {
+    // Apply the same authorization filters as full snapshots. Remove each
+    // changed key before upserting its currently visible value.
+    const removed = changedKeys.filter(row =>
+      row.collection !== 'questionProposals' || row.owner_id === user.uid ||
+      reviewIds.has(row.qbank_id ?? 'smle-gs')).map(row => ({ collection: row.collection, id: row.record_id }));
+    const changes = Object.fromEntries(Object.values(deltaCollections).map(field => [field, state[field]]));
+    return json({ delta: { cursor: window.cursor, syncedAt: state.lastSyncAt, resetBanks,
+      catalog: { qbanks: state.qbanks, qbankFolders: state.qbankFolders, memberships: state.memberships }, removed,
+      changes: { ...changes, classificationRevisions: state.classificationRevisions } } });
+  }
+  return json({ collaboration: state, cursor: window.cursor });
 }
 
 function bankIdForOperation(
@@ -2935,6 +2975,8 @@ export async function saveCollaboration(request: Request) {
           : { collection: operation.collection },
       ),
     );
+  if (recordSets.some(row => ['sharedQuestions', 'questionProposals'].includes(row.collection)))
+    statements.push(await importKeyStatement(recordSets));
   if (guardedSnapshots.length) statements.push(env.DB.prepare('DELETE FROM collaboration_write_guards WHERE id=?').bind(guardId));
   try {
     if (statements.length) await env.DB.batch(statements);

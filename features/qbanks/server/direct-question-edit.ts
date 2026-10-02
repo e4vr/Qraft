@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { importKeyStatement } from '@/features/imports/server/import-search';
 import { json } from '@/server/http/response';
 import { optionLabel, type AppUser, type Question } from '@/lib/medguard-types';
 import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
@@ -62,6 +63,7 @@ export async function directQuestionEdit(user: AppUser, input: Record<string, un
     // A losing concurrent edit must not create a successful audit entry.
     env.DB.prepare("INSERT INTO records(type,id,owner_id,payload,updated_at) SELECT 'auditLog',?,?,?,? WHERE changes()=1")
       .bind(auditId, user.uid, JSON.stringify(audit), now),
+    await importKeyStatement([{ collection: 'sharedQuestions', id: next.id, payload: JSON.stringify(next) }]),
   ]);
   // D1 metadata includes changes made by database triggers as well.
   if (results[0].meta.changes < 1)

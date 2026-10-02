@@ -1,6 +1,9 @@
 {
   "virtualTables": ["import_question_search"],
   "triggers": [
+    "import_search_integrity_insert", "import_search_integrity_update", "import_search_integrity_delete",
+    "collaboration_change_insert", "collaboration_change_update", "collaboration_change_delete",
+    "collaboration_profile_insert", "collaboration_profile_update", "collaboration_profile_delete",
     "apply_credit_transaction", "capture_review_completion", "claim_review_completion",
     "complete_discount", "credit_balance_guard", "enforce_app_state_revision",
     "enforce_json_import_limits", "enforce_preformed_attempt_limit",

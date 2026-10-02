@@ -84,6 +84,7 @@ type PendingRead = {
 };
 const inFlight = new Map<string, PendingRead>();
 let cacheGeneration = 0;
+export function resourceCacheGeneration() { return cacheGeneration; }
 const metrics: RequestMetrics = {
   GET: 0,
   POST: 0,

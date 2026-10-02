@@ -102,6 +102,18 @@ export async function saveLocalCollaboration(state: CollaborationState, uid: str
   await writeValue(`collaboration:${uid}`, state);
 }
 
+export type ConfirmedCollaborationSnapshot = {
+  collaboration: CollaborationState;
+  cursor: import('@/features/collaboration/domain/collaboration-delta').CollaborationCursor;
+};
+export function loadConfirmedCollaboration(uid: string) {
+  return readValue<ConfirmedCollaborationSnapshot>(`collaboration-confirmed:${uid}`);
+}
+export function saveConfirmedCollaboration(uid: string, snapshot: ConfirmedCollaborationSnapshot) {
+  // Confirmed state and cursor are persisted together; drafts stay separate.
+  return writeValue(`collaboration-confirmed:${uid}`, snapshot);
+}
+
 export async function saveLocalState(uid: string, state: AppState): Promise<void> {
   await writeValue(`state:${uid}`, state);
 }
@@ -314,6 +326,7 @@ export async function forgetLocalUser(uid: string): Promise<void> {
     store.put(true, `deleted:${uid}`);
     store.delete(`state:${uid}`);
     store.delete(`collaboration:${uid}`);
+    store.delete(`collaboration-confirmed:${uid}`);
     store.delete(`collaboration-outbox:${uid}`);
     store.delete(`collaboration-rejected:${uid}`);
     store.delete(`state-outbox:${uid}`);

@@ -21,3 +21,19 @@ The current client sends a SHA-256 fingerprint of each editable record's base ra
 Apply 0029 to the target database before releasing the updated application. This implementation task only applies migrations to disposable test databases and does not deploy or migrate a live environment.
 
 D1 atomic batch behavior: [Cloudflare D1 database API](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch). Migration ownership: [Cloudflare D1 migrations](https://developers.cloudflare.com/d1/reference/migrations/).
+
+## 0030 indexed question deletion
+
+`0030_index_question_deletion.sql` indexes the JSON question and audit references used by `question_identity_delete`, legacy share-link bank references, and question-ID reservations by bank. Previously each deleted shared question scanned unrelated answer statistics, notes, proposals and audit history. A local Miniflare fixture with 600 deleted questions and 6,000 unrelated history records consumed 3,609,823 D1 rows read before the change and 8,405 afterward. These are synthetic local measurements, not a replay of the production incident; the fixture excludes personal states, tickets and media.
+
+Bank cleanup uses separate indexed deletions for bank-scoped records, the bank itself and legacy share links. They remain in the same atomic D1 batch with authorization, the tombstone, ID release and audit entry. Existing question retirement and personal-state cleanup triggers remain unchanged. `tests/qbank-deletion-cost.test.mjs` verifies a read budget and related-record cleanup with 100 deleted questions and 6,000 unrelated records; the lifecycle API tests cover rollback and authorization.
+
+Apply 0030 before releasing the updated application. No production migration or deployment is performed by this implementation. This change does not replenish an exhausted daily D1 quota, and the investigation has not established equivalent amplification from creating an empty bank.
+
+## 0031 collaboration journal and 0032 import integrity
+
+`0031_collaboration_change_journal.sql` tracks record/profile mutations with SQL triggers in the writer's transaction. Its integer primary key supports bounded cursor reads; unused secondary indexes are absent to avoid unnecessary writes. Read the watermark before records. Check retention in the same batch as the change window. Unknown scopes, expired cursors, global permissions changes and windows exceeding 2,000 entries fall back to the authorized full snapshot. Stable, fully observed catalog changes can reset only the affected bank. Persist confirmed client state and cursor together, separately from drafts. Daily cleanup retains at least the latest 50,000 entries and never resets `sqlite_sequence`.
+
+`0032_import_search_integrity.sql` adds bank-scoped stem/content keys, a corpus revision and an empty assertion table. SQL invalidates keys after identity/status/bank edits and deletion for every writer; metadata-only edits preserve keys but advance the search revision. Supported writers populate keys in their record transaction. Missing legacy keys retain FTS fallback. Administrative backfill verifies the source payload before inserting a key and never edits a question. The global revision covers BM25 statistics across banks. Bounded per-account Worker cache reuse requires an identical revision. Import saves assert it within the atomic batch and roll back on conflict, including skip-only batches.
+
+Apply 0030–0032 before releasing the application. Deploy the realtime Worker first; legacy socket attachments retain their previous invalidations. The new objects are additive and owned by migrations/schema inventory. The old application remains compatible for code rollback. The implementation report records final local measurements including increased writes; the earlier 0030-only figure above remains an intermediate result. No live migration or deployment was performed.

@@ -8,6 +8,7 @@ import { cleanPreformedTestOperations } from './lib/preformed-test-server';
 import { withSecurityHeaders } from './server/http/security-headers';
 import { maintenanceGate } from './features/administration/server/operations-service';
 import { withApiLifecycle } from './server/api/request-lifecycle';
+import { cleanCollaborationChanges } from './features/collaboration/server/change-journal';
 
 function withBuildIdentity(response: Response, env: Cloudflare.Env) {
   if (response.status === 101) return response;
@@ -56,6 +57,7 @@ const worker: ExportedHandler<Cloudflare.Env> = {
     ctx.waitUntil(createQuestionBackup(env, controller.scheduledTime));
     ctx.waitUntil(cleanDeletedAccountMedia());
     ctx.waitUntil(cleanStateSyncOperations());
+    ctx.waitUntil(cleanCollaborationChanges());
     ctx.waitUntil(cleanPreformedTestOperations());
     ctx.waitUntil((async () => {
       const userIds = await expireSubscriptions();

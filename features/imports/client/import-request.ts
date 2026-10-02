@@ -6,8 +6,9 @@ export async function importRequest<T>(path: string, init: ApiRequestInit): Prom
   for (let attempt = 0; ; attempt++) {
     try { return await api<T>(path, init); }
     catch (error) {
-      if (!(error instanceof ApiError) || error.status !== 429 || attempt >= 2) throw error;
-      const delay = error.retryAfterMs ?? 2000;
+      const searchConflict = error instanceof ApiError && error.status === 409 && error.payload.code === 'IMPORT_SEARCH_CONFLICT';
+      if (!(error instanceof ApiError) || (!searchConflict && error.status !== 429) || attempt >= 2) throw error;
+      const delay = searchConflict ? 250 : error.retryAfterMs ?? 2000;
       if (delay > 60_000) throw error;
       await new Promise(resolve => setTimeout(resolve, Math.max(250, delay) + 100));
     }
