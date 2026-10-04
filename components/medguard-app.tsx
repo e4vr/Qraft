@@ -4684,7 +4684,6 @@ function SettingsView({
             }}>Download local study data</button>
           </output>
         )}
-        <DeleteAccount uid={user.uid} onDeleted={onAccountDeleted} />
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
           <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
             <div>
@@ -4924,6 +4923,7 @@ function SettingsView({
             touch, split view, and offline study.
           </p>
         </section>
+        <DeleteAccount uid={user.uid} onDeleted={onAccountDeleted} />
       </div>
     </>
   );
