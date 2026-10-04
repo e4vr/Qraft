@@ -1,4 +1,5 @@
 'use client';
+import { FormattedQuestionText } from '@/components/formatted-question-text';
 
 /* oxlint-disable next/no-img-element */
 
@@ -1773,7 +1774,7 @@ export function PreformedTestRunner({
               <section className={`${panelClass} p-5 sm:p-8`}>
                 <div className="min-w-0">
                   <p className="whitespace-pre-wrap text-base font-medium leading-7 sm:text-lg sm:leading-8">
-                    {question.stem}
+                    <FormattedQuestionText text={question.stem} />
                   </p>
                   {question.images.length > 0 && (
                     <div className="mt-4 flex flex-wrap gap-3">
@@ -1820,7 +1821,7 @@ export function PreformedTestRunner({
                           {String.fromCharCode(65 + displayIndex)}
                         </span>
                         <span className="pt-1 text-sm font-medium">
-                          {question.options[optionIndex]}
+                          <FormattedQuestionText text={question.options[optionIndex]} />
                         </span>
                       </button>
                     );
@@ -1832,7 +1833,7 @@ export function PreformedTestRunner({
                       <p className="font-bold">Explanation</p>
                       {question.explanation && (
                         <p className="mt-2 whitespace-pre-wrap text-sm leading-6">
-                          {question.explanation}
+                          <FormattedQuestionText text={question.explanation} />
                         </p>
                       )}
                       <ExplanationImages images={question.explanationImages} />

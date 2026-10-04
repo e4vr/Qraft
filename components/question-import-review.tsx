@@ -1,4 +1,5 @@
 'use client';
+import { FormattedQuestionText } from '@/components/formatted-question-text';
 /* oxlint-disable next/no-img-element */
 import { useEffect, useId, useRef, useState, useMemo } from 'react';
 import { ExplanationImageEditor } from '@/components/explanation-image-editor';
@@ -636,6 +637,12 @@ export function QuestionImportReview({
           {draft && (
             <fieldset disabled={busy || checking || uploadProgress > 0 || excluded.includes(index)} className="min-w-0 space-y-3">
               <legend className="sr-only">Review and edit question</legend>
+              <p className="text-xs text-muted-foreground">Wrap text in **double asterisks** to display it in bold in questions and explanations.</p>
+              <details className="rounded-xl border p-3 text-sm">
+                <summary className="cursor-pointer font-semibold">Preview question and explanation formatting</summary>
+                <p dir="auto" className="mt-3 whitespace-pre-wrap break-words"><FormattedQuestionText text={draft.stem} /></p>
+                {draft.explanation && <p dir="auto" className="mt-3 border-t pt-3 whitespace-pre-wrap break-words"><FormattedQuestionText text={draft.explanation} /></p>}
+              </details>
               <label className="block text-sm font-semibold">
                 Question
                 <textarea
@@ -743,7 +750,7 @@ export function QuestionImportReview({
           <DialogTitle>View the duplication</DialogTitle>
           {matches[index]?.length>1&&<select aria-label="Existing question" className="min-h-11 w-full rounded-xl border bg-background px-3" value={comparisonIndex} onChange={e=>setComparisonIndex(Number(e.target.value))}>{matches[index].map((m,n)=><option key={m.entityId} value={n}>Existing question {n+1}</option>)}</select>}
           <div className="grid min-w-0 gap-4 md:grid-cols-2">
-            {[{title:'Existing question',payload:matches[index]?.[comparisonIndex]?.payload},{title:'New question',payload:draft}].map(item=><article key={item.title} className="min-w-0 space-y-3 rounded-xl border p-4"><h3 className="font-bold">{item.title}</h3><p dir="auto" className="whitespace-pre-wrap break-words">{item.payload?.stem}</p><ol className="space-y-2">{item.payload?.options.map((option,n)=><li key={n} dir="auto" className={`break-words rounded-lg p-2 ${item.payload?.answer===n?'bg-emerald-500/15':'bg-muted'}`}>{optionLabel(n)}. {option}{item.payload?.answer===n?' ✓':''}</li>)}</ol><p dir="auto" className="whitespace-pre-wrap break-words text-sm">{item.payload?.explanation}</p><ExplanationImages images={item.payload?.explanationImages} /><p dir="auto" className="break-words text-xs text-muted-foreground">{item.payload?.sourceReference}</p></article>)}
+            {[{title:'Existing question',payload:matches[index]?.[comparisonIndex]?.payload},{title:'New question',payload:draft}].map(item=><article key={item.title} className="min-w-0 space-y-3 rounded-xl border p-4"><h3 className="font-bold">{item.title}</h3><p dir="auto" className="whitespace-pre-wrap break-words"><FormattedQuestionText text={item.payload?.stem ?? ''} /></p><ol className="space-y-2">{item.payload?.options.map((option,n)=><li key={n} dir="auto" className={`break-words rounded-lg p-2 ${item.payload?.answer===n?'bg-emerald-500/15':'bg-muted'}`}>{optionLabel(n)}. <FormattedQuestionText text={option} />{item.payload?.answer===n?' ✓':''}</li>)}</ol><p dir="auto" className="whitespace-pre-wrap break-words text-sm"><FormattedQuestionText text={item.payload?.explanation ?? ''} /></p><ExplanationImages images={item.payload?.explanationImages} /><p dir="auto" className="break-words text-xs text-muted-foreground">{item.payload?.sourceReference}</p></article>)}
           </div>
           {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
           <div className="grid gap-2 sm:grid-cols-2">

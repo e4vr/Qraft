@@ -1,4 +1,7 @@
 'use client';
+import { FormattedQuestionText } from '@/components/formatted-question-text';
+import { HighlightedText } from '@/components/highlighted-question-text';
+import { boldTextSourceOffset } from '@/features/qbanks/domain/bold-text';
 import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
 import { indexQuestionsById } from '@/features/qbanks/domain/question-index';
 import { QuestionEditDialog } from '@/components/question-edit-dialog';
@@ -356,51 +359,6 @@ function getQuestionProgress(
   questionId: string,
 ): QuestionProgress {
   return state.progress[questionId] ?? emptyProgress();
-}
-
-function HighlightedText({
-  text,
-  ranges,
-  onRemove,
-  interactive = true,
-}: {
-  text: string;
-  ranges: HighlightRange[];
-  onRemove?: (range: HighlightRange) => void;
-  interactive?: boolean;
-}) {
-  const valid = mergeRanges(ranges).filter(
-    (range) => range.start < text.length,
-  );
-  const output: React.ReactNode[] = [];
-  let cursor = 0;
-  valid.forEach((range, index) => {
-    const end = Math.min(range.end, text.length);
-    if (range.start > cursor) output.push(text.slice(cursor, range.start));
-    output.push(
-      <mark
-        key={`${range.start}-${end}-${index}`}
-        className="rounded-sm bg-[#ffe66d] px-0.5 text-slate-900"
-      >
-        {interactive ? (
-          <button
-            type="button"
-            title="Click to remove marker"
-            aria-label={`Remove highlight: ${text.slice(range.start, end)}`}
-            onClick={() => onRemove?.(range)}
-            className="cursor-pointer text-inherit"
-          >
-            {text.slice(range.start, end)}
-          </button>
-        ) : (
-          text.slice(range.start, end)
-        )}
-      </mark>,
-    );
-    cursor = end;
-  });
-  if (cursor < text.length) output.push(text.slice(cursor));
-  return output;
 }
 
 function IconButton({
@@ -2741,8 +2699,10 @@ function TestView({
     const before = document.createRange();
     before.selectNodeContents(root);
     before.setEnd(range.startContainer, range.startOffset);
-    const start = before.toString().length;
-    const end = start + range.toString().length;
+    const sourceText = section === 'stem' ? question.stem : displayedExplanation;
+    const visibleStart = before.toString().length;
+    const start = boldTextSourceOffset(sourceText, visibleStart, 'start');
+    const end = boldTextSourceOffset(sourceText, visibleStart + range.toString().length, 'end');
     setState((current) => {
       const old = getQuestionProgress(current, question.id);
       return {
@@ -5684,7 +5644,7 @@ function QuestionManager({
                             : proposal.status}
                       </span>
                       <span>
-                        <span className="line-clamp-2">{proposal.payload.stem}</span>
+                        <span className="line-clamp-2"><FormattedQuestionText text={proposal.payload.stem} /></span>
                         {proposal.status === 'pending' && (proposal.duplicateReview?.status === 'flagged' || proposal.duplicateInfo) && (
                           <small className="mt-1 block text-amber-700 dark:text-amber-300">Possible duplicate — awaiting reviewer decision. This is not a confirmed duplicate.</small>
                         )}

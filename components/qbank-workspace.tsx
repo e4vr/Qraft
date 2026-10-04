@@ -1,4 +1,5 @@
 'use client';
+import { FormattedQuestionText } from '@/components/formatted-question-text';
 
 import { ReviewerSearch } from '@/components/reviewer-search';
 import { WorkspaceHeader } from '@/components/workspace-header';
@@ -636,7 +637,7 @@ export function QBankWorkspace({
                             className="min-w-0 flex-1 text-left"
                           >
                             <strong className="line-clamp-1 text-sm">
-                              {question.stem}
+                              <FormattedQuestionText text={question.stem} />
                             </strong>
                             <span className="mt-1 block text-xs text-muted-foreground">
                               Question {question.questionId ?? index + 1}

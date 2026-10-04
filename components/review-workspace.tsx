@@ -1,4 +1,5 @@
 'use client';
+import { FormattedQuestionText } from '@/components/formatted-question-text';
 import { ExplanationImages } from '@/components/explanation-images';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 
@@ -72,7 +73,7 @@ function DiffField({
           Current · {label}
         </span>
         <p className="mt-2 whitespace-pre-wrap text-sm leading-6">
-          {current || '—'}
+          <FormattedQuestionText text={current || '—'} />
         </p>
       </div>
       <div
@@ -95,7 +96,7 @@ function DiffField({
           {changed ? ' · changed' : ''}
         </span>
         <p className="mt-2 whitespace-pre-wrap text-sm leading-6">
-          {proposed || '—'}
+          <FormattedQuestionText text={proposed || '—'} />
         </p>
       </div>
     </div>
@@ -106,13 +107,13 @@ function HighlightedDifference({ value, other }: { value: string; other: string 
   const otherTokens = new Set(other.toLocaleLowerCase().match(/[\p{L}\p{N}.+%-]+|[^\s]/gu) ?? []);
   return (
     <p className="mt-2 whitespace-pre-wrap text-sm leading-6">
-      {(value.match(/[\p{L}\p{N}.+%-]+|\s+|[^\s]/gu) ?? ['—']).map((token, index) =>
+      <FormattedQuestionText text={value || '—'} renderSegment={segment => (segment.match(/[\p{L}\p{N}.+%-]+|\s+|[^\s]/gu) ?? []).map((token, index) =>
         /\s+/.test(token) || otherTokens.has(token.toLocaleLowerCase()) ? token : (
           <mark key={`${token}-${index}`} className="rounded bg-amber-200 px-0.5 text-foreground dark:bg-amber-500/35">
             {token}
           </mark>
         ),
-      )}
+      )} />
     </p>
   );
 }
@@ -147,7 +148,7 @@ function DuplicateQuestionPanel({
       <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
         <div><dt className="text-xs font-bold text-muted-foreground">Correct answer</dt><dd>{payload.options[payload.answer] ?? optionLabel(payload.answer)}</dd></div>
         <div><dt className="text-xs font-bold text-muted-foreground">Specialty / topic</dt><dd>{payload.specialty} · {payload.topic}</dd></div>
-        <div className="sm:col-span-2"><dt className="text-xs font-bold text-muted-foreground">Explanation</dt><dd className="whitespace-pre-wrap">{payload.explanation || 'No explanation provided.'}<ExplanationImages images={payload.explanationImages} /></dd></div>
+        <div className="sm:col-span-2"><dt className="text-xs font-bold text-muted-foreground">Explanation</dt><dd className="whitespace-pre-wrap"><FormattedQuestionText text={payload.explanation || 'No explanation provided.'} /><ExplanationImages images={payload.explanationImages} /></dd></div>
         <div className="sm:col-span-2"><dt className="text-xs font-bold text-muted-foreground">Source</dt><dd>{readQuestionSource(payload).sourceReference || '—'}</dd></div>
       </dl>
       {payload.images?.length > 0 && (

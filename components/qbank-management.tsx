@@ -1,4 +1,5 @@
 'use client';
+import { FormattedQuestionText } from '@/components/formatted-question-text';
 
 /* oxlint-disable next/no-img-element */
 
@@ -724,7 +725,7 @@ export function QBankManagement({
                         <input type="checkbox" aria-label={`Select Question ID ${question.questionId}`} checked={selectedQuestionIds.includes(question.id)} onChange={(event) => setSelectedQuestionIds((current) => event.target.checked ? [...current, question.id].slice(0, 500) : current.filter((id) => id !== question.id))} />
                         <QuestionId value={question.questionId} />
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold">{question.stem}</p>
+                          <p className="truncate text-sm font-semibold"><FormattedQuestionText text={question.stem} /></p>
                           <span className="text-xs text-muted-foreground">
                             Revision {question.revision} · {question.images?.length ?? 0} images
                           </span>

@@ -90,6 +90,7 @@ export function QuestionEditDialog({ open, onClose, questionNumber, immediate, d
                   <label className="block">
                     <span className="q-edit-label">Proposed question text <span className="q-edit-field-note">Required</span></span>
                     <textarea required dir="auto" rows={5} value={draft.stem} onChange={event => onChange({ stem: event.target.value })} className="q-edit-input min-h-32 w-full resize-y" />
+                    <span className="mt-2 block text-xs text-muted-foreground">Use **text** for bold in the question and explanation.</span>
                   </label>
                   <div className="mt-5">
                     <div className="q-edit-label">Answer options <span className="q-edit-field-note">{draft.options.length} / 10</span></div>

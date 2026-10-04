@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { SubscriptionLegalConsent } from '@/components/subscription-legal-consent';
 import { addCalendarDuration } from '@/features/subscriptions/domain/calendar-duration';
 import { subscribeLive } from '@/lib/realtime-client';
 import { Check, Crown, Eye, X, Search, Ticket, Users, ShieldCheck, Pencil, Plus, ChevronLeft, ChevronRight, History, SlidersHorizontal } from 'lucide-react';
@@ -325,14 +326,15 @@ export function Subscribe({
           </div>
         </DialogContent>
       </Dialog>
-      <div className="rounded-2xl border border-amber-400/40 bg-card p-5">
+      <div className="q-subscription-checkout">
+        <div className="q-subscription-summary-heading">
+          <span>Subscription summary</span>
+          <span className="q-subscription-duration">{planDurationLabel(selectedPlan)}</span>
+        </div>
         {currentPrice ? (
-          <div aria-live="polite">
+          <div className="q-subscription-price" aria-live="polite">
             <p className="text-3xl font-black">
               {sar(currentPrice.final)}{' '}
-              <span className="text-sm font-normal text-muted-foreground">
-                / {planDurationLabel(selectedPlan)}
-              </span>
             </p>
             {currentPrice.code && (
               <div className="mt-3 space-y-1 text-sm">
@@ -356,10 +358,11 @@ export function Subscribe({
         >
           Discount code
         </label>
-        <div className="mt-2 flex gap-2">
+        <div className="q-subscription-discount mt-2 flex gap-2">
           <input
             id="discount-code"
             className="min-w-0 flex-1 rounded-xl border bg-background px-3 py-3"
+            placeholder="Enter code (optional)"
             maxLength={40}
             value={code}
             disabled={busy}
@@ -367,7 +370,7 @@ export function Subscribe({
             autoComplete="off"
           />
           <button
-            className="q-button border"
+            className="q-button q-subscription-apply"
             disabled={busy}
             onClick={() => void apply()}
           >
@@ -382,25 +385,9 @@ export function Subscribe({
         {success && (
           <output className="mt-3 text-emerald-600">{success}</output>
         )}
-        <div className="mt-4 rounded-xl border bg-muted/20 p-4" dir="rtl">
-          <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
-            {[
-              { label: 'شروط الاستخدام', url: legalLinks.termsUrl },
-              { label: 'سياسة الخصوصية', url: legalLinks.privacyUrl },
-              { label: 'شروط الاسترجاع', url: legalLinks.refundUrl },
-            ].filter(policy => policy.url).map(policy => (
-              <a key={policy.label} href={policy.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center font-semibold text-primary underline underline-offset-4">{policy.label}</a>
-            ))}
-          </div>
-          <label className="mt-2 flex min-h-11 cursor-pointer items-start gap-3 text-sm leading-6">
-            <input type="checkbox" checked={acceptedTerms} disabled={busy || !legalLinksReady} onChange={event => setAcceptedTerms(event.target.checked)} className="mt-1 size-5 shrink-0 accent-primary" />
-            <span>لقد قرأت جميع الشروط والأحكام وأوافق عليها.</span>
-          </label>
-          {!legalLinksReady && !legalLinksError && <output className="mt-2 block text-xs text-muted-foreground">Loading policies…</output>}
-          {legalLinksError && <div className="mt-2 text-sm" dir="auto"><p role="alert" className="text-destructive">{legalLinksError}</p><button type="button" className="q-button q-button-secondary mt-2" onClick={() => { setAcceptedTerms(false); setLegalLinksReadyFor(''); setLegalLinksError(''); setLegalLinksRetry(current => current + 1); }}>Retry</button></div>}
-        </div>
+        <SubscriptionLegalConsent links={legalLinks} accepted={acceptedTerms} busy={busy} ready={legalLinksReady} error={legalLinksError} onChange={setAcceptedTerms} onRetry={() => { setAcceptedTerms(false); setLegalLinksReadyFor(''); setLegalLinksError(''); setLegalLinksRetry(current => current + 1); }} />
         <button
-          className="q-button mt-4 w-full bg-primary text-primary-foreground"
+          className="q-button q-subscription-submit mt-4 w-full bg-primary text-primary-foreground"
           disabled={busy || !currentPrice || !acceptedTerms || !legalLinksReady}
           onClick={() => void subscribe()}
         >
@@ -410,7 +397,7 @@ export function Subscribe({
               ? 'Renew subscription'
               : 'Subscribe now'}
         </button>
-        <p className="mt-3 text-xs text-muted-foreground">
+        <p className="q-subscription-payment-note mt-3 text-xs text-muted-foreground">
           {currentPrice?.final === 0
             ? `${catalogLimits(selectedPlan).name} activates immediately after you confirm the subscription.`
             : 'Subscription requests open EduStack WhatsApp. Paid activation is confirmed by the administrator.'}
