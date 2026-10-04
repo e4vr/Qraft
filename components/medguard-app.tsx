@@ -17,7 +17,6 @@ import { stateBytes, STATE_WARNING_BYTES, STATE_BUDGET_BYTES } from '@/features/
 import {
   openUpgrade,
   Subscribe,
-  UpgradeButton,
   UpgradeDialog,
 } from '@/components/subscription-workspace';
 import { ContactWorkspace } from '@/components/contact-workspace';
@@ -61,6 +60,8 @@ import { filterHistoryTests, groupHistoryTests, sortHistoryTests, type HistoryMo
 import { summarizeProgress } from '@/features/progress/domain/progress-summary';
 import { AreasToImprove } from '@/components/progress/areas-to-improve';
 import { planAccessLabel } from '@/features/subscriptions/domain/plan-config';
+import { ExamAccessNotice, type ExamUpgradeRequest } from '@/components/exams/exam-access-notice';
+import { examRestriction, type ExamUpgradeReason } from '@/features/subscriptions/domain/exam-access';
 import { mergeRanges } from '@/features/exams/domain/highlight-ranges';
 import {
   loadActiveLocalTheme,
@@ -1581,12 +1582,14 @@ function CreateTest({
   bankName,
   maxQuestionsPerExam,
   onStart,
+  onQuestionLimit,
 }: {
   questions: Question[];
   state: AppState;
   bankName: string;
   maxQuestionsPerExam: number;
   onStart: (config: TestBuilderConfig) => void;
+  onQuestionLimit: () => void;
 }) {
   const { mode: presentationMode } = usePresentationEnvironment();
   const handheld = presentationMode === 'handheld';
@@ -2148,6 +2151,7 @@ function CreateTest({
                   }
                   const requested = Number(raw);
                   if (!Number.isFinite(requested)) return;
+                  if (requested > maxQuestionsPerExam) onQuestionLimit();
                   const count = clampExamQuestionCount(requested, questionLimit);
                   setCountWasEdited(count < questionLimit);
                   setCountDraft({ limit: questionLimit, value: String(count) });
@@ -5753,6 +5757,7 @@ export default function MedGuardApp({
     );
   });
   const [testError, setTestError] = useState('');
+  const [examUpgradeRequest, setExamUpgradeRequest] = useState<ExamUpgradeRequest | null>(null);
   const creatingTest = useRef(false);
   const [examPool, setExamPool] = useState<Question[]>([]);
   const [activeTestId, setActiveTestId] = useState<string | undefined>(
@@ -6983,12 +6988,26 @@ export default function MedGuardApp({
     setView('dashboard');
   }
 
+  const requestExamUpgrade = useCallback((reason: ExamUpgradeReason) => {
+    if (!user) return;
+    const plan = user.effectivePlan ?? user.tier;
+    if (reason === 'questions' && plan !== 'free') return;
+    setTestError('');
+    setExamUpgradeRequest({ uid: user.uid, plan, reason });
+  }, [user]);
+  const handleTestFailure = useCallback((error: unknown, fallback: string) => {
+    const reason = examRestriction(error);
+    if (reason && (reason === 'exams' || (user?.effectivePlan ?? user?.tier) === 'free')) requestExamUpgrade(reason);
+    else setTestError(error instanceof Error ? error.message : fallback);
+  }, [requestExamUpgrade, user]);
   const createTest = useCallback(
     async (config: TestBuilderConfig) => {
       if (!user || creatingTest.current) return;
       setTestError('');
+      setExamUpgradeRequest(null);
       const limits = (user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier));
       if (config.count > limits.maxQuestionsPerExam) {
+        if ((user.effectivePlan ?? user.tier) === 'free') { requestExamUpgrade('questions'); return; }
         setTestError(
           `${limits.name} allows a maximum of ${limits.maxQuestionsPerExam} questions per exam. Your selections are preserved.`,
         );
@@ -7028,11 +7047,7 @@ export default function MedGuardApp({
         selected = result.questions;
         setExamPool(selected);
       } catch (error) {
-        setTestError(
-          error instanceof Error
-            ? error.message
-            : 'Unable to select questions.',
-        );
+        handleTestFailure(error, 'Unable to select questions.');
         return;
       } finally {
         creatingTest.current = false;
@@ -7077,7 +7092,8 @@ export default function MedGuardApp({
       };
       creatingTest.current = true;
       try {
-        await registerStartedExam(test.id, test.questionIds.length);
+        const registration = await registerStartedExam(test.id, test.questionIds.length);
+        if (!registration.duplicate) window.dispatchEvent(new CustomEvent('qraft-exam-started', { detail: { uid: user.uid } }));
         setState((current) => ({
           ...current,
           tests: [test, ...current.tests],
@@ -7085,16 +7101,12 @@ export default function MedGuardApp({
         setActiveTestId(test.id);
         setView('test');
       } catch (error) {
-        setTestError(
-          error instanceof Error
-            ? error.message
-            : 'Unable to create test. Your selections are preserved.',
-        );
+        handleTestFailure(error, 'Unable to create test. Your selections are preserved.');
       } finally {
         creatingTest.current = false;
       }
     },
-    [state, collaboration.qbanks, activeQBankId, setState, setView, user],
+    [state, collaboration.qbanks, activeQBankId, setState, setView, user, requestExamUpgrade, handleTestFailure],
   );
 
   const quickTest = useCallback(() => {
@@ -7451,6 +7463,7 @@ export default function MedGuardApp({
           <span>{syncIssue}</span>
           <button type="button" className="shrink-0 underline" onClick={() => setView('settings')}>Open Settings</button>
         </output>}
+        <ExamAccessNotice user={user} request={examUpgradeRequest} defer={view === 'test' || view === 'subscribe' || portal !== 'app'} onViewPlans={() => { setExamUpgradeRequest(null); setTestError(''); setView('subscribe'); }} />
         <SiteAnnouncement userId={user.uid} defer={view === 'test' || portal !== 'app'} />
         {view === 'subscribe' && (
           <>
@@ -7482,8 +7495,7 @@ export default function MedGuardApp({
             role="alert"
             className="m-4 rounded-xl border border-amber-400 bg-card p-4"
           >
-            <p className="mb-3">{testError}</p>
-            <UpgradeButton />
+            <p>{testError}</p>
           </div>
         )}
         {view === 'dashboard' && (
@@ -7605,6 +7617,7 @@ export default function MedGuardApp({
               (user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier)).maxQuestionsPerExam
             }
             onStart={createTest}
+            onQuestionLimit={() => requestExamUpgrade('questions')}
           />
         )}
         {view === 'preformed' && (

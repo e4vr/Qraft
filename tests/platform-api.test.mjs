@@ -895,15 +895,10 @@ print(json.dumps(out))`,
   await t.test(
     'Free exam allowance is lifetime-based and server enforced',
     async () => {
-      assert.equal(
-        (
-          await call('free', '/platform/exam-start', {
-            testId: randomUUID(),
-            questionCount: 16,
-          })
-        ).status,
-        403,
-      );
+      const tooLong = await call('free', '/platform/exam-start', { testId: randomUUID(), questionCount: 16 });
+      assert.equal(tooLong.status, 403);
+      assert.equal(tooLong.data.code, 'EXAM_QUESTION_LIMIT_REACHED');
+      assert.equal(tooLong.data.maxQuestions, 15);
       for (let index = 0; index < 2; index += 1) {
         const started = await call('free', '/platform/exam-start', {
           testId: randomUUID(),
@@ -917,6 +912,7 @@ print(json.dumps(out))`,
       });
       assert.equal(blocked.status, 403);
       assert.match(blocked.data.error, /lifetime/i);
+      assert.equal(blocked.data.code, 'EXAM_LIMIT_REACHED');
       const status = await call('free', '/platform/plan-status');
       assert.equal(status.data.plan, 'free');
       assert.equal(status.data.usage.lifetimeStartedExams, 2);

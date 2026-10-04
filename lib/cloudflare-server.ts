@@ -1106,6 +1106,8 @@ export async function saveState(request: Request) {
     return json(
       {
         error: `${planLimits.name} allows ${planLimits.maxQuestionsPerExam} questions per exam.`,
+        code: 'EXAM_QUESTION_LIMIT_REACHED',
+        maxQuestions: planLimits.maxQuestionsPerExam,
       },
       403,
     );
@@ -1115,7 +1117,7 @@ export async function saveState(request: Request) {
     planLimits.lifetimeExamLimit !== null &&
     lifetimeStarted + newTests.length > planLimits.lifetimeExamLimit
   )
-    return json({ error: "You've reached your lifetime exam limit." }, 403);
+    return json({ error: "You've reached your lifetime exam limit.", code: 'EXAM_LIMIT_REACHED' }, 403);
   const monthStart = utcMonthStart();
   const monthlyStarted = oldTests.results.filter(
     (test) => (test.started_at ?? '') >= monthStart,
@@ -1124,7 +1126,7 @@ export async function saveState(request: Request) {
     planLimits.monthlyExamLimit !== null &&
     monthlyStarted + newTests.length > planLimits.monthlyExamLimit
   )
-    return json({ error: "You've reached your monthly exam limit." }, 403);
+    return json({ error: "You've reached your monthly exam limit.", code: 'EXAM_LIMIT_REACHED' }, 403);
   const now = new Date().toISOString();
   const nextRevision = currentRevision + 1;
   try {

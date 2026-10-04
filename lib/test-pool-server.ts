@@ -30,7 +30,7 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
   const includedTopics = JSON.stringify(included ?? []);
   const select = input.select === true;
   const limit = (user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier)).maxQuestionsPerExam;
-  if (select && (!Number.isInteger(config.count) || config.count < 1 || config.count > limit)) return json({ error: `Your plan allows at most ${limit} questions per test.` }, 403);
+  if (select && (!Number.isInteger(config.count) || config.count < 1 || config.count > limit)) return json({ error: `Your plan allows at most ${limit} questions per test.`, ...(config.count > limit ? { code: 'EXAM_QUESTION_LIMIT_REACHED', maxQuestions: limit } : {}) }, 403);
   const progress = input.progress && typeof input.progress === 'object' && !Array.isArray(input.progress) ? JSON.stringify(input.progress) : null;
   const sql = `WITH app AS (SELECT coalesce((SELECT payload FROM app_states WHERE user_id=?),'{}') AS payload),
     candidates AS (

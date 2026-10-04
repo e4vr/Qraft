@@ -1311,7 +1311,7 @@ export async function platformApi(request: Request, action: string) {
       const plan = user.effectivePlan ?? user.tier;
       const limits = user.planLimits ?? getPlanLimits(plan);
       if (questionCount > limits.maxQuestionsPerExam)
-        return json({ error: `${limits.name} allows ${limits.maxQuestionsPerExam} questions per exam.` }, 403);
+        return json({ error: `${limits.name} allows ${limits.maxQuestionsPerExam} questions per exam.`, code: 'EXAM_QUESTION_LIMIT_REACHED', maxQuestions: limits.maxQuestionsPerExam }, 403);
       const now = new Date().toISOString();
       const lifetimeLimit = limits.lifetimeExamLimit ?? -1;
       const monthlyLimit = limits.monthlyExamLimit ?? -1;
@@ -1347,6 +1347,7 @@ export async function platformApi(request: Request, action: string) {
                 ? "You've reached your lifetime exam limit."
                 : "You've reached your monthly exam limit.",
             usage: { lifetimeStartedExams: lifetime, monthlyStartedExams: monthly },
+            code: 'EXAM_LIMIT_REACHED',
           },
           403,
         );
