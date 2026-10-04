@@ -303,7 +303,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
 
   await t.test(
     '500-question pool is independent of per-test limits, with matching random and status filters',
-    async () => {
+    async (poolTest) => {
       await account('pool-learner');
       await record('qbanks', makeBank('pool-bank', 'admin'));
       for (let start = 0; start < 500; start += 50)
@@ -390,7 +390,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
       assert.ok(selectedAcrossSpecialties.data.questions.every((q) =>
         (q.specialty === 'Surgery' || q.specialty === 'Medicine') && q.topic === 'Topic A',
       ));
-      await t.test('Progress study scopes classify by ID, include legacy questions and isolate identical names', async () => {
+      await poolTest.test('Progress study scopes classify by ID, include legacy questions and isolate identical names', async () => {
         for (const suffix of ['a', 'b']) {
           await record('qbankSpecialties', { id: 'focus-s-' + suffix, qbankId: 'pool-bank', name: 'Focus specialty', order: 0 });
           await record('qbankTopics', { id: 'focus-t-' + suffix, qbankId: 'pool-bank', specialtyId: 'focus-s-' + suffix, name: 'Focus topic', order: 0 });
@@ -400,8 +400,11 @@ export async function improvementsApiTests(t, db, call, runtime) {
         await record('qbanks', makeBank('focus-other-bank', 'admin'));
         await record('sharedQuestions', { ...question('focus-other-bank-q', 'focus-other-bank', 'focus-other'), specialty: 'Focus specialty', topic: 'Focus topic' });
         const scope = { specialty: 'Focus specialty', topic: 'Focus topic', specialtyId: 'focus-s-a', topicId: 'focus-t-a' };
-        assert.equal((await pool({ includedTopics: [scope] })).data.eligible, 2);
-        const focused = await pool({ includedTopics: [scope], count: 2 }, { select: true });
+        const legacy = { specialty: scope.specialty, topic: scope.topic, specialtyId: null, topicId: null };
+        assert.equal((await pool({ includedTopics: [scope] })).data.eligible, 1);
+        assert.equal((await pool({ includedTopics: [legacy] })).data.eligible, 1);
+        assert.equal((await pool({ includedTopics: [{ ...scope, specialtyId: 'focus-s-b', topicId: 'focus-t-b' }] })).data.eligible, 1);
+        const focused = await pool({ includedTopics: [scope, legacy], count: 2 }, { select: true });
         assert.equal(focused.status, 200, JSON.stringify(focused));
         assert.deepEqual(focused.data.questions.map(item => item.id).sort(), ['focus-legacy', 'focus-q-a']);
         assert.equal((await pool({ includedTopics: [{ ...scope, specialty: 'Old specialty', topic: 'Old topic' }] })).data.eligible, 1);

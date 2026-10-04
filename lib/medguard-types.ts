@@ -567,7 +567,9 @@ export interface TestBuilderConfig {
   statuses: QuestionStatus[];
   specialty: string;
   topics: string[];
-  includedTopics?: Array<{ specialty: string; topic: string; specialtyId?: string; topicId?: string }>;
+  // Missing IDs retain name-based selection; null selects legacy questions
+  // without a resolved classification ID; strings select that exact ID.
+  includedTopics?: Array<{ specialty: string; topic: string; specialtyId?: string | null; topicId?: string | null }>;
   count: number;
   randomAll?: boolean;
   title?: string;

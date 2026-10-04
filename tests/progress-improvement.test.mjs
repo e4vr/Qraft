@@ -60,8 +60,19 @@ void test('renamed classifications and legacy names build distinct selections wi
   assert.equal(summary.areasToImprove.length, 2);
   const medicine = summary.areasToImprove.find(topic => topic.specialty === 'Medicine');
   assert.equal(medicine.total, 2);
-  assert.deepEqual(medicine.studyTopics, [{ specialty: 'Medicine', topic: 'New topic', specialtyId: 's', topicId: 't' }]);
+  assert.deepEqual(medicine.studyTopics, [{ specialty: 'Medicine', topic: 'New topic', specialtyId: 's', topicId: 't' }, { specialty: 'Medicine', topic: 'New topic', specialtyId: null, topicId: null }]);
   assert.equal(summary.areasToImprove.find(topic => topic.specialty === 'Surgery').studyTopics[0].topicId, 'other-topic');
   const otherBank = summarizeProgress({ a: answer(1) }, [q('elsewhere', { qbankId: 'other-bank' })], [s], [t]);
   assert.equal(otherBank.areasToImprove.length, 0);
+});
+
+void test('grandfathered equal names keep legacy questions in only their assigned Progress group', () => {
+  const duplicate = { ...t, id: 'duplicate-topic' };
+  const summary = summarizeProgress({ a: answer(1), b: answer(1), c: answer(1) }, [q('a'), q('b', { topicId: 'duplicate-topic' }), q('c', { specialtyId: undefined, topicId: undefined })], [s], [t, duplicate]);
+  const first = summary.areasToImprove.find(topic => topic.id === 't');
+  const second = summary.areasToImprove.find(topic => topic.id === 'duplicate-topic');
+  assert.equal(first.total, 2);
+  assert.equal(second.total, 1);
+  assert.deepEqual(second.studyTopics, [{ specialty: 'Medicine', topic: 'Cardiology', specialtyId: 's', topicId: 'duplicate-topic' }]);
+  assert.equal(first.studyTopics.filter(selection => selection.topicId === null).length, 1);
 });

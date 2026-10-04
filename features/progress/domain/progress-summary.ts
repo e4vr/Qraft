@@ -40,8 +40,8 @@ export function summarizeProgress(
         const selection = {
           specialty: assignedSpecialty?.name ?? question.specialty,
           topic: assignedTopic?.name ?? question.topic,
-          ...(specialtyById.has(group.id) ? { specialtyId: group.id } : {}),
-          ...(topicById.has(topicGroup.id) ? { topicId: topicGroup.id } : {}),
+          specialtyId: assignedSpecialty?.id ?? null,
+          topicId: assignedTopic?.id ?? null,
         };
         studyTopics.set(JSON.stringify(selection), selection);
       }

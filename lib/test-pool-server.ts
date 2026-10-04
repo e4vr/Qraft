@@ -21,8 +21,8 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
   const validIncluded = included === undefined || (
     Array.isArray(included) && included.every(item =>
       item && typeof item.specialty === 'string' && typeof item.topic === 'string' &&
-      (item.specialtyId === undefined || (typeof item.specialtyId === 'string' && item.specialtyId.length > 0)) &&
-      (item.topicId === undefined || (typeof item.topicId === 'string' && item.topicId.length > 0)),
+      (item.specialtyId == null || (typeof item.specialtyId === 'string' && item.specialtyId.length > 0)) &&
+      (item.topicId == null || (typeof item.topicId === 'string' && item.topicId.length > 0)),
     )
   );
   if (!config || typeof config.specialty !== 'string' || !Array.isArray(config.topics) || config.topics.some(topic => typeof topic !== 'string') || !validIncluded || !Array.isArray(config.statuses) || config.statuses.some(status => !['new','previous','correct','incorrect','flagged'].includes(status)))
@@ -64,10 +64,10 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
             SELECT 1 FROM json_each(?) selected
             WHERE (
               (json_extract(selected.value,'$.specialtyId') IS NOT NULL AND q.resolved_specialty_id=json_extract(selected.value,'$.specialtyId'))
-              OR ((json_extract(selected.value,'$.specialtyId') IS NULL OR q.resolved_specialty_id IS NULL) AND json_extract(selected.value,'$.specialty')=json_extract(q.payload,'$.specialty'))
+              OR ((json_type(selected.value,'$.specialtyId') IS NULL OR (json_type(selected.value,'$.specialtyId')='null' AND q.resolved_specialty_id IS NULL)) AND json_extract(selected.value,'$.specialty')=json_extract(q.payload,'$.specialty'))
             ) AND (
               (json_extract(selected.value,'$.topicId') IS NOT NULL AND q.resolved_topic_id=json_extract(selected.value,'$.topicId'))
-              OR ((json_extract(selected.value,'$.topicId') IS NULL OR q.resolved_topic_id IS NULL) AND json_extract(selected.value,'$.topic')=json_extract(q.payload,'$.topic'))
+              OR ((json_type(selected.value,'$.topicId') IS NULL OR (json_type(selected.value,'$.topicId')='null' AND q.resolved_topic_id IS NULL)) AND json_extract(selected.value,'$.topic')=json_extract(q.payload,'$.topic'))
             )
           )
         )
