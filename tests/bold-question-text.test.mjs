@@ -17,14 +17,14 @@ const { FormattedQuestionText, HighlightedText, boldTextSegments, boldTextSource
 const render = (text, props) => renderToStaticMarkup(createElement(props ? HighlightedText : FormattedQuestionText, { text, ...props }));
 const visible = text => boldTextSegments(text).map(segment => segment.text).join('');
 
-test('question and explanation bold renders Arabic, single letters, and multiple paragraphs without markers', () => {
+void test('question and explanation bold renders Arabic, single letters, and multiple paragraphs without markers', () => {
   assert.equal(render('Which nerve is **most likely** injured?'), 'Which nerve is <strong class="font-bold">most likely</strong> injured?');
   assert.equal(render('- **A:** Tibial nerve\n- **B:** Deep peroneal nerve'), '- <strong class="font-bold">A:</strong> Tibial nerve\n- <strong class="font-bold">B:</strong> Deep peroneal nerve');
   assert.equal(render('هذا **نص عريض**\n**A**'), 'هذا <strong class="font-bold">نص عريض</strong>\n<strong class="font-bold">A</strong>');
   assert.equal(visible('**First line\nsecond line**'), 'First line\nsecond line');
 });
 
-test('plain, incomplete, empty, and escaped markup remain readable and imported HTML is escaped', () => {
+void test('plain, incomplete, empty, and escaped markup remain readable and imported HTML is escaped', () => {
   for (const text of ['', 'plain\n0.5 mg', '**unfinished', 'tail**', '****', '** spaced **', '\\**literal**', '2 * 3']) {
     assert.equal(visible(text), text);
     assert.doesNotMatch(render(text), /<strong/);
@@ -34,7 +34,7 @@ test('plain, incomplete, empty, and escaped markup remain readable and imported 
   assert.doesNotMatch(html, /<script|<img/);
 });
 
-test('selection offsets preserve original source coordinates before, within, and after bold text', () => {
+void test('selection offsets preserve original source coordinates before, within, and after bold text', () => {
   const text = 'A **bold** tail';
   assert.equal(boldTextSourceOffset(text, 0, 'start'), 0);
   assert.equal(boldTextSourceOffset(text, 2, 'start'), 4);
@@ -46,7 +46,7 @@ test('selection offsets preserve original source coordinates before, within, and
   assert.equal(boldTextSourceOffset('**A****B**', 1, 'start'), 7);
 });
 
-test('existing highlights cross bold boundaries and new selections highlight the intended text', () => {
+void test('existing highlights cross bold boundaries and new selections highlight the intended text', () => {
   const text = 'A **bold** tail';
   const start = boldTextSourceOffset(text, 3, 'start');
   const end = boldTextSourceOffset(text, 5, 'end');

@@ -7,6 +7,8 @@ import { collaborationWriteGuard, type CollaborationWriteSnapshot } from '@/serv
 import { announcementSettings } from '@/features/announcements/server/announcement-settings';
 import { validOptionalExplanationImages } from '@/features/media/domain/image-attachments';
 import { bankDeletionStatements } from '@/features/qbanks/server/bank-deletion';
+import { classificationCleanupStatements } from '@/features/qbanks/server/classification-cleanup';
+import { publicationClassificationResolver } from '@/features/qbanks/server/publication-classification';
 import { bankAccessState, bankAccessStates } from './qbank-access-repository';
 import { allocateQuestionIds } from './question-id-repository';
 import { env } from 'cloudflare:workers';
@@ -42,6 +44,7 @@ import {
   normalizeUniversityId,
   type AppState,
   type AppUser,
+  type Question,
   type CollaborationState,
   type MemberProfile,
   type QBank,
@@ -2863,6 +2866,12 @@ export async function saveCollaboration(request: Request) {
         409,
       );
   }
+  const publishedOperations = input.operations.filter(operation => operation.collection === 'sharedQuestions' && operation.type === 'set');
+  if (publishedOperations.length) {
+    const classifyQuestion = await publicationClassificationResolver(env.DB, publishedOperations.map(operation => (operation.value as unknown as Question).qbankId ?? 'smle-gs'));
+    for (const operation of publishedOperations)
+      operation.value = classifyQuestion(operation.value as unknown as Question) as unknown as Record<string, unknown>;
+  }
   const now = new Date().toISOString();
   const profileSets = input.operations
     .filter(
@@ -2977,6 +2986,11 @@ export async function saveCollaboration(request: Request) {
     );
   if (recordSets.some(row => ['sharedQuestions', 'questionProposals'].includes(row.collection)))
     statements.push(await importKeyStatement(recordSets));
+  const classificationBanks = input.operations.filter(operation =>
+    ['sharedQuestions', 'qbankSpecialties', 'qbankTopics'].includes(operation.collection))
+    .map(operation => bankIdForOperation(operation, isRecord(operation.value) ? operation.value : {}, state))
+    .filter((id): id is string => Boolean(id) && !deletedBanks.has(id!));
+  statements.push(...classificationCleanupStatements(env.DB, classificationBanks, now));
   if (guardedSnapshots.length) statements.push(env.DB.prepare('DELETE FROM collaboration_write_guards WHERE id=?').bind(guardId));
   try {
     if (statements.length) await env.DB.batch(statements);

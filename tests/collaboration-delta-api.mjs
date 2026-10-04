@@ -10,7 +10,7 @@ const comparable = state => JSON.parse(JSON.stringify({ ...state, lastSyncAt: nu
     ? value.sort((a, b) => a.id.localeCompare(b.id)) : value);
 
 export async function collaborationDeltaApiTests(t, { db, call, mf }) {
-  await t.test('import notifications reach authorized reviewers, retain legacy tabs, and only wake modern viewers for new classification', async () => {
+  await t.test('import notifications reach authorized reviewers, retain legacy tabs, and keep modern viewers quiet until questions are published', async () => {
     const id = `notify-import-${randomUUID()}`;
     const bank = { id, name: 'Notification fixture', shortName: 'NOTIFY', description: '',
       visibility: 'public', ownerId: 'admin', ownerName: 'Admin', essential: false,
@@ -41,21 +41,20 @@ export async function collaborationDeltaApiTests(t, { db, call, mf }) {
       const first = body();
       assert.equal((await call('admin', '/platform/import', first)).status, 200);
       await new Promise(resolve => setTimeout(resolve, 30));
-      assert.equal(viewer.length, 1);
-      assert.deepEqual(viewer[0].resources, ['classification']);
+      assert.equal(viewer.length, 0);
       assert.equal(legacy.some(packet => packet.resources.includes('review-queue')), true);
       assert.equal(reviewer.length, 1);
       assert.ok(reviewer[0].resources.includes('review-queue'));
       assert.equal((await call('admin', '/platform/import', body())).status, 200);
       await new Promise(resolve => setTimeout(resolve, 30));
-      assert.equal(viewer.length, 1);
+      assert.equal(viewer.length, 0);
       assert.equal(reviewer.length, 2);
       const legacyCount = legacy.length;
       assert.equal((await call('admin', '/platform/import', first)).status, 200);
       await new Promise(resolve => setTimeout(resolve, 30));
       assert.equal(reviewer.length, 2);
       assert.equal(legacy.length, legacyCount);
-      assert.equal(viewer.length, 1);
+      assert.equal(viewer.length, 0);
       const concurrentPayload = { ...payload, stem: `${payload.stem} Case ${randomUUID()}.` };
       const concurrent = [body(), body()].map(input => ({ ...input, questions: [concurrentPayload], skipExactDuplicates: true }));
       const outcomes = await Promise.all(concurrent.map(input => call('admin', '/platform/import', input)));

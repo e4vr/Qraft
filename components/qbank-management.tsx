@@ -1,4 +1,5 @@
 'use client';
+import { occupiedQBankClassification } from '@/features/progress/domain/qbank-classification';
 import { FormattedQuestionText } from '@/components/formatted-question-text';
 
 /* oxlint-disable next/no-img-element */
@@ -118,8 +119,14 @@ export function QBankManagement({
   const [bulkTopic, setBulkTopic] = useState('');
   const [structureDirty, setStructureDirty] = useState(false);
   const [confirmAction, confirmationDialog] = useConfirmationDialog();
-  const bankSpecialties = useMemo(() => collaboration.specialties.filter((item) => item.qbankId === bankId), [bankId, collaboration.specialties]);
-  const bankTopics = useMemo(() => collaboration.topics.filter((item) => item.qbankId === bankId), [bankId, collaboration.topics]);
+  const { specialties: bankSpecialties, topics: bankTopics } = useMemo(() => occupiedQBankClassification(
+    questions,
+    collaboration.specialties.filter((item) => item.qbankId === bankId),
+    collaboration.topics.filter((item) => item.qbankId === bankId),
+  ), [bankId, questions, collaboration.specialties, collaboration.topics]);
+  const activeSpecialtyFilter = bankSpecialties.some(item => item.id === specialtyFilter) ? specialtyFilter : '';
+  const activeTopicFilter = bankTopics.some(item => item.id === topicFilter &&
+    (!activeSpecialtyFilter || item.specialtyId === activeSpecialtyFilter)) ? topicFilter : '';
   const noteStructureDirty = useCallback((dirty: boolean) => setStructureDirty(dirty), []);
   const members = useMemo(
     () =>
@@ -138,12 +145,12 @@ export function QBankManagement({
     const raw = search.trim().replace(/^#/, '').toLowerCase();
     const padded = /^\d+$/.test(raw) ? raw.padStart(5, '0') : raw;
     return questions.filter((question) =>
-      (!specialtyFilter || question.specialtyId === specialtyFilter) &&
-      (!topicFilter || question.topicId === topicFilter) &&
+      (!activeSpecialtyFilter || question.specialtyId === activeSpecialtyFilter) &&
+      (!activeTopicFilter || question.topicId === activeTopicFilter) &&
       (!sourceFilter || (questionSourceKey(question) || '__missing-source__') === sourceFilter) &&
       (!raw || `${question.questionId} ${question.stem} ${question.specialty} ${question.topic}`.toLowerCase().includes(raw) || question.questionId.includes(padded)),
     );
-  }, [questions, search, specialtyFilter, topicFilter, sourceFilter]);
+  }, [questions, search, activeSpecialtyFilter, activeTopicFilter, sourceFilter]);
 
   if (bank && canDelete && !canEditBank(user, bank, collaboration.memberships))
     return <main className="mx-auto max-w-xl space-y-4 p-6">
@@ -679,13 +686,13 @@ export function QBankManagement({
               </button>
             </div>
             <div className="mb-5 grid gap-3 sm:grid-cols-3">
-              <select value={specialtyFilter} onChange={(event) => { setSpecialtyFilter(event.target.value); setTopicFilter(''); }} className="h-11 rounded-xl border bg-card px-3 text-sm">
+              <select value={activeSpecialtyFilter} onChange={(event) => { setSpecialtyFilter(event.target.value); setTopicFilter(''); }} className="h-11 rounded-xl border bg-card px-3 text-sm">
                 <option value="">All specialties</option>
                 {bankSpecialties.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
-              <select value={topicFilter} onChange={(event) => setTopicFilter(event.target.value)} className="h-11 rounded-xl border bg-card px-3 text-sm">
+              <select value={activeTopicFilter} onChange={(event) => setTopicFilter(event.target.value)} className="h-11 rounded-xl border bg-card px-3 text-sm">
                 <option value="">All topics</option>
-                {bankTopics.filter((item) => !specialtyFilter || item.specialtyId === specialtyFilter).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                {bankTopics.filter((item) => !activeSpecialtyFilter || item.specialtyId === activeSpecialtyFilter).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
               <select aria-label="Filter questions by source" value={sourceFilter} onChange={event => setSourceFilter(event.target.value)} className="h-11 min-w-0 rounded-xl border bg-card px-3 text-sm">
                 <option value="">All sources</option>

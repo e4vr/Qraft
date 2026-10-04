@@ -61,7 +61,8 @@ export function ClassificationManager({
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const hydrated = useRef(false);
-  const baseline = JSON.stringify({ specialties: sourceSpecialties, topics: sourceTopics, assignments: [] });
+  const sourceBaseline = JSON.stringify({ specialties: sourceSpecialties, topics: sourceTopics, assignments: [] });
+  const [baseline, setBaseline] = useState(sourceBaseline);
   const snapshot = JSON.stringify({ specialties, topics, assignments });
   const dirty = snapshot !== baseline;
   const assignedTopicByQuestion = new Map(assignments.map((item) => [item.questionId, item.topicId]));
@@ -101,12 +102,13 @@ export function ClassificationManager({
       setSpecialties(sourceSpecialties);
       setTopics(sourceTopics);
       setBaseRevision(revision);
+      setBaseline(sourceBaseline);
     } else if (revision !== baseRevision) {
       setError('A newer server structure is available. Your local draft is protected; compare it, then retry or discard it.');
     }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [baseRevision, dirty, revision, sourceSpecialties, sourceTopics]);
+  }, [baseRevision, dirty, revision, sourceBaseline, sourceSpecialties, sourceTopics]);
   useEffect(() => {
     const guard = (event: BeforeUnloadEvent) => {
       if (!dirty) return;
@@ -286,6 +288,7 @@ export function ClassificationManager({
       setSpecialties(result.specialties ?? specialties);
       setTopics(result.topics ?? topics);
       setAssignments([]);
+      setBaseline(JSON.stringify({ specialties: result.specialties ?? specialties, topics: result.topics ?? topics, assignments: [] }));
       setBaseRevision(result.revision);
       setOperationId(crypto.randomUUID());
       onSaved({ ...result, specialties: result.specialties ?? specialties, topics: result.topics ?? topics, assignments: result.assignments ?? [] });
@@ -310,6 +313,7 @@ export function ClassificationManager({
       tone: 'destructive',
     }))) return;
     setSpecialties(sourceSpecialties); setTopics(sourceTopics); setAssignments([]);
+    setBaseline(sourceBaseline);
     setBaseRevision(revision); setOperationId(crypto.randomUUID()); setError(''); setMessage('Draft discarded.');
     void deleteClassificationDraft(user.uid, qbankId);
   }

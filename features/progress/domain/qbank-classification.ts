@@ -80,5 +80,22 @@ export function groupQuestionsByQBankClassification(
     topicGroup.questions.push(question);
   }
 
-  return groups;
+  return groups.filter((group) => group.questions.length > 0).map((group) => ({
+    ...group,
+    topics: group.topics.filter((topic) => topic.questions.length > 0),
+  }));
+}
+
+export function occupiedQBankClassification(
+  questions: Question[],
+  specialties: QBankSpecialty[],
+  topics: QBankTopic[],
+) {
+  const groups = groupQuestionsByQBankClassification(questions, specialties, topics);
+  const specialtyIds = new Set(groups.map((group) => group.id));
+  const topicIds = new Set(groups.flatMap((group) => group.topics.map((topic) => topic.id)));
+  return {
+    specialties: specialties.filter((item) => specialtyIds.has(item.id)),
+    topics: topics.filter((item) => topicIds.has(item.id)),
+  };
 }

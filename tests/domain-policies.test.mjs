@@ -154,14 +154,15 @@ void test('Progress follows the QBank specialty and topic hierarchy exactly', as
   ];
   const groups = groupQuestionsByQBankClassification(questions, specialties, topics);
   assert.deepEqual(groups.map((group) => group.name), [
-    'Pediatrics', 'Surgery', 'Empty specialty', 'Unlisted specialty',
+    'Pediatrics', 'Surgery', 'Unlisted specialty',
   ]);
   assert.deepEqual(groups[0].questions.map((question) => question.id), ['q2']);
   assert.deepEqual(groups[1].questions.map((question) => question.id), ['q1', 'q3']);
   assert.deepEqual(groups[1].topics.map((topic) => topic.name), [
     'Pediatric Surgery', 'General Surgery',
   ]);
-  assert.equal(groups[2].questions.length, 0);
+  assert.ok(groups.every((group) => group.questions.length > 0));
+  assert.ok(groups.every((group) => group.topics.every((topic) => topic.questions.length > 0)));
   assert.equal(groups.reduce((total, group) => total + group.questions.length, 0), questions.length);
 });
 

@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { classificationCleanupStatements } from '@/features/qbanks/server/classification-cleanup';
 import type {
   AppUser,
   Question,
@@ -272,6 +273,7 @@ export async function deleteImportDuplicate(
     env.DB.prepare(
       'DELETE FROM records WHERE type=? AND id=? AND payload=?',
     ).bind(type, id, row.payload),
+    ...(type === 'sharedQuestions' ? classificationCleanupStatements(env.DB, [row.qbank_id], now) : []),
   ]);
   return result[1].meta.changes
     ? json({ ok: true })

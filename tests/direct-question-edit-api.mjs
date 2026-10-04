@@ -163,6 +163,6 @@ export async function directQuestionEditApiTests(t, { db, call }) {
     await db.prepare('DELETE FROM review_completion_claims WHERE proposal_id IN (?,?)').bind(proposal.id, 'direct-edit-reject').run();
     await db.prepare('DELETE FROM credit_transactions WHERE reference_id IN (?,?)').bind(proposal.id, 'direct-edit-reject').run();
     await db.prepare('DELETE FROM question_ids WHERE question_id=?').bind(question.questionId).run();
-    await db.prepare("DELETE FROM records WHERE id IN (?,?,?,?) OR (type='auditLog' AND json_extract(payload,'$.entityId')=?)").bind(bankId, questionId, proposal.id, 'direct-edit-reject', questionId).run();
+    await db.prepare("DELETE FROM records WHERE qbank_id=? OR id IN (?,?,?,?) OR (type='auditLog' AND json_extract(payload,'$.entityId')=?)").bind(bankId, bankId, questionId, proposal.id, 'direct-edit-reject', questionId).run();
   }
 }

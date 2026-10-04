@@ -8,6 +8,8 @@ import { validImageAttachments } from '@/features/media/domain/image-attachments
 import { contributionReward } from '@/features/contributions/domain/contribution-reward';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 import { directQuestionEdit } from '@/features/qbanks/server/direct-question-edit';
+import { classificationCleanupStatements } from '@/features/qbanks/server/classification-cleanup';
+import { publicationClassificationResolver } from '@/features/qbanks/server/publication-classification';
 import { importSettings } from '@/features/imports/server/import-settings';
 import { validImportSettings } from '@/features/imports/domain/import-settings';
 import { emitUsage } from '@/features/administration/server/usage-telemetry';
@@ -581,9 +583,6 @@ export async function platformApi(request: Request, action: string) {
       const previousOperation = await env.DB.prepare(
         'SELECT revision FROM classification_operations WHERE operation_id=? AND user_id=? AND qbank_id=?',
       ).bind(operationId, user.uid, qbankId).first<{ revision: number }>();
-      if (previousOperation)
-        return json({ ok: true, revision: previousOperation.revision, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
-
       const currentRows = await env.DB.prepare(
         "SELECT type,payload FROM records WHERE qbank_id=? AND type IN ('qbankSpecialties','qbankTopics')",
       ).bind(qbankId).all<{ type: string; payload: string }>();
@@ -596,6 +595,16 @@ export async function platformApi(request: Request, action: string) {
       const currentRevision = await env.DB.prepare(
         'SELECT revision FROM qbank_classification_revisions WHERE qbank_id=?',
       ).bind(qbankId).first<{ revision: number }>();
+      if (previousOperation) {
+        const savedAssignments = await env.DB.prepare(`SELECT id AS questionId,
+          json_extract(payload,'$.topicId') AS topicId,json_extract(payload,'$.topic') AS topic,
+          json_extract(payload,'$.specialtyId') AS specialtyId,json_extract(payload,'$.specialty') AS specialty
+          FROM records WHERE type='sharedQuestions' AND qbank_id=? AND id IN (SELECT value FROM json_each(?))`)
+          .bind(qbankId, JSON.stringify(assignments.map(item => item?.questionId).filter(id => typeof id === 'string'))).all();
+        return json({ ok: true, revision: currentRevision?.revision ?? previousOperation.revision,
+          specialties: currentSpecialties, topics: currentTopics, assignments: savedAssignments.results,
+          unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
+      }
       if ((currentRevision?.revision ?? 0) !== baseRevision)
         return json({
           error: 'The classification structure changed on another device. Your draft was kept; review the latest version and try again.',
@@ -719,6 +728,7 @@ export async function platformApi(request: Request, action: string) {
           env.DB.prepare('INSERT INTO classification_operations(operation_id,user_id,qbank_id,revision,created_at) VALUES(?,?,?,?,?)')
             .bind(operationId, user.uid, qbankId, nextRevision, now),
           auditStatement(user, 'qbank_classification_saved', qbankId, { revision: baseRevision }, { revision: nextRevision, specialties: stampedSpecialties.length, topics: stampedTopics.length, assignments: assignmentValues.length }),
+          ...classificationCleanupStatements(env.DB, [qbankId], now),
         ]);
       } catch (error) {
         if (String(error).includes('CLASSIFICATION_CONFLICT')) {
@@ -738,7 +748,16 @@ export async function platformApi(request: Request, action: string) {
         }
         throw error;
       }
-      return json({ ok: true, revision: nextRevision, specialties: stampedSpecialties, topics: stampedTopics, assignments: assignmentValues });
+      const [savedRows, savedRevision] = await env.DB.batch([
+        env.DB.prepare("SELECT type,payload FROM records WHERE qbank_id=? AND type IN ('qbankSpecialties','qbankTopics')").bind(qbankId),
+        env.DB.prepare('SELECT revision FROM qbank_classification_revisions WHERE qbank_id=?').bind(qbankId),
+      ]);
+      const savedClassifications = savedRows.results as Array<{ type: string; payload: string }>;
+      return json({ ok: true,
+        revision: (savedRevision.results[0] as { revision: number }).revision,
+        specialties: savedClassifications.filter(row => row.type === 'qbankSpecialties').map(row => JSON.parse(row.payload)),
+        topics: savedClassifications.filter(row => row.type === 'qbankTopics').map(row => JSON.parse(row.payload)),
+        assignments: assignmentValues });
     }
     if (action === 'import-preview' && request.method === 'POST') {
       if (!root && !(user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier)).canUseJsonImport)
@@ -1040,6 +1059,12 @@ export async function platformApi(request: Request, action: string) {
           ).bind(record.type!, record.id!, qbankId, ownerId, JSON.stringify(record.payload), record.updated_at || now);
         }), await importKeyStatement(chunk.map(record => ({ collection: record.type!, id: record.id!, payload: JSON.stringify(record.payload) })))]);
       }
+      // Restore all content chunks before pruning so classification ordering and
+      // metadata are not discarded before their questions arrive.
+      const restoredBankIds = [...new Set(valid.filter(record => ['sharedQuestions','qbankSpecialties','qbankTopics'].includes(record.type!))
+        .map(record => typeof (record.payload as Record<string, unknown>).qbankId === 'string' ? (record.payload as { qbankId: string }).qbankId : (record as { qbank_id?: string }).qbank_id ?? '').filter(Boolean))];
+      for (let offset = 0; offset < restoredBankIds.length; offset += 50)
+        await env.DB.batch(classificationCleanupStatements(env.DB, restoredBankIds.slice(offset, offset + 50), now));
       await auditStatement(user, 'content_backup_restored', 'content-backup', null, { records: valid.length }).run();
       return json({ ok: true, restored: valid.length });
     }
@@ -1191,6 +1216,12 @@ export async function platformApi(request: Request, action: string) {
                ))`).bind(record.type!, record.id!, qbankId, user.uid, JSON.stringify(record.payload), record.updated_at || now, user.uid, user.uid);
         }), await importKeyStatement(chunk.map(record => ({ collection: record.type!, id: record.id!, payload: JSON.stringify(record.payload) })))]);
       }
+      // Restore all content chunks before pruning so classification ordering and
+      // metadata are not discarded before their questions arrive.
+      const restoredBankIds = [...new Set(records.filter(record => ['sharedQuestions','qbankSpecialties','qbankTopics'].includes(record.type!))
+        .map(record => typeof (record.payload as Record<string, unknown>).qbankId === 'string' ? (record.payload as { qbankId: string }).qbankId : (record as { qbank_id?: string }).qbank_id ?? '').filter(Boolean))];
+      for (let offset = 0; offset < restoredBankIds.length; offset += 50)
+        await env.DB.batch(classificationCleanupStatements(env.DB, restoredBankIds.slice(offset, offset + 50), now));
       if (limits.canUseFlashcards && backup.flashcards) {
         const stored = await env.DB.prepare('SELECT payload,revision FROM app_states WHERE user_id=?').bind(user.uid).first<{ payload: string; revision: number }>();
         const app = stored ? JSON.parse(stored.payload) as Record<string, unknown> : { version: 1 };
@@ -1968,6 +1999,9 @@ export async function platformApi(request: Request, action: string) {
 
       const now = new Date().toISOString();
       const nextNumbers = new Map<string, number>();
+      const classifyPublishedQuestion = status === 'approved' && proposalsToFinalize.length > 0
+        ? await publicationClassificationResolver(env.DB, proposalsToFinalize.map(proposal => proposal.qbankId))
+        : (question: Question) => question;
       const updatedProposals: QuestionProposal[] = [];
       const updatedQuestions: Question[] = [];
       if (status === 'approved') {
@@ -2053,9 +2087,10 @@ export async function platformApi(request: Request, action: string) {
             reviewedByName: user.displayName,
             reviewedAt: now,
           };
-          updatedQuestions.push(question);
+          const publishedQuestion = classifyPublishedQuestion(question);
+          updatedQuestions.push(publishedQuestion);
           statements.push(env.DB.prepare("INSERT INTO records(type,id,qbank_id,payload,updated_at) VALUES('sharedQuestions',?,?,?,?) ON CONFLICT(type,id) DO UPDATE SET qbank_id=excluded.qbank_id,payload=excluded.payload,updated_at=excluded.updated_at")
-            .bind(question.id, question.qbankId, JSON.stringify(question), now));
+            .bind(publishedQuestion.id, publishedQuestion.qbankId, JSON.stringify(publishedQuestion), now));
           const reward = contributionReward(proposal);
           if (reward.amount > 0) statements.push(
             env.DB.prepare(
@@ -2118,6 +2153,7 @@ export async function platformApi(request: Request, action: string) {
         ...updatedProposals.map(proposal => ({ collection: 'questionProposals', id: proposal.id, payload: JSON.stringify(proposal) })),
         ...dependentUpdates.map(({ proposal }) => ({ collection: 'questionProposals', id: proposal.id, payload: JSON.stringify(proposal) })),
       ]));
+      statements.push(...classificationCleanupStatements(env.DB, updatedQuestions.map(question => question.qbankId ?? 'smle-gs'), now));
       const batchResults = await env.DB.batch(statements);
       await emitUsage(user.uid, { reviewContributions: proposalsToFinalize.length + awaitingSecond.size });
       return json({
@@ -2571,6 +2607,7 @@ export async function platformApi(request: Request, action: string) {
             { internalId: question.id },
             null,
           ),
+          ...classificationCleanupStatements(env.DB, [bank.id], new Date().toISOString()),
         ]);
         return json({ ok: true });
       }
@@ -2849,8 +2886,10 @@ export async function platformApi(request: Request, action: string) {
       }));
       const result = {
         proposals,
-        specialties: createdSpecialties,
-        topics: createdTopics,
+        // Pending proposals retain their classification in their payload. The
+        // bank structure contains only classifications with published questions.
+        specialties: [] as QBankSpecialty[],
+        topics: [] as QBankTopic[],
         uploadSessionId: context.runId,
         requestId: context.requestId,
         chunkIndex: context.chunkIndex,
@@ -2915,16 +2954,6 @@ export async function platformApi(request: Request, action: string) {
             "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'questionProposals',json_extract(value,'$.id'),?,?,value,? FROM json_each(?)",
           ).bind(bank.id, user.uid, now, JSON.stringify(proposals)),
           await importKeyStatement(proposals.map(proposal => ({ collection: 'questionProposals', id: proposal.id, payload: JSON.stringify(proposal) }))),
-          env.DB.prepare(
-            "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'qbankSpecialties',json_extract(value,'$.id'),?,?,value,? FROM json_each(?) WHERE 1 ON CONFLICT(type,id) DO NOTHING",
-          ).bind(bank.id, user.uid, now, JSON.stringify(createdSpecialties)),
-          env.DB.prepare(
-            "INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) SELECT 'qbankTopics',json_extract(value,'$.id'),?,?,value,? FROM json_each(?) WHERE 1 ON CONFLICT(type,id) DO NOTHING",
-          ).bind(bank.id, user.uid, now, JSON.stringify(createdTopics)),
-          env.DB.prepare(`INSERT INTO qbank_classification_revisions(qbank_id,revision,updated_at)
-            SELECT ?,1,? WHERE ?>0
-            ON CONFLICT(qbank_id) DO UPDATE SET revision=qbank_classification_revisions.revision+1,updated_at=excluded.updated_at WHERE ?>0`)
-            .bind(bank.id, now, createdSpecialties.length + createdTopics.length, createdSpecialties.length + createdTopics.length),
           auditStatement(user, 'questions_json_imported', bank.id, null, {
             batchId, fileName: uploadedFileName, fileHash, count: proposals.length, skipped: report.skipped.length,
             skippedDuplicates,
@@ -2984,15 +3013,6 @@ export async function platformApi(request: Request, action: string) {
       }
       activeImportContext = undefined;
       await emitUsage(user.uid, { questionsImported:proposals.length });
-      if (createdSpecialties.length || createdTopics.length) {
-        const classificationRevision = await env.DB.prepare(
-          'SELECT revision FROM qbank_classification_revisions WHERE qbank_id=?',
-        ).bind(bank.id).first<{ revision: number }>();
-        const finalResult = { ...result, classificationRevision: classificationRevision?.revision ?? 0 };
-        await env.DB.prepare('UPDATE import_batches SET result=? WHERE id=?')
-          .bind(JSON.stringify(finalResult), batchId).run();
-        return json(finalResult, 200, { 'x-qraft-classification-changed': '1' });
-      }
       return json(result);
     }
     if (action === 'import-search-reindex') {
