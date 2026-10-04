@@ -58,7 +58,8 @@ import {
   normalizedTestTitle,
 } from '@/features/exams/domain/exam-presenters';
 import { filterHistoryTests, groupHistoryTests, sortHistoryTests, type HistoryMonth } from '@/features/exams/domain/test-history';
-import { groupQuestionsByQBankClassification } from '@/features/progress/domain/qbank-classification';
+import { summarizeProgress } from '@/features/progress/domain/progress-summary';
+import { AreasToImprove } from '@/components/progress/areas-to-improve';
 import { mergeRanges } from '@/features/exams/domain/highlight-ranges';
 import {
   loadActiveLocalTheme,
@@ -4234,79 +4235,19 @@ function ProgressView({
   questions,
   specialties,
   topics,
+  maxQuestions,
+  onStudy,
 }: {
   state: AppState;
   questions: Question[];
   specialties: QBankSpecialty[];
   topics: QBankTopic[];
+  maxQuestions: number;
+  onStudy: (config: TestBuilderConfig) => Promise<void>;
 }) {
   const { mode: presentationMode } = usePresentationEnvironment();
-  const summary = useMemo(() => {
-    const completed = questions.filter(
-      (question) => getQuestionProgress(state, question.id).attempts > 0,
-    );
-    const correct = completed.filter(
-      (question) =>
-        getQuestionProgress(state, question.id).lastAnswer === question.answer,
-    );
-    const incorrect = completed.length - correct.length;
-    const flagged = questions.filter(
-      (question) => getQuestionProgress(state, question.id).flagged,
-    ).length;
-    const categories = groupQuestionsByQBankClassification(
-      questions,
-      specialties,
-      topics,
-    ).map((group) => {
-        const categoryPool = group.questions;
-        const categoryAttempted = categoryPool.filter(
-          (question) => getQuestionProgress(state, question.id).attempts > 0,
-        );
-        const categoryRight = categoryAttempted.filter(
-          (question) =>
-            getQuestionProgress(state, question.id).lastAnswer ===
-            question.answer,
-        ).length;
-        const topicSummaries = group.topics.map((topicGroup) => {
-            const pool = topicGroup.questions;
-            const attempted = pool.filter(
-              (question) =>
-                getQuestionProgress(state, question.id).attempts > 0,
-            );
-            const right = attempted.filter(
-              (question) =>
-                getQuestionProgress(state, question.id).lastAnswer ===
-                question.answer,
-            ).length;
-            return {
-              id: topicGroup.id,
-              topic: topicGroup.name,
-              total: pool.length,
-              completed: attempted.length,
-              accuracy: attempted.length
-                ? Math.round((right / attempted.length) * 100)
-                : 0,
-            };
-          });
-        return {
-          id: group.id,
-          category: group.name,
-          total: categoryPool.length,
-          completed: categoryAttempted.length,
-          accuracy: categoryAttempted.length
-            ? Math.round((categoryRight / categoryAttempted.length) * 100)
-            : 0,
-          topics: topicSummaries,
-        };
-      });
-    return {
-      completed: completed.length,
-      correct: correct.length,
-      incorrect,
-      flagged,
-      categories,
-    };
-  }, [questions, specialties, topics, state]);
+  const summary = useMemo(() => summarizeProgress(state.progress, questions, specialties, topics), [questions, specialties, topics, state.progress]);
+  const improvementSection = <AreasToImprove topics={summary.areasToImprove} completed={summary.completed} maxQuestions={maxQuestions} onStudy={onStudy} />;
   const completion = questions.length
     ? Math.round((summary.completed / questions.length) * 100)
     : 0;
@@ -4360,6 +4301,7 @@ function ProgressView({
               <span>Correct</span>
             </article>
           </div>
+          {improvementSection}
           <section className="q-mobile-progress-topics">
             <div className="mobile-section-heading">
               <div>
@@ -4456,6 +4398,7 @@ function ProgressView({
             color="amber"
           />
         </div>
+        {improvementSection}
         <section className="mt-6 rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border sm:p-6">
           <div>
             <h2 className="font-bold">Progress by Specialty & Topic</h2>
@@ -7708,10 +7651,13 @@ export default function MedGuardApp({
         )}
         {view === 'progress' && (
           <ProgressView
+            key={activeQBankId}
             state={state}
             questions={questions}
             specialties={collaboration.specialties.filter((item) => item.qbankId === activeQBankId)}
             topics={collaboration.topics.filter((item) => item.qbankId === activeQBankId)}
+            maxQuestions={(user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier)).maxQuestionsPerExam}
+            onStudy={createTest}
           />
         )}
         {view === 'flashcards' && (

@@ -290,7 +290,7 @@ void test('QBank switching, review counters, random tests, private notes, labs, 
   assert.match(app, /nextTestTitle/);
   assert.match(app, /Private note/);
   assert.match(app, /Laboratory reference values/);
-  assert.match(app, /groupQuestionsByQBankClassification/);
+  assert.match(app, /summarizeProgress\(state\.progress, questions, specialties, topics\)/);
   assert.match(types, /highlightSections/);
 });
 

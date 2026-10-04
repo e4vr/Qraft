@@ -390,6 +390,24 @@ export async function improvementsApiTests(t, db, call, runtime) {
       assert.ok(selectedAcrossSpecialties.data.questions.every((q) =>
         (q.specialty === 'Surgery' || q.specialty === 'Medicine') && q.topic === 'Topic A',
       ));
+      await t.test('Progress study scopes classify by ID, include legacy questions and isolate identical names', async () => {
+        for (const suffix of ['a', 'b']) {
+          await record('qbankSpecialties', { id: 'focus-s-' + suffix, qbankId: 'pool-bank', name: 'Focus specialty', order: 0 });
+          await record('qbankTopics', { id: 'focus-t-' + suffix, qbankId: 'pool-bank', specialtyId: 'focus-s-' + suffix, name: 'Focus topic', order: 0 });
+          await record('sharedQuestions', { ...question('focus-q-' + suffix, 'pool-bank', 'focus-' + suffix), specialty: 'Old specialty', topic: 'Old topic', specialtyId: 'focus-s-b', topicId: 'focus-t-' + suffix });
+        }
+        await record('sharedQuestions', { ...question('focus-legacy', 'pool-bank', 'focus-legacy'), specialty: 'Focus specialty', topic: 'Focus topic' });
+        await record('qbanks', makeBank('focus-other-bank', 'admin'));
+        await record('sharedQuestions', { ...question('focus-other-bank-q', 'focus-other-bank', 'focus-other'), specialty: 'Focus specialty', topic: 'Focus topic' });
+        const scope = { specialty: 'Focus specialty', topic: 'Focus topic', specialtyId: 'focus-s-a', topicId: 'focus-t-a' };
+        assert.equal((await pool({ includedTopics: [scope] })).data.eligible, 2);
+        const focused = await pool({ includedTopics: [scope], count: 2 }, { select: true });
+        assert.equal(focused.status, 200, JSON.stringify(focused));
+        assert.deepEqual(focused.data.questions.map(item => item.id).sort(), ['focus-legacy', 'focus-q-a']);
+        assert.equal((await pool({ includedTopics: [{ ...scope, specialty: 'Old specialty', topic: 'Old topic' }] })).data.eligible, 1);
+        assert.equal((await pool({ includedTopics: [{ ...scope, topicId: 1 }] })).status, 400);
+        assert.equal((await pool({ includedTopics: [{ ...scope, specialtyId: '' }] })).status, 400);
+      });
       await record('qbanks', makeBank('inaccessible-bank', 'admin', 'private'));
       assert.equal(
         (

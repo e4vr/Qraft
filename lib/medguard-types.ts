@@ -567,7 +567,7 @@ export interface TestBuilderConfig {
   statuses: QuestionStatus[];
   specialty: string;
   topics: string[];
-  includedTopics?: Array<{ specialty: string; topic: string }>;
+  includedTopics?: Array<{ specialty: string; topic: string; specialtyId?: string; topicId?: string }>;
   count: number;
   randomAll?: boolean;
   title?: string;

@@ -20,7 +20,9 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
   const included = config?.includedTopics;
   const validIncluded = included === undefined || (
     Array.isArray(included) && included.every(item =>
-      item && typeof item.specialty === 'string' && typeof item.topic === 'string',
+      item && typeof item.specialty === 'string' && typeof item.topic === 'string' &&
+      (item.specialtyId === undefined || (typeof item.specialtyId === 'string' && item.specialtyId.length > 0)) &&
+      (item.topicId === undefined || (typeof item.topicId === 'string' && item.topicId.length > 0)),
     )
   );
   if (!config || typeof config.specialty !== 'string' || !Array.isArray(config.topics) || config.topics.some(topic => typeof topic !== 'string') || !validIncluded || !Array.isArray(config.statuses) || config.statuses.some(status => !['new','previous','correct','incorrect','flagged'].includes(status)))
@@ -43,12 +45,14 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
       WHERE NOT EXISTS (SELECT 1 FROM retired_questions WHERE id=c.id)
       GROUP BY c.id
     ), effective AS (
-      SELECT e.id,json_set(
+      SELECT e.id,t.id AS resolved_topic_id,s.id AS resolved_specialty_id,json_set(
         e.payload,
-        '$.topic',coalesce((SELECT json_extract(t.payload,'$.name') FROM records t WHERE t.type='qbankTopics' AND t.id=json_extract(e.payload,'$.topicId')),json_extract(e.payload,'$.topic')),
-        '$.specialty',coalesce((SELECT json_extract(s.payload,'$.name') FROM records s WHERE s.type='qbankSpecialties' AND s.id=json_extract(e.payload,'$.specialtyId')),json_extract(e.payload,'$.specialty'))
+        '$.topic',coalesce(json_extract(t.payload,'$.name'),json_extract(e.payload,'$.topic')),
+        '$.specialty',coalesce(json_extract(s.payload,'$.name'),json_extract(e.payload,'$.specialty'))
       ) AS payload
       FROM effective_base e
+      LEFT JOIN records t ON t.type='qbankTopics' AND t.id=json_extract(e.payload,'$.topicId') AND t.qbank_id=?
+      LEFT JOIN records s ON s.type='qbankSpecialties' AND s.id=coalesce(json_extract(t.payload,'$.specialtyId'),json_extract(e.payload,'$.specialtyId')) AND s.qbank_id=?
     ), eligible AS (
       SELECT q.id,q.payload FROM effective q CROSS JOIN app
       LEFT JOIN json_each(coalesce(?,json_extract(app.payload,'$.progress'),'{}')) p ON p.key=q.id
@@ -58,8 +62,13 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
             AND (json_array_length(?)=0 OR json_extract(q.payload,'$.topic') IN (SELECT value FROM json_each(?))))
           OR EXISTS (
             SELECT 1 FROM json_each(?) selected
-            WHERE json_extract(selected.value,'$.specialty')=json_extract(q.payload,'$.specialty')
-              AND json_extract(selected.value,'$.topic')=json_extract(q.payload,'$.topic')
+            WHERE (
+              (json_extract(selected.value,'$.specialtyId') IS NOT NULL AND q.resolved_specialty_id=json_extract(selected.value,'$.specialtyId'))
+              OR ((json_extract(selected.value,'$.specialtyId') IS NULL OR q.resolved_specialty_id IS NULL) AND json_extract(selected.value,'$.specialty')=json_extract(q.payload,'$.specialty'))
+            ) AND (
+              (json_extract(selected.value,'$.topicId') IS NOT NULL AND q.resolved_topic_id=json_extract(selected.value,'$.topicId'))
+              OR ((json_extract(selected.value,'$.topicId') IS NULL OR q.resolved_topic_id IS NULL) AND json_extract(selected.value,'$.topic')=json_extract(q.payload,'$.topic'))
+            )
           )
         )
         AND (json_array_length(?)=0 OR EXISTS (
@@ -72,7 +81,7 @@ export async function testPool(user: AppUser, input: Record<string, unknown>) {
         ))
       )
     )`;
-  const bindings = [user.uid, qbankId, qbankId, progress, config.randomAll ? 1 : 0, includedTopics, config.specialty, config.specialty, JSON.stringify(config.topics), JSON.stringify(config.topics), includedTopics, JSON.stringify(config.statuses), JSON.stringify(config.statuses)];
+  const bindings = [user.uid, qbankId, qbankId, qbankId, qbankId, progress, config.randomAll ? 1 : 0, includedTopics, config.specialty, config.specialty, JSON.stringify(config.topics), JSON.stringify(config.topics), includedTopics, JSON.stringify(config.statuses), JSON.stringify(config.statuses)];
   if (!select) {
     const count = await env.DB.prepare(`${sql} SELECT count(*) AS eligible FROM eligible`).bind(...bindings).first<{ eligible: number }>();
     return json({ eligible: count?.eligible ?? 0 });
