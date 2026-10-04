@@ -60,6 +60,7 @@ import {
 import { filterHistoryTests, groupHistoryTests, sortHistoryTests, type HistoryMonth } from '@/features/exams/domain/test-history';
 import { summarizeProgress } from '@/features/progress/domain/progress-summary';
 import { AreasToImprove } from '@/components/progress/areas-to-improve';
+import { planAccessLabel } from '@/features/subscriptions/domain/plan-config';
 import { mergeRanges } from '@/features/exams/domain/highlight-ranges';
 import {
   loadActiveLocalTheme,
@@ -1402,11 +1403,11 @@ function AppSidebar({
         </nav>
         <footer className="q-sidebar-footer shrink-0 border-t border-sidebar-border/70 bg-sidebar/90 px-2.5 pt-2.5 backdrop-blur-xl">
           <div className="overflow-hidden rounded-2xl border border-sidebar-border/70 bg-card/95 shadow-[0_14px_34px_-25px_rgba(15,23,42,0.75)] dark:shadow-black/30">
-            <div className="flex items-center gap-1 p-1.5">
+            <div className="grid grid-cols-[minmax(0,1fr)_2rem_2rem] items-center gap-1.5 p-1.5">
               <button
                 onClick={() => navigate('account')}
                 aria-label="Open account profile"
-                className="group flex min-w-0 flex-1 items-center gap-2.5 rounded-xl py-1.5 pl-1.5 pr-3 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="group flex min-w-0 items-center gap-2.5 overflow-hidden rounded-xl py-1.5 pl-1.5 pr-2 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 <span
                   className={`profile-ring profile-ring-${user.tier} grid size-9 shrink-0 place-items-center rounded-full bg-primary/10 text-xs font-black text-primary transition-transform group-hover:scale-[1.02]`}
@@ -1420,16 +1421,16 @@ function AppSidebar({
                     </strong>
                   </span>
                   <span
-                    className="mt-1 flex min-w-0 items-center gap-1.5"
+                    className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5"
                     title={user.email}
                   >
                     {roleLabel && (
-                      <span className="min-w-0 truncate text-[10px] font-medium capitalize text-muted-foreground">
+                      <span className="min-w-0 max-w-full truncate text-[10px] font-medium capitalize text-muted-foreground">
                         {roleLabel}
                       </span>
                     )}
-                    <span className="shrink-0 rounded-md bg-primary/10 px-1 py-px text-[8px] font-bold leading-4 tracking-wide text-primary">
-                      {user.tier.toUpperCase()}
+                    <span className="max-w-full shrink-0 truncate rounded-md bg-primary/10 px-1.5 py-px text-[10px] font-bold leading-4 text-primary">
+                      {planAccessLabel(user.effectivePlan ?? user.tier)}
                     </span>
                   </span>
                 </span>
@@ -1447,7 +1448,7 @@ function AppSidebar({
                           : 'Saved on this device'
                 }
                 className={cx(
-                  'ml-1.5 grid size-8 shrink-0 place-items-center rounded-xl',
+                  'grid size-8 place-items-center rounded-xl',
                   syncStatus === 'error'
                     ? 'bg-red-50 text-red-600 dark:bg-red-500/10'
                     : syncStatus === 'offline' || syncStatus === 'local'

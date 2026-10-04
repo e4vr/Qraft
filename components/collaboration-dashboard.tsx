@@ -1,4 +1,5 @@
 'use client';
+import { planAccessLabel } from '@/features/subscriptions/domain/plan-config';
 
 import {
   Activity,
@@ -2183,7 +2184,7 @@ export function AdminDashboard({
                                   ) || 'No assigned role'}
                                 </span>
                                 <span className="mt-1 block text-xs text-muted-foreground">
-                                  Subscription: {member.tier.toUpperCase()}
+                                  Subscription: {planAccessLabel(member.tier)}
                                 </span>
                               </td>
                               {isRoot && (

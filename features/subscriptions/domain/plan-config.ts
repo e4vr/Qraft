@@ -2,6 +2,9 @@ export const PLAN_ORDER = ['free', 'full_monthly', 'full_quarterly'] as const;
 export type PlanId = (typeof PLAN_ORDER)[number];
 export const PAID_PLAN_IDS = ['full_monthly', 'full_quarterly'] as const;
 export const PLAN_DURATION_MONTHS: Record<PlanId, number> = { free: 0, full_monthly: 1, full_quarterly: 3 };
+export function planAccessLabel(plan: PlanId): 'Free' | 'Full' {
+  return plan === 'free' ? 'Free' : 'Full';
+}
 export function planDurationLabel(plan: PlanId): string {
   return plan === 'free' ? 'Lifetime trial' : PLAN_DURATION_MONTHS[plan] === 1 ? '1 month' : '3 months';
 }

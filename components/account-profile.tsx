@@ -1,4 +1,5 @@
 'use client';
+import { planAccessLabel } from '@/features/subscriptions/domain/plan-config';
 
 import { useState } from 'react';
 import {
@@ -129,7 +130,7 @@ export function AccountProfile({
                     {role}
                   </span>
                   <span className="rounded-full bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-700 dark:text-amber-300">
-                    {user.tier.toUpperCase()}
+                    {planAccessLabel(user.effectivePlan ?? user.tier)}
                   </span>
                   <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-700 dark:text-emerald-300">
                     Verified account
