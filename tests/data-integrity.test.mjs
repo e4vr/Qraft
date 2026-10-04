@@ -110,14 +110,15 @@ void test('PWA shell and Cloudflare persistence configuration are present', asyn
     ),
   );
   assert.match(serviceWorker, /CACHE_NAME/);
-  assert.match(serviceWorker, /qraft-shell-v4\.7\.3/);
+  assert.match(serviceWorker, /qraft-shell-v4\.7\.4/);
   assert.match(serviceWorker, /'\/offline'/);
   assert.match(layout, /display-mode:standalone/);
   assert.doesNotMatch(layout, /user-scalable=no|maximum-scale=1|minimum-scale=1/);
   assert.match(layout, /navigator\.platform==='MacIntel'/);
-  assert.match(presentation, /function installStandaloneTouchGuards/);
-  assert.match(presentation, /gesturestart/);
-  assert.match(presentation, /touchmove/);
+  const guards = await readFile(new URL('../features/presentation/standalone-touch-guards.ts', import.meta.url), 'utf8');
+  assert.match(guards, /function installStandaloneTouchGuards/);
+  assert.match(presentation, /installStandaloneTouchGuards/);
+  assert.match(guards, /touchmove/);
   assert.doesNotMatch(layout, /classList\.add\('q-ios-pwa'\)/);
   assert.doesNotMatch(layout, /new MutationObserver\(lockViewport\)/);
   assert.match(wrangler, /"binding": "DB"/);

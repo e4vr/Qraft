@@ -800,9 +800,11 @@ void test('touch input uses one event path, forgiving targets, and touch-safe sc
   );
   assert.match(styles, /data-standalone='true'[\s\S]*scrollbar-width: none !important/);
   assert.match(styles, /\*::-webkit-scrollbar \{ display: none !important/);
-  assert.match(presentation, /event\.touches\.length > 1/);
-  assert.match(presentation, /element\.scrollTop > 0/);
-  assert.match(presentation, /document\.addEventListener\('gesturestart'/);
+  const guards = await readFile(new URL('features/presentation/standalone-touch-guards.ts', root), 'utf8');
+  assert.match(presentation, /installStandaloneTouchGuards/);
+  assert.match(guards, /event\.touches\.length > 1/);
+  assert.match(guards, /element\.scrollTop > 0/);
+  assert.match(guards, /\['gesturestart', prevent\]/);
   assert.match(styles, /q-viewport:has\(> \.q-shell\).*overflow-y: hidden/);
   assert.match(styles, /--q-safe-top: env\(safe-area-inset-top, 0px\)/);
   assert.match(styles, /--q-safe-bottom-raw: env\(safe-area-inset-bottom, 0px\)/);
