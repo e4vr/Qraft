@@ -3,8 +3,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-void test('v4.7.3 service worker replaces only Qraft shell caches and avoids mixed static assets', async () => {
+void test('service worker replaces only Qraft shell caches and avoids mixed static assets', async () => {
   const source = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
+  const currentCache = source.match(/const CACHE_NAME = '([^']+)'/)?.[1];
+  assert.ok(currentCache);
   const listeners = new Map();
   const buckets = new Map();
   const deleted = [];
@@ -25,6 +27,7 @@ void test('v4.7.3 service worker replaces only Qraft shell caches and avoids mix
   buckets.get('qraft-shell-v3.0.0').set('/chunks/current.js', new Response('old script'));
   makeCache('qraft-shell-v4.7.0');
   makeCache('qraft-shell-v4.7.1');
+  makeCache('qraft-shell-v4.7.3');
   makeCache('unrelated-cache');
   const caches = {
     async open(name) { return makeCache(name); },
@@ -50,12 +53,12 @@ void test('v4.7.3 service worker replaces only Qraft shell caches and avoids mix
   listeners.get('install')(install);
   await install.promise;
   assert.equal(skipped, 1);
-  assert.ok(buckets.get('qraft-shell-v4.7.3').has('/qraft-mark.svg'));
+  assert.ok(buckets.get(currentCache).has('/qraft-mark.svg'));
 
   const activate = lifecycleEvent();
   listeners.get('activate')(activate);
   await activate.promise;
-  assert.deepEqual(deleted, ['qraft-shell-v3.0.0', 'qraft-shell-v4.7.0', 'qraft-shell-v4.7.1']);
+  assert.deepEqual(deleted, ['qraft-shell-v3.0.0', 'qraft-shell-v4.7.0', 'qraft-shell-v4.7.1', 'qraft-shell-v4.7.3']);
   assert.ok(buckets.has('unrelated-cache'));
   assert.equal(claimed, 1);
   assert.equal(messages[0].type, 'QRAFT_SW_ACTIVATED');

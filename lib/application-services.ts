@@ -14,6 +14,7 @@ export {
 } from '@/features/auth/client/auth-client';
 export {
   flushPendingCollaborationState,
+  retryRejectedCollaborationState,
   loadCollaborationState,
   queueCollaborationState,
   saveCollaborationState,

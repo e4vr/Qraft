@@ -2,7 +2,7 @@ import type { HighlightRange } from '@/lib/medguard-types';
 
 export function mergeRanges(ranges: HighlightRange[]): HighlightRange[] {
   const sorted = ranges
-    .filter((range) => range.end > range.start)
+    .filter((range) => Number.isSafeInteger(range.start) && Number.isSafeInteger(range.end) && range.start >= 0 && range.end > range.start)
     .sort((a, b) => a.start - b.start);
   const merged: HighlightRange[] = [];
   for (const range of sorted) {

@@ -1,7 +1,7 @@
 'use client';
 import { FormattedQuestionText } from '@/components/formatted-question-text';
 import { HighlightedText } from '@/components/highlighted-question-text';
-import { boldTextSourceOffset } from '@/features/qbanks/domain/bold-text';
+import { selectedTextRange } from '@/features/exams/client/text-selection';
 import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
 import { indexQuestionsById } from '@/features/qbanks/domain/question-index';
 import { QuestionEditDialog } from '@/components/question-edit-dialog';
@@ -145,6 +145,7 @@ import {
   completeTotpEnrollment,
   joinCloudflareQBankByLink,
   flushPendingCollaborationState,
+  retryRejectedCollaborationState,
   loadCollaborationState,
   loadCloudState,
   observeCloudflareUser,
@@ -2689,20 +2690,13 @@ function TestView({
       : (progress.highlightSections?.[section] ?? []);
   }
 
-  function addHighlight(section: string, root: HTMLElement) {
-    if (section !== 'stem' && section !== 'explanation') return;
+  const addHighlight = useCallback((section: string, root: HTMLElement) => {
+    if (!question || (section !== 'stem' && section !== 'explanation')) return;
     const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed)
-      return;
-    const range = selection.getRangeAt(0);
-    if (!root.contains(range.commonAncestorContainer)) return;
-    const before = document.createRange();
-    before.selectNodeContents(root);
-    before.setEnd(range.startContainer, range.startOffset);
     const sourceText = section === 'stem' ? question.stem : displayedExplanation;
-    const visibleStart = before.toString().length;
-    const start = boldTextSourceOffset(sourceText, visibleStart, 'start');
-    const end = boldTextSourceOffset(sourceText, visibleStart + range.toString().length, 'end');
+    const selectedRange = selectedTextRange(root, sourceText, selection);
+    if (!selectedRange) return;
+    const { start, end } = selectedRange;
     setState((current) => {
       const old = getQuestionProgress(current, question.id);
       return {
@@ -2726,14 +2720,28 @@ function TestView({
         },
       };
     });
-    selection.removeAllRanges();
-  }
+    selection?.removeAllRanges();
+  }, [question, displayedExplanation, setState]);
 
-  function copySelectionAndMark(section: string, root: HTMLElement) {
+  const copySelectionAndMark = useCallback((section: string, root: HTMLElement) => {
     if (!markerActive || (section !== 'stem' && section !== 'explanation'))
       return;
-    window.setTimeout(() => addHighlight(section, root), 0);
-  }
+    addHighlight(section, root);
+  }, [markerActive, addHighlight]);
+
+  useEffect(() => {
+    if (!markerActive || !question) return;
+    const onSelectionKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== 'Shift') return;
+      const anchor = window.getSelection()?.anchorNode;
+      const element = anchor instanceof Element ? anchor : anchor?.parentElement;
+      const root = element?.closest<HTMLElement>('[data-highlight-section]');
+      if (root?.dataset.highlightQuestion !== question.id) return;
+      copySelectionAndMark(root.dataset.highlightSection ?? '', root);
+    };
+    document.addEventListener('keyup', onSelectionKeyUp);
+    return () => document.removeEventListener('keyup', onSelectionKeyUp);
+  }, [markerActive, question, copySelectionAndMark]);
 
   function removeHighlight(section: string, target: HighlightRange) {
     setState((current) => {
@@ -2748,7 +2756,7 @@ function TestView({
               ? {
                   highlights: old.highlights.filter(
                     (range) =>
-                      range.start !== target.start || range.end !== target.end,
+                      range.end <= target.start || range.start >= target.end,
                   ),
                 }
               : {
@@ -2756,8 +2764,8 @@ function TestView({
                     ...old.highlightSections,
                     [section]: (old.highlightSections?.[section] ?? []).filter(
                       (range) =>
-                        range.start !== target.start ||
-                        range.end !== target.end,
+                        range.end <= target.start ||
+                        range.start >= target.end,
                     ),
                   },
                 }),
@@ -3074,6 +3082,8 @@ function TestView({
       >
         <p
           dir="auto"
+          data-highlight-section="explanation"
+          data-highlight-question={question.id}
           onPointerUp={(event) =>
             copySelectionAndMark('explanation', event.currentTarget)
           }
@@ -3224,7 +3234,7 @@ function TestView({
               <small>Clear this answer and try again.</small>
             </span>
           </button>
-          {progress.highlights.length > 0 && (
+          {(progress.highlights.length > 0 || sectionHighlights('explanation').length > 0) && (
             <button type="button" onClick={clearHighlights}>
               <Trash2 className="size-5" />
               <span>
@@ -3405,7 +3415,7 @@ function TestView({
                       >
                         <RotateCcw className="size-4" />
                       </IconButton>
-                      {progress.highlights.length > 0 && (
+                      {(progress.highlights.length > 0 || sectionHighlights('explanation').length > 0) && (
                         <IconButton
                           label="Clear highlights"
                           onClick={clearHighlights}
@@ -3426,6 +3436,8 @@ function TestView({
                   <p
                     ref={stemRef}
                     dir="auto"
+                    data-highlight-section="stem"
+                    data-highlight-question={question.id}
                     onPointerUp={(event) =>
                       copySelectionAndMark('stem', event.currentTarget)
                     }
@@ -3576,6 +3588,9 @@ function TestView({
                         </span>
                       </div>
                       <p
+                        dir="auto"
+                        data-highlight-section="explanation"
+                        data-highlight-question={question.id}
                         onPointerUp={(event) =>
                           copySelectionAndMark(
                             'explanation',
@@ -4733,6 +4748,7 @@ function SettingsView({
               <p className="mt-1 text-sm leading-6 text-muted-foreground">
                 Changes stay on this device while you work, then synchronize at
                 save and exit checkpoints or when you choose Sync now.
+                {' '}Sync now also retries preserved contribution deletions.
               </p>
             </div>
             <PrimaryButton onClick={onSync} disabled={syncStatus === 'syncing'}>
@@ -6990,7 +7006,7 @@ export default function MedGuardApp({
           collaboration,
           lastSavedCollaboration.current,
           user.uid,
-        ),
+        ).then(async saved => (await retryRejectedCollaborationState(user.uid)) ?? saved),
       ]);
       const result = acceptPersonalStateReceipt(receipt, remote);
       if (!result) return;
@@ -7004,7 +7020,7 @@ export default function MedGuardApp({
       lastSavedCollaboration.current = confirmed;
       const drafts = await loadRejectedCollaboration(user.uid);
       if (personalStateSession.current !== receipt.session) return;
-      setSyncIssue(drafts.length ? 'Some changes need review. Download the preserved drafts from Settings.' : '');
+      setSyncIssue(drafts.length ? 'Some changes still need review. Sync now retries preserved contribution deletions; changed or unauthorized items stay available to download.' : '');
       setSyncStatus(stateDirty.current ? 'local' : 'synced');
     } catch (error) {
       if (personalStateSession.current !== receipt.session) return;

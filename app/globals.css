@@ -528,6 +528,25 @@ body > main, .q-stage { min-width: 0; }
   .q-mobile-nav .mobile-start:not([aria-current='page']) { background: transparent; color: var(--study); }
 }
 .q-test-bottom { padding-bottom: calc(var(--q-control-safe-bottom) + 20px); }
+/* Inline text markers must wrap and inherit typography, including on touch screens. */
+.q-text-highlight {
+  display: inline;
+  background: #ffe66d;
+  color: #17212f;
+  font: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  white-space: inherit;
+  padding: 0;
+  border-radius: 2px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.q-text-highlight[role='button'] { cursor: pointer; }
+.q-text-highlight:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 /* Custom full-screen overlays also keep their interactive contents inside the safe rect. */
 .q-safe-overlay { padding-top: max(1rem, var(--q-safe-top)); padding-right: max(1rem, var(--q-safe-right)); padding-bottom: max(1rem, var(--q-safe-bottom)); padding-left: max(1rem, var(--q-safe-left)); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .q-safe-overlay.grid { align-items: safe center; justify-items: center; }

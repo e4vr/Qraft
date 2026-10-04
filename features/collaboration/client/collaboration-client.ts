@@ -4,6 +4,8 @@ import { applyCollaborationDelta, type CollaborationReadResponse } from '../doma
 import type { AppUser, CollaborationState } from '@/lib/medguard-types';
 import {
   acknowledgeCollaborationSync,
+  acknowledgeCollaborationProposalDeletes,
+  loadRejectedCollaboration,
   enqueueCollaborationSync,
   loadCollaborationSyncOutbox,
   noteCollaborationSyncAttempt,
@@ -14,7 +16,8 @@ import {
 } from '@/lib/local-db';
 import { withStateSyncLock } from '@/lib/tab-sync';
 import type { CollaborationSyncSnapshot } from '../domain/collaboration-outbox';
-import { collaborationBaseHash } from '../domain/collaboration-values';
+import { collaborationBaseHash, collaborationValue, sameCollaborationValue } from '../domain/collaboration-values';
+import { collaborationBatchFits, proposalDeleteOperations, splitProposalDeleteGroup, withoutProposals } from '../domain/proposal-delete-recovery';
 
 export const COLLABORATION_SYNC_NOTICE = 'qraft-collaboration-sync';
 export type CollaborationSyncNotice = {
@@ -271,6 +274,19 @@ export function collaborationChangeSet(
 
 type CollaborationOperation = ReturnType<typeof collaborationChangeSet>[number];
 
+async function sendCollaborationOperations(uid: string, batch: CollaborationOperation[]) {
+  const operations = await Promise.all(batch.map(async ({ baseValue, ...operation }) => ({
+    ...operation,
+    ...(operation.collection === 'answerStats' && operation.type === 'set' ? {} : { baseHash: await collaborationBaseHash(baseValue) }),
+  })));
+  const result = await api<{ ok?: boolean }>('/collaboration', {
+    method: 'PUT', expectedUserId: uid, body: JSON.stringify({ operations }),
+  });
+  if (result.ok !== true) throw new ApiError('The server did not confirm your changes. They remain saved locally.', 502, {});
+  await acknowledgeCollaborationProposalDeletes(uid, batch.filter(operation =>
+    operation.collection === 'questionProposals' && operation.type === 'delete').map(operation => operation.id));
+}
+
 function operationBankId(
   operation: { collection: string; id: string; value?: unknown },
   state: CollaborationState,
@@ -327,23 +343,12 @@ async function sendCollaborationState(
     groups.set(key, items);
   }
   const rejectedGroups: Array<{ group: string; error: unknown }> = [];
-  const pending = [...groups];
+  const pending: Array<[string, CollaborationOperation[]]> = [...groups].flatMap(([group, items]) =>
+    splitProposalDeleteGroup(items).map(batch => [group, batch] as [string, CollaborationOperation[]]));
   const send = async (batch: CollaborationOperation[]) => {
-    const operations = await Promise.all(batch.map(async ({ baseValue, ...operation }) => ({
-      ...operation,
-      ...(operation.collection === 'answerStats' && operation.type === 'set' ? {} : { baseHash: await collaborationBaseHash(baseValue) }),
-    })));
-    const result = await api<{ ok?: boolean }>('/collaboration', {
-      method: 'PUT',
-      expectedUserId: uid,
-      body: JSON.stringify({ operations }),
-    });
-    if (result.ok !== true)
-      throw new ApiError(
-        'The server did not confirm your changes. They remain saved locally.',
-        502,
-        {},
-      );
+    await sendCollaborationOperations(uid, batch);
+    snapshot.base = withoutProposals(snapshot.base, new Set(batch.filter(operation =>
+      operation.collection === 'questionProposals' && operation.type === 'delete').map(operation => operation.id)));
   };
   // Keep dependent operations together. On an authorization rejection, isolate
   // only the affected bank/group and preserve its entire draft for recovery.
@@ -354,9 +359,7 @@ async function sendCollaborationState(
       const group = pending[0];
       const candidate = [...batch, ...group[1]];
       if (
-        candidate.length > 500 ||
-        new TextEncoder().encode(JSON.stringify({ operations: candidate.map(({ baseValue: _baseValue, ...operation }) => ({ ...operation, baseHash: '0'.repeat(64) })) }))
-          .byteLength > 1_700_000
+        !collaborationBatchFits(candidate)
       ) {
         if (!batch.length) {
           pending.shift();
@@ -532,4 +535,49 @@ export async function saveCollaborationState(
     confirmed = (await flushPendingCollaborationState(uid)) ?? confirmed;
   } while (await loadCollaborationSyncOutbox(uid));
   return confirmed;
+}
+
+// Explicit manual retry: use only the recorded delete intents, never the full
+// historic snapshot. Old snapshots also contain other banks and account data.
+export async function retryRejectedCollaborationState(uid: string): Promise<CollaborationState | undefined> {
+  return withStateSyncLock(`collaboration:${uid}`, async () => {
+    const drafts = await loadRejectedCollaboration(uid);
+    const groups = new Map<string, CollaborationOperation[]>();
+    for (const draft of drafts) {
+      if (draft.snapshot.uid !== uid) continue;
+      for (const details of [draft.details, ...(draft.failures ?? [])]) {
+        for (const operation of proposalDeleteOperations(details)) {
+          const items = groups.get(operation.baseValue.qbankId) ?? [];
+          if (!items.some(item => item.id === operation.id)) items.push(operation);
+          groups.set(operation.baseValue.qbankId, items);
+        }
+      }
+    }
+    if (!groups.size) return undefined;
+    const { collaboration } = await api<CollaborationResponse>('/collaboration', {
+      expectedUserId: uid, cacheScope: uid, forceRefresh: true, requestReason: 'explicit-refresh',
+    });
+    let confirmed = collaboration;
+    for (const items of groups.values()) {
+      // A missing item may be hidden by revoked permissions. Let the server
+      // confirm its deletion/no-op with the original hash before clearing it.
+      const unchanged = items.filter(operation => {
+        const current = collaborationValue(confirmed, operation.collection, operation.id);
+        return current === undefined || sameCollaborationValue(current, operation.baseValue);
+      });
+      for (const batch of splitProposalDeleteGroup(unchanged)) {
+        if (!collaborationBatchFits(batch)) continue;
+        try {
+          await sendCollaborationOperations(uid, batch);
+          confirmed = withoutProposals(confirmed, new Set(batch.map(operation => operation.id)));
+        } catch (error) {
+          if (!(error instanceof ApiError) || ![400, 403, 409].includes(error.status) || error.payload.code === 'ACCOUNT_CHANGED') throw error;
+          // Permission and concurrent-edit failures remain preserved for review.
+          break;
+        }
+      }
+    }
+    if (collaborationScope === uid) setApiCache('/collaboration', { collaboration: confirmed }, { cacheScope: uid });
+    return confirmed;
+  });
 }

@@ -6,6 +6,40 @@ const compiled = await build({ entryPoints: ['server/db/collaboration-write-guar
 const { collaborationWriteGuard } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
 
 export async function collaborationConflictApiTests(t, { db, call }) {
+  await t.test('proposal deletion accepts 500 then 114 operations, rejects 501 and leaves published questions intact', async () => {
+    const id = `delete-batches-${randomUUID()}`, now = new Date().toISOString();
+    const bank = { id, ownerId: 'admin', ownerName: 'Admin', name: 'Synthetic deletion batches', shortName: 'DELETE', description: '',
+      createdById: 'admin', createdByName: 'Admin', createdAt: now, visibility: 'private', essential: false,
+      archived: false, shareEnabled: false, reviewerIds: [], viewerIds: [] };
+    const proposals = Array.from({ length: 614 }, (_, i) => ({ id: `${id}-${i}`, qbankId: id,
+      type: 'new_question', status: i < 592 ? 'approved' : 'rejected', proposedById: 'admin',
+      payload: { stem: `Synthetic proposal ${i}`, options: ['A', 'B'], answer: 0 },
+    }));
+    const created = await call('admin', '/qbanks', { bank });
+    assert.equal(created.status, 200, JSON.stringify(created.data));
+    await db.prepare(`INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at)
+      SELECT 'questionProposals',json_extract(value,'$.id'),?,'admin',value,? FROM json_each(?)`)
+      .bind(id, now, JSON.stringify(proposals)).run();
+    const count = async () => (await db.prepare("SELECT count(*) AS n FROM records WHERE type='questionProposals' AND qbank_id=?").bind(id).first()).n;
+    const publishedBefore = (await db.prepare("SELECT count(*) AS n FROM records WHERE type='sharedQuestions'").first()).n;
+    const current = await call('admin', '/collaboration');
+    assert.equal(current.status, 200);
+    const baseValues = new Map(current.data.collaboration.proposals.map(proposal => [proposal.id, proposal]));
+    const operations = proposals.map(proposal => ({ collection: 'questionProposals', id: proposal.id, type: 'delete', baseValue: baseValues.get(proposal.id) }));
+    try {
+      assert.equal((await call('admin', '/collaboration', { operations: operations.slice(0, 501) }, 'PUT')).status, 400);
+      assert.equal(await count(), 614);
+      const first = await call('admin', '/collaboration', { operations: operations.slice(0, 500) }, 'PUT');
+      assert.equal(first.status, 200, first.data.error);
+      assert.equal(await count(), 114);
+      const second = await call('admin', '/collaboration', { operations: operations.slice(500) }, 'PUT');
+      assert.equal(second.status, 200, second.data.error);
+      assert.equal(await count(), 0);
+      assert.equal((await db.prepare("SELECT count(*) AS n FROM records WHERE type='sharedQuestions'").first()).n, publishedBefore);
+    } finally {
+      await call('admin', `/qbanks/${id}`, undefined, 'DELETE');
+    }
+  });
   await t.test('concurrent bank edits have one winner, reject stale/missing bases and leave no guard rows', async () => {
     const id = `concurrent-bank-${randomUUID()}`;
     const bank = { id, ownerId: 'monthly', ownerName: 'monthly', name: 'Before', visibility: 'private', archived: false, essential: false };

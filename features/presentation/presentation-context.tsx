@@ -1,4 +1,5 @@
 'use client';
+import { installStandaloneTouchGuards } from './standalone-touch-guards';
 
 import {
   createContext,
@@ -36,51 +37,6 @@ function isIPad() {
     /iPad/.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
   );
-}
-
-function installStandaloneTouchGuards() {
-  let startY = 0;
-
-  const prevent = (event: Event) => event.preventDefault();
-  const onTouchStart = (event: TouchEvent) => {
-    if (event.touches.length === 1) startY = event.touches[0].clientY;
-  };
-  const onTouchMove = (event: TouchEvent) => {
-    if (event.touches.length > 1) {
-      event.preventDefault();
-      return;
-    }
-    if (event.touches.length !== 1 || event.touches[0].clientY <= startY) return;
-
-    let element = event.target instanceof Element ? event.target : null;
-    while (element && element !== document.documentElement) {
-      if (element.scrollHeight > element.clientHeight + 1 && element.scrollTop > 0)
-        return;
-      element = element.parentElement;
-    }
-    event.preventDefault();
-  };
-  const onWheel = (event: WheelEvent) => {
-    if (event.ctrlKey || event.metaKey) event.preventDefault();
-  };
-
-  const passive = { passive: false } as const;
-  document.addEventListener('gesturestart', prevent, passive);
-  document.addEventListener('gesturechange', prevent, passive);
-  document.addEventListener('gestureend', prevent, passive);
-  document.addEventListener('dblclick', prevent, passive);
-  document.addEventListener('touchstart', onTouchStart, passive);
-  document.addEventListener('touchmove', onTouchMove, passive);
-  document.addEventListener('wheel', onWheel, passive);
-  return () => {
-    document.removeEventListener('gesturestart', prevent);
-    document.removeEventListener('gesturechange', prevent);
-    document.removeEventListener('gestureend', prevent);
-    document.removeEventListener('dblclick', prevent);
-    document.removeEventListener('touchstart', onTouchStart);
-    document.removeEventListener('touchmove', onTouchMove);
-    document.removeEventListener('wheel', onWheel);
-  };
 }
 
 function currentEnvironment(): PresentationEnvironment {

@@ -103,6 +103,7 @@ void test('semantic study destinations are directly routable', async () => {
 void test('PWA locks installed-mode zoom and exposes controlled update behavior', async () => {
   const layout = await source('app/layout.tsx');
   const presentation = await source('features/presentation/presentation-context.tsx');
+  const guards = await source('features/presentation/standalone-touch-guards.ts');
   const manifest = JSON.parse(await source('public/manifest.webmanifest'));
   const worker = await source('public/sw.js');
 
@@ -110,8 +111,8 @@ void test('PWA locks installed-mode zoom and exposes controlled update behavior'
   assert.doesNotMatch(layout, /user-scalable=no|maximum-scale=1|minimum-scale=1/);
   assert.match(presentation, /if \(!environment\.standalone\) return/);
   assert.match(presentation, /installStandaloneTouchGuards/);
-  assert.match(presentation, /event\.touches\.length > 1/);
-  assert.match(presentation, /document\.addEventListener\('gesturestart'/);
+  assert.match(guards, /event\.touches\.length > 1/);
+  assert.match(guards, /\['gesturestart', prevent\]/);
   assert.ok(manifest.display_override.includes('standalone'));
   assert.ok(manifest.shortcuts.some((item) => item.url === '/exams/new'));
   assert.match(worker, /QRAFT_SKIP_WAITING/);

@@ -12,6 +12,7 @@ export * from './features/qbanks/client/qbank-client';
 export * from './lib/local-db';
 export {initialCollaborationState, normalizeCollaborationState} from './lib/medguard-types';
 export {canDeleteBank, canManageBank} from './features/access/domain/access-policy';
+export * from './features/collaboration/domain/proposal-delete-recovery';
 `,
     resolveDir: process.cwd(),
   },
@@ -30,6 +31,181 @@ const bank = (id) => ({
   name: id,
   visibility: 'public',
   essential: false,
+});
+
+const deletionFixture = (uid, count = 614) => {
+  const proposals = Array.from({ length: count }, (_, i) => ({ id: `${uid}-p-${i}`, qbankId: 'surgery',
+    type: 'new_question', status: i < count - 22 ? 'approved' : 'rejected', proposedById: uid,
+    payload: { stem: `Synthetic question ${i}`, options: ['A', 'B'], answer: 0 },
+  }));
+  const base = { ...empty(), qbanks: [bank('surgery')], proposals };
+  const snapshot = { id: crypto.randomUUID(), uid, base, state: { ...base, proposals: [] }, createdAt: new Date().toISOString(), attempts: 0 };
+  const operations = m.collaborationChangeSet(snapshot.state, base);
+  return { snapshot, operations };
+};
+
+void test('614 independent proposal deletes synchronize sequentially in batches of 500 and 114', async (t) => {
+  const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const uid = 'delete-614', { snapshot } = deletionFixture(uid), sizes = [];
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(init.method, 'PUT');
+    const operations = JSON.parse(init.body).operations;
+    sizes.push(operations.length);
+    assert.ok(new TextEncoder().encode(init.body).byteLength <= 1_700_000);
+    assert.ok(operations.every(operation => operation.collection === 'questionProposals' && operation.type === 'delete' && operation.baseHash.length === 64));
+    return Response.json({ ok: true });
+  };
+  await m.saveCollaborationState(snapshot.state, snapshot.base, uid);
+  assert.deepEqual(sizes, [500, 114]);
+  assert.equal(await m.loadCollaborationSyncOutbox(uid), undefined);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 0);
+});
+
+void test('an interrupted deletion resumes only the remaining 114 operations', async (t) => {
+  const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const uid = 'delete-interrupted', { snapshot } = deletionFixture(uid), sizes = [];
+  globalThis.fetch = async (_url, init) => {
+    sizes.push(JSON.parse(init.body).operations.length);
+    if (sizes.length === 2) throw new TypeError('Disconnected');
+    return Response.json({ ok: true });
+  };
+  await m.queueCollaborationState(uid, snapshot.state, snapshot.base);
+  await assert.rejects(m.flushPendingCollaborationState(uid));
+  const pending = await m.loadCollaborationSyncOutbox(uid);
+  assert.equal(m.collaborationChangeSet(pending.state, pending.base).length, 114);
+  await m.flushPendingCollaborationState(uid);
+  assert.deepEqual(sizes, [500, 114, 114]);
+  assert.equal(await m.loadCollaborationSyncOutbox(uid), undefined);
+});
+
+void test('manual retry recovers a legacy oversized draft and checkpoints each confirmed batch', async (t) => {
+  const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const uid = 'legacy-delete-retry', { snapshot, operations } = deletionFixture(uid), sizes = [];
+  await m.preserveRejectedCollaboration(snapshot, { group: 'surgery', error: 'Synchronization limit', operations });
+  let remote = snapshot.base;
+  globalThis.fetch = async (_url, init) => {
+    if (init.method !== 'PUT') return Response.json({ collaboration: remote });
+    const batch = JSON.parse(init.body).operations; sizes.push(batch.length);
+    if (sizes.length === 2) throw new TypeError('Disconnected');
+    remote = m.withoutProposals(remote, new Set(batch.map(operation => operation.id)));
+    return Response.json({ ok: true });
+  };
+  await assert.rejects(m.retryRejectedCollaborationState(uid));
+  const retained = await m.loadRejectedCollaboration(uid);
+  assert.equal(retained.length, 1);
+  assert.equal(retained[0].details.operations.length, 114);
+  const result = await m.retryRejectedCollaborationState(uid);
+  assert.deepEqual(sizes, [500, 114, 114]);
+  assert.equal(result.proposals.length, 0);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 0);
+  assert.equal(await m.retryRejectedCollaborationState(uid), undefined);
+});
+
+void test('manual retry keeps changed records and unrelated bank drafts without replaying snapshot fields', async (t) => {
+  const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const uid = 'changed-delete-retry', { snapshot, operations } = deletionFixture(uid, 3);
+  snapshot.state.qbanks = [{ ...bank('surgery'), name: 'Old unsent bank edit' }];
+  await m.preserveRejectedCollaboration(snapshot, { group: 'surgery', operations });
+  await m.preserveRejectedCollaboration({ ...snapshot, id: 'unrelated' }, { group: 'other', operations: [{ collection: 'qbanks', type: 'set', id: 'other', value: bank('other'), baseValue: null }] });
+  const remote = { ...snapshot.base, proposals: snapshot.base.proposals.map((p, i) => i === 0 ? { ...p, status: 'pending' } : p) };
+  const sent = [];
+  globalThis.fetch = async (_url, init) => {
+    if (init.method !== 'PUT') return Response.json({ collaboration: remote });
+    sent.push(...JSON.parse(init.body).operations);
+    return Response.json({ ok: true });
+  };
+  const result = await m.retryRejectedCollaborationState(uid);
+  assert.deepEqual(sent.map(operation => operation.id), operations.slice(1).map(operation => operation.id));
+  assert.equal(result.qbanks[0].name, 'surgery');
+  assert.equal(result.proposals[0].status, 'pending');
+  const retained = await m.loadRejectedCollaboration(uid);
+  assert.equal(retained.length, 2);
+  assert.equal(retained[0].details.operations.length, 1);
+  assert.equal(retained[1].details.operations[0].collection, 'qbanks');
+});
+
+void test('missing or unauthorized proposals require server confirmation before their draft is cleared', async (t) => {
+  const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const uid = 'hidden-delete-retry', { snapshot, operations } = deletionFixture(uid, 1);
+  await m.preserveRejectedCollaboration(snapshot, { group: 'surgery', operations });
+  let denied = true, attempts = 0;
+  globalThis.fetch = async (_url, init) => {
+    if (init.method !== 'PUT') return Response.json({ collaboration: empty() });
+    attempts++;
+    return denied ? Response.json({ error: 'Permission revoked' }, { status: 403 }) : Response.json({ ok: true, unchanged: true });
+  };
+  await m.retryRejectedCollaborationState(uid);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 1);
+  denied = false;
+  await m.retryRejectedCollaborationState(uid);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 0);
+  assert.equal(attempts, 2);
+});
+
+void test('a changed account retains every preserved deletion for the original account', async (t) => {
+  const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const uid = 'account-delete-retry', { snapshot, operations } = deletionFixture(uid, 1);
+  await m.preserveRejectedCollaboration(snapshot, { group: 'surgery', operations });
+  globalThis.fetch = async () => Response.json({ code: 'ACCOUNT_CHANGED', error: 'Account changed' }, { status: 409 });
+  await assert.rejects(m.retryRejectedCollaborationState(uid));
+  assert.equal((await m.loadRejectedCollaboration(uid))[0].details.operations.length, 1);
+});
+
+void test('batching counts encoded bytes and keeps dependent publication or classification operations together', () => {
+  const large = { collection: 'questionProposals', type: 'delete', id: 'س'.repeat(450_000), baseValue: null };
+  assert.deepEqual(m.splitProposalDeleteGroup([large, { ...large, id: 'ص'.repeat(450_000) }]).map(batch => batch.length), [1, 1]);
+  const dependent = [{ ...large, collection: 'sharedQuestions', type: 'set' }, ...Array.from({ length: 500 }, (_, i) => ({ ...large, id: String(i) }))];
+  assert.equal(m.splitProposalDeleteGroup(dependent).length, 1);
+  assert.equal(m.collaborationBatchFits(dependent), false);
+  assert.deepEqual(m.proposalDeleteOperations({ operations: [deletionFixture('atomic', 1).operations[0], dependent[0]] }), []);
+});
+
+void test('simultaneous manual retry clicks do not duplicate successful deletion batches', async (t) => {
+  const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const uid = 'double-click-retry', { snapshot, operations } = deletionFixture(uid), sizes = [];
+  await m.preserveRejectedCollaboration(snapshot, { group: 'surgery', operations });
+  globalThis.fetch = async (_url, init) => {
+    if (init.method !== 'PUT') return Response.json({ collaboration: snapshot.base });
+    sizes.push(JSON.parse(init.body).operations.length);
+    return Response.json({ ok: true });
+  };
+  await Promise.all([m.retryRejectedCollaborationState(uid), m.retryRejectedCollaborationState(uid)]);
+  assert.deepEqual(sizes, [500, 114]);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 0);
+});
+
+void test('a successful partial checkpoint keeps newer local edits and remaining deletes', async (t) => {
+  const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const uid = 'newer-delete-edit', { snapshot } = deletionFixture(uid);
+  let sends = 0;
+  globalThis.fetch = async () => {
+    sends++;
+    if (sends === 2) throw new TypeError('Disconnected');
+    await m.queueCollaborationState(uid, { ...snapshot.state, qbanks: [{ ...bank('surgery'), name: 'Newer local name' }] }, snapshot.base);
+    return Response.json({ ok: true });
+  };
+  await m.queueCollaborationState(uid, snapshot.state, snapshot.base);
+  await assert.rejects(m.flushPendingCollaborationState(uid));
+  const pending = await m.loadCollaborationSyncOutbox(uid);
+  assert.equal(pending.base.proposals.length, 114);
+  assert.equal(pending.state.proposals.length, 0);
+  assert.equal(pending.state.qbanks[0].name, 'Newer local name');
+  assert.equal(m.collaborationChangeSet(pending.state, pending.base).length, 115);
+});
+
+void test('a proposal edited during its in-flight deletion is preserved as a reviewable draft', async (t) => {
+  const originalFetch = globalThis.fetch; t.after(() => { globalThis.fetch = originalFetch; });
+  const uid = 'concurrent-proposal-edit', { snapshot } = deletionFixture(uid, 1);
+  const edited = { ...snapshot.base.proposals[0], authorName: 'Newer local edit' };
+  globalThis.fetch = async () => {
+    await m.queueCollaborationState(uid, { ...snapshot.state, proposals: [edited] }, snapshot.base);
+    return Response.json({ ok: true });
+  };
+  await m.queueCollaborationState(uid, snapshot.state, snapshot.base);
+  await m.flushPendingCollaborationState(uid);
+  assert.equal(await m.loadCollaborationSyncOutbox(uid), undefined);
+  const drafts = await m.loadRejectedCollaboration(uid);
+  assert.ok(drafts.some(draft => draft.snapshot.state.proposals.some(proposal => proposal.id === edited.id && proposal.authorName === edited.authorName)), 'server deletion must not silently discard the newer local proposal edit');
 });
 
 void test('deletion permissions depend on ownership or Superadmin, including Essential banks', () => {

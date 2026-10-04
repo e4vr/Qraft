@@ -2,6 +2,7 @@ import { normalizeCollaborationState, type AppState, type CollaborationState, ty
 import type { PreformedLocalAttempt } from './preformed-test-types';
 import { coalesceStateCheckpoints } from '@/features/state/domain/checkpoint-outbox';
 import { mergeLiveState } from './merge-live-state';
+import { acknowledgeRejectedProposalDeletes, withoutProposals, type RejectedCollaborationDraft } from '@/features/collaboration/domain/proposal-delete-recovery';
 import { preformedAttemptKey, preformedCodeKey } from '@/features/exams/domain/preformed-attempt-scope';
 import {
   coalesceCollaborationSync,
@@ -274,7 +275,43 @@ export async function preserveRejectedCollaboration(
 }
 
 export async function loadRejectedCollaboration(uid: string) {
-  return (await readValue<unknown[]>(`collaboration-rejected:${uid}`)) ?? [];
+  return (await readValue<RejectedCollaborationDraft[]>(`collaboration-rejected:${uid}`)) ?? [];
+}
+
+// Commit a successful deletion batch to both queues in one local transaction.
+// A later network failure must never replay the already confirmed batch.
+export async function acknowledgeCollaborationProposalDeletes(uid: string, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const removed = new Set(ids), db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(STORE, 'readwrite'), store = transaction.objectStore(STORE);
+    const outboxKey = `collaboration-outbox:${uid}`, rejectedKey = `collaboration-rejected:${uid}`;
+    let concurrentDraft: RejectedCollaborationDraft | undefined;
+    const pending = store.get(outboxKey);
+    pending.onsuccess = () => {
+      const current = pending.result as CollaborationSyncSnapshot | undefined;
+      if (!current) return;
+      const newerProposals = current.state.proposals.filter(proposal => removed.has(proposal.id));
+      if (newerProposals.length) concurrentDraft = {
+        snapshot: { ...current, id: crypto.randomUUID(), base: withoutProposals(current.base, removed) },
+        details: {
+          reason: 'A proposal was deleted while a newer local edit was pending. The edit is preserved for review.',
+          operations: newerProposals.map(value => ({ collection: 'questionProposals', id: value.id, type: 'set', baseValue: null, value })),
+        },
+      };
+      store.put({ ...current, base: withoutProposals(current.base, removed), state: withoutProposals(current.state, removed) }, outboxKey);
+    };
+    const rejected = store.get(rejectedKey);
+    rejected.onsuccess = () => {
+      // Requests in a single IndexedDB transaction run in creation order. The
+      // pending read above captures newer edits before either queue is pruned.
+      const drafts = acknowledgeRejectedProposalDeletes((rejected.result as RejectedCollaborationDraft[] | undefined) ?? [], removed);
+      if (concurrentDraft) drafts.push(concurrentDraft);
+      if (rejected.result || concurrentDraft) store.put(drafts, rejectedKey);
+    };
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error('Local checkpoint aborted.')); };
+  });
 }
 
 export async function removeCollaborationSync(
