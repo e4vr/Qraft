@@ -54,7 +54,7 @@ function mutationTags(path: string, body: BodyInit | null | undefined) {
   }
   if (path === '/collaboration' && Array.isArray(input.operations)) {
     const collections = new Set((input.operations as Array<{ collection?: string }>).map(operation => operation.collection));
-    if (collections.has('questionProposals')) { tags.add('review-queue'); tags.add('contributions'); }
+    if (collections.has('questionProposals')) { tags.add('review-queue'); tags.add('contributions'); tags.add('reviewer-performance'); }
     if (collections.has('sharedQuestions') || collections.has('qbankSpecialties') || collections.has('qbankTopics')) { tags.add('question-catalog'); tags.add('test-pool'); }
     if (collections.has('qbanks') || collections.has('qbankFolders') || collections.has('qbankMemberships') || collections.has('qbankInvitations')) tags.add('collaboration');
     if (collections.has('profiles') || collections.has('system')) { tags.add('account'); tags.add('subscriptions'); }

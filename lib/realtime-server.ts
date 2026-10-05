@@ -144,7 +144,10 @@ export async function notifyMutation(request: Request, response?: Response) {
       if (operation.collection === 'qbanks') { addBank(operation.id); channels.add('catalog'); }
       else if (operation.collection === 'qbankFolders') channels.add('catalog');
       if (operation.type === 'delete' || ['qbankMemberships', 'qbankInvitations', 'system'].includes(operation.collection)) channels.add('catalog');
-      if (operation.collection === 'questionProposals') { topics.add('review-queue'); topics.add('contributions'); }
+      if (operation.collection === 'questionProposals') {
+        topics.add('review-queue'); topics.add('contributions'); topics.add('reviewer-performance');
+        if (typeof value.qbankId === 'string') channels.add(`review:bank:${value.qbankId}`);
+      }
       else if (['sharedQuestions', 'qbankSpecialties', 'qbankTopics'].includes(operation.collection)) topics.add('question-catalog');
       else if (operation.collection === 'answerStats') topics.add('question-stats');
       else if (operation.collection === 'sharedNotes') topics.add('shared-notes');

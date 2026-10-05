@@ -13,6 +13,7 @@ export * from './lib/local-db';
 export {initialCollaborationState, normalizeCollaborationState} from './lib/medguard-types';
 export {canDeleteBank, canManageBank} from './features/access/domain/access-policy';
 export * from './features/collaboration/domain/proposal-delete-recovery';
+export * from './features/collaboration/domain/proposal-edit-recovery';
 `,
     resolveDir: process.cwd(),
   },
@@ -31,6 +32,152 @@ const bank = (id) => ({
   name: id,
   visibility: 'public',
   essential: false,
+});
+
+const editFixture = (uid, suffix = '') => {
+  const proposal = m.normalizeCollaborationState({ proposals: [{
+    id: `${uid}-proposal${suffix}`, qbankId: 'surgery', type: 'new_question', status: 'pending', proposedById: uid,
+    proposedByName: uid, proposedAt: '2026-10-01T00:00:00Z', rationale: 'Initial',
+    payload: { stem: 'Original', options: ['A', 'B'], answer: 0, specialty: 'General', topic: 'General', explanation: '', sourceReference: 'Fixture.pdf', images: [] },
+  }] }).proposals[0];
+  const base = { ...empty(), qbanks: [bank('surgery')], proposals: [proposal] };
+  const value = { ...proposal, proposedAt: '2026-10-02T00:00:00Z', payload: { ...proposal.payload, stem: 'Edited' } };
+  const operation = { collection: 'questionProposals', type: 'set', id: proposal.id, baseValue: proposal, value };
+  const snapshot = { id: crypto.randomUUID(), uid, base, state: { ...base, proposals: [value] }, createdAt: '2026-10-02T00:00:00Z', attempts: 0 };
+  return { proposal, base, value, operation, snapshot };
+};
+
+void test('manual retry recovers the latest preserved pending edit and clears duplicate older receipts only after server confirmation', async (t) => {
+  const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });
+  const uid = 'pending-recovery-latest', fixture = editFixture(uid);
+  await m.preserveRejectedCollaboration(fixture.snapshot, { operations: [fixture.operation] });
+  const newest = { ...fixture.value, payload: { ...fixture.value.payload, stem: 'Newest' } };
+  await m.preserveRejectedCollaboration({ ...fixture.snapshot, id: crypto.randomUUID(), createdAt: '2026-10-03T00:00:00Z' }, { operations: [{ ...fixture.operation, value: newest }] });
+  const sent = [];
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(new Headers(init.headers).get('x-qraft-account'), uid);
+    if (init.method !== 'PUT') return Response.json({ collaboration: fixture.base });
+    const operation = JSON.parse(init.body).operations[0]; sent.push(operation);
+    assert.equal(operation.value.payload.stem, 'Newest');
+    assert.equal(operation.value.proposedAt, fixture.proposal.proposedAt);
+    assert.equal(operation.baseHash.length, 64);
+    return Response.json({ ok: true, operations: [{ ...operation, value: { ...operation.value, duplicateInfo: { type: 'possible', similarity: 0.9 } } }] });
+  };
+  const result = await m.retryRejectedCollaborationState(uid);
+  assert.equal(sent.length, 1);
+  assert.equal(result.proposals[0].payload.stem, 'Newest');
+  assert.equal(result.proposals[0].duplicateInfo.similarity, 0.9);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 0);
+  assert.equal(await m.retryRejectedCollaborationState(uid), undefined);
+});
+
+void test('recovery normalizes legacy defaults and repairs omitted classification IDs without overwriting changed taxonomy names', () => {
+  const uid = 'pending-taxonomy', fixture = editFixture(uid);
+  const specialties = [{ id: 'general', qbankId: 'surgery', name: 'General' }, { id: 'surgery-specialty', qbankId: 'surgery', name: 'General Surgery' }];
+  const topics = [{ id: 'general-topic', qbankId: 'surgery', specialtyId: 'general', name: 'General' }, { id: 'esophagus', qbankId: 'surgery', specialtyId: 'surgery-specialty', name: 'Esophagus' }];
+  const base = { ...fixture.proposal, payload: { ...fixture.proposal.payload, specialtyId: 'general', topicId: 'general-topic' } };
+  const value = { ...fixture.value, payload: { ...fixture.value.payload, specialty: 'General Surgery', topic: 'Esophagus' } };
+  const state = m.normalizeCollaborationState({ ...fixture.base, specialties, topics, proposals: [base] });
+  const legacyBase = { ...base }; delete legacyBase.editKinds;
+  const drafts = [{ snapshot: fixture.snapshot, details: { operations: [{ ...fixture.operation, baseValue: legacyBase, value: { ...value, editKinds: undefined } }] } }];
+  const plans = m.planPendingProposalEditRecovery(uid, drafts, state);
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0].value.payload.specialtyId, 'surgery-specialty');
+  assert.equal(plans[0].value.payload.topicId, 'esophagus');
+});
+
+void test('completed reviews are archived; missing, other-account, tampered and changed proposals stay active', async (t) => {
+  const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });
+  for (const kind of ['approved', 'rejected', 'missing', 'other-account', 'tampered', 'changed']) {
+    const uid = `pending-preserve-${kind}`, fixture = editFixture(uid);
+    const operation = kind === 'tampered' ? { ...fixture.operation, value: { ...fixture.value, reviewedById: 'fake' } } : fixture.operation;
+    await m.preserveRejectedCollaboration(fixture.snapshot, { operations: [operation] });
+    const proposal = { ...fixture.proposal, ...(kind === 'approved' || kind === 'rejected' ? { status: kind } : {}),
+      ...(kind === 'other-account' ? { proposedById: 'other' } : {}), ...(kind === 'changed' ? { rationale: 'Changed elsewhere' } : {}) };
+    globalThis.fetch = async (_url, init) => {
+      assert.notEqual(init.method, 'PUT', kind);
+      return Response.json({ collaboration: { ...fixture.base, proposals: kind === 'missing' ? [] : [proposal] } });
+    };
+    await m.retryRejectedCollaborationState(uid);
+    assert.equal((await m.loadRejectedCollaboration(uid)).length, ['approved', 'rejected'].includes(kind) ? 0 : 1, kind);
+    const history = await m.loadArchivedCollaboration(uid);
+    assert.equal(history.length, ['approved', 'rejected'].includes(kind) ? 1 : 0, kind);
+    if (history.length) assert.equal(history[0].details.operations[0].value.payload.stem, 'Edited');
+  }
+});
+
+void test('already applied edits clear historical receipts without sending a new write', async (t) => {
+  const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });
+  const uid = 'pending-already-applied', fixture = editFixture(uid);
+  await m.preserveRejectedCollaboration(fixture.snapshot, { operations: [fixture.operation] });
+  globalThis.fetch = async (_url, init) => {
+    assert.notEqual(init.method, 'PUT');
+    return Response.json({ collaboration: { ...fixture.base, proposals: [{ ...fixture.value, proposedAt: fixture.proposal.proposedAt }] } });
+  };
+  await m.retryRejectedCollaborationState(uid);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 0);
+});
+
+void test('server rejection or missing receipt never removes a preserved edit', async (t) => {
+  const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });
+  for (const status of [403, 409, 502]) {
+    const uid = `pending-server-reject-${status}`, fixture = editFixture(uid);
+    await m.preserveRejectedCollaboration(fixture.snapshot, { operations: [fixture.operation] });
+    globalThis.fetch = async (_url, init) => init.method !== 'PUT' ? Response.json({ collaboration: fixture.base })
+      : status === 502 ? Response.json({ ok: true, operations: [] }) : Response.json({ error: 'Cannot recover' }, { status });
+    if (status === 502) await assert.rejects(m.retryRejectedCollaborationState(uid));
+    else await m.retryRejectedCollaborationState(uid);
+    assert.equal((await m.loadRejectedCollaboration(uid)).length, 1);
+  }
+});
+
+void test('an interrupted retry resumes after the last confirmed edit and retains newer in-flight drafts', async (t) => {
+  const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });
+  const uid = 'pending-interrupted', one = editFixture(uid, '-1'), two = editFixture(uid, '-2');
+  await m.preserveRejectedCollaboration(one.snapshot, { operations: [one.operation] });
+  await m.preserveRejectedCollaboration(two.snapshot, { operations: [two.operation] });
+  const remote = { ...one.base, proposals: [one.proposal, two.proposal] };
+  let writes = 0;
+  globalThis.fetch = async (_url, init) => {
+    if (init.method !== 'PUT') return Response.json({ collaboration: remote });
+    const operation = JSON.parse(init.body).operations[0]; writes++;
+    if (writes === 2) throw new TypeError('Offline');
+    if (writes === 1) await m.preserveRejectedCollaboration({ ...one.snapshot, id: 'newer-in-flight', createdAt: '2026-10-04T00:00:00Z' },
+      { operations: [{ ...one.operation, value: { ...one.value, payload: { ...one.value.payload, stem: 'Even newer' } } }] });
+    return Response.json({ ok: true, operations: [operation] });
+  };
+  await assert.rejects(m.retryRejectedCollaborationState(uid));
+  const drafts = await m.loadRejectedCollaboration(uid);
+  assert.equal(drafts.length, 2);
+  assert.ok(drafts.some(draft => draft.snapshot.id === 'newer-in-flight'));
+  assert.ok(drafts.some(draft => draft.details.operations[0].id === two.proposal.id));
+});
+
+void test('mixed publication groups and equal-time conflicting edits cannot be automatically replayed', () => {
+  const uid = 'pending-ambiguous', fixture = editFixture(uid);
+  assert.equal(m.pendingProposalEditOperations({ operations: [fixture.operation, { collection: 'sharedQuestions', type: 'set' }] }).length, 0);
+  const drafts = [fixture.value, { ...fixture.value, payload: { ...fixture.value.payload, stem: 'Ambiguous' } }].map(value =>
+    ({ snapshot: fixture.snapshot, details: { operations: [{ ...fixture.operation, value }] } }));
+  assert.equal(m.planPendingProposalEditRecovery(uid, drafts, fixture.base).length, 0);
+});
+
+void test('archiving a completed review keeps concurrent newer edits active and is idempotent', async () => {
+  const uid = 'pending-archive-newer', fixture = editFixture(uid);
+  await m.preserveRejectedCollaboration(fixture.snapshot, { operations: [fixture.operation] });
+  const receipts = m.completedPendingEditReceipts(uid, await m.loadRejectedCollaboration(uid), { ...fixture.base, proposals: [{ ...fixture.proposal, status: 'approved' }] });
+  const newer = { ...fixture.operation, value: { ...fixture.value, payload: { ...fixture.value.payload, stem: 'Newer while reading' } } };
+  await m.preserveRejectedCollaboration(fixture.snapshot, { operations: [newer] });
+  await m.archiveCompletedCollaborationEdits(uid, receipts);
+  assert.equal((await m.loadArchivedCollaboration(uid)).length, 1);
+  const active = await m.loadRejectedCollaboration(uid);
+  assert.equal(active.length, 1);
+  assert.equal(active[0].failures[0].operations[0].value.payload.stem, 'Newer while reading');
+  await m.archiveCompletedCollaborationEdits(uid, receipts);
+  assert.equal((await m.loadArchivedCollaboration(uid)).length, 1);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 1);
+  await m.forgetLocalUser(uid);
+  assert.equal((await m.loadArchivedCollaboration(uid)).length, 0);
+  assert.equal((await m.loadRejectedCollaboration(uid)).length, 0);
 });
 
 const deletionFixture = (uid, count = 614) => {

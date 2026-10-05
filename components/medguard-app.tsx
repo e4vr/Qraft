@@ -26,6 +26,7 @@ import { QraftBrand } from '@/components/brand/qraft-brand';
 import { QuestionNavigator } from '@/components/exams/question-navigator';
 import { QraftAppShell } from '@/components/presentation/qraft-app-shell';
 import { ContributionCenter } from '@/components/contribution-center';
+import { ContributionDraftHistory } from '@/components/contribution-draft-history';
 import { GiftNotification } from '@/components/gift-notification';
 import { AccountProfile } from '@/components/account-profile';
 import { SystemStatePage } from '@/components/system-state-page';
@@ -45,6 +46,7 @@ import { TelegramChannelButton } from '@/components/telegram-channel-button';
 import { COLLABORATION_SYNC_NOTICE, type CollaborationSyncNotice } from '@/features/collaboration/client/collaboration-client';
 import { loadRejectedCollaboration } from '@/lib/local-db';
 import { saveDirectQuestionEdit } from '@/features/qbanks/client/direct-question-edit';
+import { savePendingContribution } from '@/features/contributions/client/pending-contribution';
 import { mergeLiveState } from '@/lib/merge-live-state';
 import { appStateFreshness, mergeAppStates } from '@/lib/merge-app-state';
 import { resolvePersonalStateReceipt, type PersonalStateReceipt, type PersonalStateSession } from '@/features/state/client/state-receipt';
@@ -4699,7 +4701,7 @@ function SettingsView({
               <p className="mt-1 text-sm leading-6 text-muted-foreground">
                 Changes stay on this device while you work, then synchronize at
                 save and exit checkpoints or when you choose Sync now.
-                {' '}Sync now also retries preserved contribution deletions.
+                {' '}Sync now also retries preserved edits to your pending contributions and contribution deletions.
               </p>
             </div>
             <PrimaryButton onClick={onSync} disabled={syncStatus === 'syncing'}>
@@ -4721,7 +4723,7 @@ function SettingsView({
             {
               {
                 syncing: 'Synchronizing saved changes…',
-                synced: syncIssue ? 'Some changes still need attention; see details below.' : 'All saved changes are synchronized.',
+                synced: syncIssue ? 'Some changes still need attention; see details below.' : 'All current changes are synchronized.',
                 local: 'Saved on this device and waiting to synchronize.',
                 offline:
                   'Saved on this device. Synchronization will resume online.',
@@ -4741,6 +4743,7 @@ function SettingsView({
             }).catch(() => setDraftDownloadError('Unable to download the preserved drafts. Retry on this device.'));
           }}>Download a copy of changes needing review</button>
           {draftDownloadError && <p role="alert" className="mt-2 text-sm text-destructive">{draftDownloadError}</p>}
+          <ContributionDraftHistory uid={user.uid} refreshKey={`${syncStatus}:${syncIssue}`} />
         </section>
         <section className="rounded-2xl bg-card p-5 ring-1 ring-border sm:p-6">
           <h2 className="font-bold">Appearance</h2>
@@ -4961,6 +4964,15 @@ function QuestionManager({
   const [open, setOpen] = useState(false);
   const [roleRequestOpen, setRoleRequestOpen] = useState(false);
   const [editingProposal, setEditingProposal] = useState<QuestionProposal>();
+  const [contributionSaving, setContributionSaving] = useState(false);
+  const [contributionSaveError, setContributionSaveError] = useState('');
+  const [contributionNotice, setContributionNotice] = useState('');
+  const contributionSaveInFlight = useRef(false);
+  const contributionAccount = useRef(user.uid);
+  useEffect(() => {
+    contributionAccount.current = user.uid;
+    return () => { contributionAccount.current = ''; };
+  }, [user.uid]);
   const [importOpen, setImportOpen] = useState(false);
   const [contributionSearch, setContributionSearch] = useState('');
   const [selectedContributionIds, setSelectedContributionIds] = useState<
@@ -4985,6 +4997,7 @@ function QuestionManager({
   const [sourcePage, setSourcePage] = useState('');
   const [sourceError, setSourceError] = useState('');
   function resetComposer() {
+    setContributionSaveError('');
     setStem('');
     setOptions(['', '', '', '']);
     setAnswer(0);
@@ -5004,6 +5017,8 @@ function QuestionManager({
   }
 
   function startEditing(proposal: QuestionProposal) {
+    setContributionSaveError('');
+    setContributionNotice('');
     setEditingProposal(proposal);
     setStem(proposal.payload.stem);
     setOptions([...proposal.payload.options]);
@@ -5021,7 +5036,7 @@ function QuestionManager({
 
   async function addQuestion(event: React.SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (explanationImagesBusy) return;
+    if (explanationImagesBusy || contributionSaveInFlight.current) return;
     if (
       !stem.trim() ||
       options.length < 2 ||
@@ -5048,12 +5063,51 @@ function QuestionManager({
       ...source,
       images: editingProposal?.payload.images ?? [],
     };
+    const classificationBankId = editingProposal?.qbankId ?? activeQBankId;
+    const selectedSpecialty = collaboration.specialties.find(item => item.qbankId === classificationBankId &&
+      item.name.trim().toLowerCase() === payload.specialty.toLowerCase());
+    const selectedTopic = collaboration.topics.find(item => item.qbankId === classificationBankId &&
+      item.specialtyId === selectedSpecialty?.id && item.name.trim().toLowerCase() === payload.topic.toLowerCase());
+    const classifiedPayload = { ...payload,
+      specialtyId: selectedSpecialty?.id ?? (payload.specialty === editingProposal?.payload.specialty ? editingProposal.payload.specialtyId : undefined),
+      topicId: selectedTopic?.id ?? (payload.specialty === editingProposal?.payload.specialty && payload.topic === editingProposal.payload.topic ? editingProposal.payload.topicId : undefined),
+    };
+    if (editingProposal?.status === 'pending') {
+      setContributionSaveError('');
+      const rationaleText = rationale.trim() || 'Updated question contribution.';
+      if (!navigator.onLine) {
+        updateCollaboration(current => ({ ...current, proposals: current.proposals.map(item =>
+          item.id === editingProposal.id && item.proposedById === user.uid && item.status === 'pending'
+            ? { ...item, payload: classifiedPayload, rationale: rationaleText } : item) }));
+        setContributionNotice('Saved on this device. Reviewers will see your changes when synchronization resumes online.');
+        resetComposer(); setEditingProposal(undefined); setOpen(false);
+        return;
+      }
+      const uid = user.uid;
+      contributionSaveInFlight.current = true;
+      setContributionSaving(true);
+      try {
+        const saved = await savePendingContribution(uid, editingProposal, classifiedPayload, rationaleText);
+        if (contributionAccount.current !== uid) return;
+        confirmUpdate(current => ({ ...current, proposals: current.proposals.map(item =>
+          item.id === saved.id && item.status === 'pending' ? saved : item) }));
+        setContributionNotice('Changes saved. Reviewers receive the latest version automatically.');
+        resetComposer(); setEditingProposal(undefined); setOpen(false);
+      } catch (error) {
+        if (contributionAccount.current === uid)
+          setContributionSaveError(error instanceof Error ? error.message : 'Unable to save. Your draft remains in this editor.');
+      } finally {
+        contributionSaveInFlight.current = false;
+        if (contributionAccount.current === uid) setContributionSaving(false);
+      }
+      return;
+    }
     if (editingProposal) {
       const isResubmission = editingProposal.status === 'rejected';
       const nextProposal: QuestionProposal = {
         ...editingProposal,
         id: isResubmission ? crypto.randomUUID() : editingProposal.id,
-        payload,
+        payload: classifiedPayload,
         rationale: rationale.trim() || 'Updated question contribution.',
         status: 'pending',
         proposedAt,
@@ -5220,6 +5274,7 @@ function QuestionManager({
           onSubmit={addQuestion}
           className="mx-auto my-6 w-[calc(100%-2rem)] max-w-3xl rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border sm:p-7"
         >
+          <fieldset disabled={contributionSaving} className="min-w-0">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="font-bold">
@@ -5354,6 +5409,7 @@ function QuestionManager({
           <ExplanationImageEditor key={`${activeQBankId}:${composerImageScope}`} uid={user.uid} qbankId={activeQBankId} questionId={`proposal-${composerImageScope}`} images={explanationImages} onChange={setExplanationImages} onBusyChange={setExplanationImagesBusy} />
           <div className="mt-4"><QuestionSourceFields sourceFile={sourceFile} sourcePage={sourcePage} onChange={source => { setSourceFile(source.sourceFile); setSourcePage(source.sourcePage); }} /></div>
           {sourceError && <p role="alert" className="mt-2 text-sm text-destructive">{sourceError}</p>}
+          {contributionSaveError && <p role="alert" className="mt-2 text-sm text-destructive">{contributionSaveError}</p>}
           <label className="mt-4 block">
             <span className="mb-1.5 block text-sm font-semibold">
               Reviewer context
@@ -5366,18 +5422,19 @@ function QuestionManager({
             />
           </label>
           <div className="mt-6 flex flex-wrap justify-end gap-2">
-            <SecondaryButton disabled={explanationImagesBusy} onClick={() => setOpen(false)}>
+            <SecondaryButton disabled={explanationImagesBusy || contributionSaving} onClick={() => setOpen(false)}>
               Cancel
             </SecondaryButton>
-            <PrimaryButton type="submit" tone="contribute" disabled={explanationImagesBusy}>
+            <PrimaryButton type="submit" tone="contribute" disabled={explanationImagesBusy || contributionSaving}>
               <Save className="size-4" />
-              {editingProposal
+              {contributionSaving ? 'Saving…' : editingProposal
                 ? editingProposal.status === 'rejected'
                   ? 'Resubmit for review'
                   : 'Save changes'
                 : 'Submit for review'}
             </PrimaryButton>
           </div>
+          </fieldset>
         </form>
       </>
     );
@@ -5518,6 +5575,7 @@ function QuestionManager({
           />
         </div>
         <section className="mt-6 overflow-hidden rounded-2xl bg-card ring-1 ring-border">
+          {contributionNotice && <output className="block border-b bg-primary/5 px-5 py-3 text-sm">{contributionNotice}</output>}
           <div className="border-b p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -7006,9 +7064,10 @@ export default function MedGuardApp({
       ]);
       if (personalStateSession.current !== receipt.session) return;
       lastSavedCollaboration.current = confirmed;
+      setCollaboration(current => mergeLiveState(collaboration, current, confirmed));
       const drafts = await loadRejectedCollaboration(user.uid);
       if (personalStateSession.current !== receipt.session) return;
-      setSyncIssue(drafts.length ? 'Some changes still need review. Sync now retries preserved contribution deletions; changed or unauthorized items stay available to download.' : '');
+      setSyncIssue(drafts.length ? 'Some saved changes still require manual review. A newer version, completed review, or your current access may prevent recovery. Your local copy remains available to download.' : '');
       setSyncStatus(stateDirty.current ? 'local' : 'synced');
     } catch (error) {
       if (personalStateSession.current !== receipt.session) return;

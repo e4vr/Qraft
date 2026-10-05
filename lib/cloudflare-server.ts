@@ -1657,6 +1657,9 @@ async function collaborationStateForOperations(
   )
     ? await recordsByTypes(['qbankFolders'])
     : [];
+  const proposalClassificationRows = operations.some(operation => operation.collection === 'questionProposals')
+    ? await scopedRecordsByTypes(qbankIds, ['qbankSpecialties', 'qbankTopics'], qbankIds.has('smle-gs'))
+    : [];
   const rows = [
     ...new Map(
       [
@@ -1664,6 +1667,7 @@ async function collaborationStateForOperations(
         ...accessRows,
         ...profileContextRows,
         ...folderContextRows,
+        ...proposalClassificationRows,
       ].map((row) => [`${row.collection}\u0000${row.id}`, row]),
     ).values(),
   ];
@@ -2185,6 +2189,15 @@ function proposalChangeAllowed(
     return false;
   if (!current)
     return value.proposedById === user.uid && value.status === 'pending';
+  // Authorship and review are separate capabilities, including for reviewers
+  // and Superadmin. An author can change content only while it is pending.
+  if (current.proposedById === user.uid) {
+    const editable = new Set(['payload', 'rationale']);
+    return current.status === 'pending' && value.status === 'pending' &&
+      typeof value.rationale === 'string' && value.rationale.length <= 10_000 &&
+      [...new Set([...Object.keys(current), ...Object.keys(value)])].every(key =>
+        editable.has(key) || sameCollaborationValue(value[key], current[key as keyof typeof current]));
+  }
   if (canReview) {
     if (proposalRequiresTwoReviewers(current) && value.status === 'approved')
       return false;
@@ -2223,16 +2236,7 @@ function proposalChangeAllowed(
       typeof value.reviewedAt === 'string'
     );
   }
-  return (
-    current.proposedById === user.uid &&
-    current.status !== 'approved' &&
-    value.proposedById === user.uid &&
-    value.qbankId === current.qbankId &&
-    sameJson(value.submissionMethod, current.submissionMethod) &&
-    sameJson(value.importBatchId, current.importBatchId) &&
-    value.proposedAt === current.proposedAt &&
-    value.status === 'pending'
-  );
+  return false;
 }
 
 function sharedNoteChangeAllowed(
@@ -2802,8 +2806,25 @@ export async function saveCollaboration(request: Request) {
     );
   }
   const detectedProposalIds = new Set<string>();
+  const editedPendingProposalIds = new Set<string>();
   for (const operation of proposalOperations) {
     const proposal = operation.value as unknown as QuestionProposal;
+    const current = state.proposals.find(item => item.id === proposal.id);
+    if (current?.status === 'pending' && current.proposedById === user.uid) {
+      editedPendingProposalIds.add(proposal.id);
+      delete proposal.duplicateInfo;
+      // A changed answer or wording must not retain a low-risk review label.
+      if (proposal.type === 'question_edit') {
+        const kinds = new Set(proposal.editKinds);
+        if (proposal.payload.answer !== current.payload.answer) kinds.add('correct_answer');
+        if (proposal.payload.stem !== current.payload.stem) { kinds.add('question_text'); kinds.delete('typo_formatting'); }
+        if (!sameCollaborationValue(proposal.payload.options, current.payload.options)) { kinds.add('options'); kinds.delete('typo_formatting'); }
+        if (!sameCollaborationValue(proposal.payload.explanation, current.payload.explanation) ||
+            !sameCollaborationValue(proposal.payload.explanationImages, current.payload.explanationImages)) kinds.add('explanation');
+        if (!sameCollaborationValue(readQuestionSource(proposal.payload), readQuestionSource(current.payload))) kinds.add('source');
+        proposal.editKinds = [...kinds];
+      }
+    }
     const candidates = preparedByBank.get(proposal.qbankId) ?? [];
     proposal.duplicateReview = detectDuplicateReview({
       incoming: proposal.payload,
@@ -2954,6 +2975,10 @@ export async function saveCollaboration(request: Request) {
   const guardedSnapshots = (state.writeSnapshots ?? []).filter(snapshot => changedKeys.has(`${snapshot.collection}\u0000${snapshot.id}`));
   const statements: D1PreparedStatement[] = guardedSnapshots.length
     ? [collaborationWriteGuard(env.DB, guardedSnapshots, guardId)] : [];
+  if (editedPendingProposalIds.size)
+    statements.push(env.DB.prepare(
+      'DELETE FROM contribution_reviews WHERE proposal_id IN (SELECT value FROM json_each(?))',
+    ).bind(JSON.stringify([...editedPendingProposalIds])));
   const deletedQBankIds = input.operations
     .filter(
       (operation) =>
@@ -3018,7 +3043,8 @@ export async function saveCollaboration(request: Request) {
         state.members.find((m) => m.uid === operation.id) ?? null,
         operation.type === 'delete'
           ? null
-          : { collection: operation.collection },
+          : { collection: operation.collection,
+              ...(editedPendingProposalIds.has(operation.id) ? { reviewApprovalsReset: true } : {}) },
       ),
     );
   if (recordSets.some(row => ['sharedQuestions', 'questionProposals'].includes(row.collection)))

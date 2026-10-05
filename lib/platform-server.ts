@@ -1,4 +1,6 @@
 import { quote, type Discount } from '@/features/subscriptions/server/discount-quote';
+import { proposalReviewHashes } from '@/features/contributions/server/review-version';
+import { collaborationWriteGuard } from '@/server/db/collaboration-write-guard';
 import { AccessError, subscriptionApi } from '@/features/subscriptions/server/subscription-service';
 import { detectImportDuplication, ImportDuplicateIndex, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
 import { importKeyStatement, importSearchRevision, importSearchGuard, releaseImportSearchGuard } from '@/features/imports/server/import-search';
@@ -1656,6 +1658,9 @@ export async function platformApi(request: Request, action: string) {
       ).bind(proposalId).first<{ payload: string }>();
       if (!proposalRow) return json({ error: 'This proposal no longer exists.' }, 409);
       const proposal = JSON.parse(proposalRow.payload) as QuestionProposal;
+      if (input.expectedProposalHash !== undefined &&
+          input.expectedProposalHash !== (await proposalReviewHashes([proposal])).get(proposal.id))
+        return json({ error: 'A contributor edited this submission. Refresh and review the latest version.', code: 'PROPOSAL_CHANGED' }, 409);
       const state = await bankAccessState(proposal.qbankId);
       const bank = state.qbanks.find((item) => item.id === proposal.qbankId);
       if (!bank || !canReviewBank(user, bank, state.memberships))
@@ -1825,9 +1830,15 @@ export async function platformApi(request: Request, action: string) {
             .bind(JSON.stringify({ duplicateDecision: 'rejected_as_duplicate', candidateEntityId: selectedCurrentFinding.entityId, detectorVersion: proposal.duplicateReview?.detectorVersion ?? 'legacy-v0' }), proposal.id, user.uid),
         );
       }
+      const duplicateGuardId = crypto.randomUUID();
+      statements.unshift(collaborationWriteGuard(env.DB,
+        [{ collection: 'questionProposals', id: proposal.id, payload: proposalRow.payload }], duplicateGuardId));
+      statements.push(env.DB.prepare('DELETE FROM collaboration_write_guards WHERE id=?').bind(duplicateGuardId));
       try {
         await env.DB.batch(statements);
       } catch (error) {
+        if (String(error).includes('collaboration_snapshot_matches'))
+          return json({ error: 'This submission changed during review. Refresh and review the latest version.', code: 'PROPOSAL_CHANGED' }, 409);
         if (String(error).includes('UNIQUE constraint failed'))
           return json({ error: 'Another reviewer already resolved this duplicate case. Refresh and try again.' }, 409);
         throw error;
@@ -1863,6 +1874,19 @@ export async function platformApi(request: Request, action: string) {
       ).bind(JSON.stringify(proposalIds)).all<{ id: string; payload: string }>();
       if (rows.results.length !== proposalIds.length) return json({ error: 'One or more proposals no longer exist. Refresh and try again.' }, 409);
       const proposals = rows.results.map(row => JSON.parse(row.payload) as QuestionProposal);
+      if (input.expectedProposalHashes !== undefined) {
+        const hashes = input.expectedProposalHashes;
+        if (!hashes || typeof hashes !== 'object' || Array.isArray(hashes) ||
+            Object.keys(hashes).length !== proposalIds.length || proposalIds.some(id =>
+              typeof (hashes as Record<string, unknown>)[id] !== 'string' ||
+              !/^[a-f0-9]{64}$/.test((hashes as Record<string, string>)[id])))
+          return json({ error: 'Invalid proposal review versions.' }, 400);
+        const currentHashes = await proposalReviewHashes(proposals);
+        const matches = proposals.map(proposal =>
+          (hashes as Record<string, string>)[proposal.id] === currentHashes.get(proposal.id));
+        if (matches.some(match => !match))
+          return json({ error: 'A contributor edited this submission. Refresh and review the latest version.', code: 'PROPOSAL_CHANGED' }, 409);
+      }
       if (proposals.some((proposal) =>
         proposal.duplicateReview?.status === 'flagged' ||
         (!proposal.duplicateReview && Boolean(proposal.duplicateInfo)),
@@ -2080,7 +2104,19 @@ export async function platformApi(request: Request, action: string) {
         ...dependentUpdates.map(({ proposal }) => ({ collection: 'questionProposals', id: proposal.id, payload: JSON.stringify(proposal) })),
       ]));
       statements.push(...classificationCleanupStatements(env.DB, updatedQuestions.map(question => question.qbankId ?? 'smle-gs'), now));
-      const batchResults = await env.DB.batch(statements);
+      const reviewGuardId = crypto.randomUUID();
+      statements.unshift(collaborationWriteGuard(env.DB, rows.results.map(row =>
+        ({ collection: 'questionProposals', id: row.id, payload: row.payload })), reviewGuardId));
+      // Keep dependent-result indexes stable after inserting the guard.
+      for (const update of dependentUpdates) update.statementIndex += 1;
+      statements.push(env.DB.prepare('DELETE FROM collaboration_write_guards WHERE id=?').bind(reviewGuardId));
+      let batchResults: D1Result[];
+      try { batchResults = await env.DB.batch(statements); }
+      catch (error) {
+        if (String(error).includes('collaboration_snapshot_matches'))
+          return json({ error: 'This submission changed during review. Refresh and review the latest version.', code: 'PROPOSAL_CHANGED' }, 409);
+        throw error;
+      }
       await emitUsage(user.uid, { reviewContributions: proposalsToFinalize.length + awaitingSecond.size });
       return json({
         ok: true,

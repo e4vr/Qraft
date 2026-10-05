@@ -3,6 +3,8 @@ import type { PreformedLocalAttempt } from './preformed-test-types';
 import { coalesceStateCheckpoints } from '@/features/state/domain/checkpoint-outbox';
 import { mergeLiveState } from './merge-live-state';
 import { acknowledgeRejectedProposalDeletes, withoutProposals, type RejectedCollaborationDraft } from '@/features/collaboration/domain/proposal-delete-recovery';
+import { acknowledgeRejectedPendingEdits, type PendingEditReceipt } from '@/features/collaboration/domain/proposal-edit-recovery';
+import { sameCollaborationValue } from '@/features/collaboration/domain/collaboration-values';
 import { preformedAttemptKey, preformedCodeKey } from '@/features/exams/domain/preformed-attempt-scope';
 import {
   coalesceCollaborationSync,
@@ -278,6 +280,47 @@ export async function loadRejectedCollaboration(uid: string) {
   return (await readValue<RejectedCollaborationDraft[]>(`collaboration-rejected:${uid}`)) ?? [];
 }
 
+export async function acknowledgeCollaborationProposalEdits(uid: string, receipts: PendingEditReceipt[]): Promise<void> {
+  if (!receipts.length) return;
+  await updateValue<RejectedCollaborationDraft[]>(`collaboration-rejected:${uid}`,
+    drafts => acknowledgeRejectedPendingEdits(drafts ?? [], receipts));
+}
+
+export type ArchivedCollaborationDraft = RejectedCollaborationDraft & { archivedAt: string; disposition: 'review_completed' };
+
+export async function loadArchivedCollaboration(uid: string): Promise<ArchivedCollaborationDraft[]> {
+  return (await readValue<ArchivedCollaborationDraft[]>(`collaboration-archived:${uid}`)) ?? [];
+}
+
+// Archive and remove from the active queue together. An abort leaves the
+// original draft in place, and a concurrent newer edit is never consumed.
+export async function archiveCompletedCollaborationEdits(uid: string, receipts: PendingEditReceipt[]): Promise<void> {
+  if (!receipts.length) return;
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(STORE, 'readwrite'), store = transaction.objectStore(STORE);
+    const activeKey = `collaboration-rejected:${uid}`, archiveKey = `collaboration-archived:${uid}`;
+    const active = store.get(activeKey), history = store.get(archiveKey);
+    let drafts: RejectedCollaborationDraft[] = [];
+    active.onsuccess = () => { drafts = (active.result as RejectedCollaborationDraft[] | undefined) ?? []; };
+    history.onsuccess = () => {
+      const archived = drafts.flatMap(draft => {
+        const captured = receipts.filter(receipt => receipt.snapshotId === draft.snapshot.id);
+        const operations = [draft.details, ...(draft.failures ?? [])].flatMap(details => {
+          if (!details || typeof details !== 'object' || !('operations' in details) || !Array.isArray(details.operations)) return [];
+          return details.operations.filter(operation => captured.some(receipt => sameCollaborationValue(operation, receipt.operation)));
+        });
+        return operations.length ? [{ snapshot: draft.snapshot, details: { reason: 'Contribution review completed before this edit was recovered.', operations },
+          archivedAt: new Date().toISOString(), disposition: 'review_completed' as const }] : [];
+      });
+      store.put([...(history.result as ArchivedCollaborationDraft[] | undefined ?? []), ...archived], archiveKey);
+      store.put(acknowledgeRejectedPendingEdits(drafts, receipts), activeKey);
+    };
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onabort = transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error('Local archive aborted.')); };
+  });
+}
+
 // Commit a successful deletion batch to both queues in one local transaction.
 // A later network failure must never replay the already confirmed batch.
 export async function acknowledgeCollaborationProposalDeletes(uid: string, ids: string[]): Promise<void> {
@@ -366,6 +409,7 @@ export async function forgetLocalUser(uid: string): Promise<void> {
     store.delete(`collaboration-confirmed:${uid}`);
     store.delete(`collaboration-outbox:${uid}`);
     store.delete(`collaboration-rejected:${uid}`);
+    store.delete(`collaboration-archived:${uid}`);
     store.delete(`state-outbox:${uid}`);
     const cursor = store.openCursor();
     cursor.onsuccess = () => {

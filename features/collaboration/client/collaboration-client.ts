@@ -5,6 +5,8 @@ import type { AppUser, CollaborationState } from '@/lib/medguard-types';
 import {
   acknowledgeCollaborationSync,
   acknowledgeCollaborationProposalDeletes,
+  acknowledgeCollaborationProposalEdits,
+  archiveCompletedCollaborationEdits,
   loadRejectedCollaboration,
   enqueueCollaborationSync,
   loadCollaborationSyncOutbox,
@@ -18,6 +20,8 @@ import { withStateSyncLock } from '@/lib/tab-sync';
 import type { CollaborationSyncSnapshot } from '../domain/collaboration-outbox';
 import { collaborationBaseHash, collaborationValue, sameCollaborationValue } from '../domain/collaboration-values';
 import { collaborationBatchFits, proposalDeleteOperations, splitProposalDeleteGroup, withoutProposals } from '../domain/proposal-delete-recovery';
+import { completedPendingEditReceipts, pendingProposalEditOperations, planPendingProposalEditRecovery } from '../domain/proposal-edit-recovery';
+import { savePendingContribution } from '@/features/contributions/client/pending-contribution';
 
 export const COLLABORATION_SYNC_NOTICE = 'qraft-collaboration-sync';
 export type CollaborationSyncNotice = {
@@ -537,7 +541,7 @@ export async function saveCollaborationState(
   return confirmed;
 }
 
-// Explicit manual retry: use only the recorded delete intents, never the full
+// Explicit manual retry: use only recorded contribution intents, never the full
 // historic snapshot. Old snapshots also contain other banks and account data.
 export async function retryRejectedCollaborationState(uid: string): Promise<CollaborationState | undefined> {
   return withStateSyncLock(`collaboration:${uid}`, async () => {
@@ -553,7 +557,9 @@ export async function retryRejectedCollaborationState(uid: string): Promise<Coll
         }
       }
     }
-    if (!groups.size) return undefined;
+    const hasEdits = drafts.some(draft => draft.snapshot.uid === uid &&
+      [draft.details, ...(draft.failures ?? [])].some(details => pendingProposalEditOperations(details).some(operation => operation.baseValue.proposedById === uid)));
+    if (!groups.size && !hasEdits) return undefined;
     const { collaboration } = await api<CollaborationResponse>('/collaboration', {
       expectedUserId: uid, cacheScope: uid, forceRefresh: true, requestReason: 'explicit-refresh',
     });
@@ -577,6 +583,17 @@ export async function retryRejectedCollaborationState(uid: string): Promise<Coll
         }
       }
     }
+    for (const edit of planPendingProposalEditRecovery(uid, drafts, confirmed)) {
+      try {
+        const saved = edit.alreadyApplied ? edit.current : await savePendingContribution(uid, edit.current, edit.value.payload, edit.value.rationale);
+        confirmed = { ...confirmed, proposals: confirmed.proposals.map(proposal => proposal.id === saved.id ? saved : proposal) };
+        await acknowledgeCollaborationProposalEdits(uid, edit.receipts);
+      } catch (error) {
+        if (!(error instanceof ApiError) || ![400, 403, 409].includes(error.status) || error.payload.code === 'ACCOUNT_CHANGED') throw error;
+        // A reviewed, changed or unauthorized proposal remains downloadable.
+      }
+    }
+    await archiveCompletedCollaborationEdits(uid, completedPendingEditReceipts(uid, drafts, confirmed));
     if (collaborationScope === uid) setApiCache('/collaboration', { collaboration: confirmed }, { cacheScope: uid });
     return confirmed;
   });

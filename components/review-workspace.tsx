@@ -2,6 +2,7 @@
 import { FormattedQuestionText } from '@/components/formatted-question-text';
 import { ExplanationImages } from '@/components/explanation-images';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
+import { collaborationBaseHash } from '@/features/collaboration/domain/collaboration-values';
 import { ReviewFilters } from '@/components/review-filters';
 import {
   matchesProposalFilters,
@@ -436,10 +437,12 @@ export function ReviewWorkspace({
     setNotice('');
     try {
       const result = await api<ReviewResult>('/platform/bulk-review', {
-        method: 'POST',
+        method: 'POST', expectedUserId: user.uid,
         body: JSON.stringify({
           proposalIds: selectedProposals.map((proposal) => proposal.id),
           status: bulkDecision,
+          expectedProposalHashes: Object.fromEntries(await Promise.all(selectedProposals.map(async proposal =>
+            [proposal.id, await collaborationBaseHash(proposal)]))),
         }),
       });
       applyReviewResult(result);
@@ -474,8 +477,9 @@ export function ReviewWorkspace({
       const result = await api<ReviewResult>(
         '/platform/bulk-review',
         {
-          method: 'POST',
-          body: JSON.stringify({ proposalIds: [proposal.id], status }),
+          method: 'POST', expectedUserId: user.uid,
+          body: JSON.stringify({ proposalIds: [proposal.id], status,
+            expectedProposalHashes: { [proposal.id]: await collaborationBaseHash(proposal) } }),
         },
       );
       applyReviewResult(result);
@@ -506,9 +510,10 @@ export function ReviewWorkspace({
     setNotice('');
     try {
       const result = await api<ReviewResult>('/platform/duplicate-resolve', {
-        method: 'POST',
+        method: 'POST', expectedUserId: user.uid,
         body: JSON.stringify({
           proposalId: proposal.id,
+          expectedProposalHash: await collaborationBaseHash(proposal),
           candidateEntityId,
           decision,
           note: duplicateNotes[proposal.id] ?? '',
