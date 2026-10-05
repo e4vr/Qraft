@@ -1,24 +1,36 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { api } from '@/lib/api-client';
+import type { ActivationCodeAudience } from '@/features/subscriptions/domain/access-model';
+
+export type SubscriptionCodeMember = {
+  uid: string;
+  name: string;
+  email: string;
+  role: string;
+};
 
 export function SubscriptionAccountPicker({
+  audience,
+  onAudienceChange,
   value,
   onChange,
 }: {
-  value: string;
-  onChange: (uid: string) => void;
+  audience: ActivationCodeAudience;
+  onAudienceChange: (audience: ActivationCodeAudience) => void;
+  value: SubscriptionCodeMember | null;
+  onChange: (member: SubscriptionCodeMember | null) => void;
 }) {
+  const radioName = useId();
   const [query, setQuery] = useState(''),
-    [rows, setRows] = useState<
-      { uid: string; name: string; email: string; role: string }[]
-    >([]),
-    [error, setError] = useState('');
+    [rows, setRows] = useState<SubscriptionCodeMember[]>([]),
+    [error, setError] = useState(''),
+    [loading, setLoading] = useState(false);
   useEffect(() => {
-    if (value || query.trim().length < 2) return;
+    if (audience !== 'member' || value || query.trim().length < 2) return;
     let alive = true;
     const timer = setTimeout(() => {
-      void api<{ members: typeof rows }>(
+      void api<{ members: SubscriptionCodeMember[] }>(
         `/platform/access-admin?search=${encodeURIComponent(query.trim())}`,
       )
         .then((result) => {
@@ -33,78 +45,149 @@ export function SubscriptionAccountPicker({
         })
         .catch(() => {
           if (alive) setError('Unable to search members. Try again.');
+        })
+        .finally(() => {
+          if (alive) setLoading(false);
         });
     }, 250);
     return () => {
       alive = false;
       clearTimeout(timer);
     };
-  }, [query, value]);
+  }, [audience, query, value]);
+  function clearSelection() {
+    onChange(null);
+    setQuery('');
+    setRows([]);
+    setError('');
+    setLoading(false);
+  }
   return (
-    <div className="space-y-2">
-      <label className="block text-sm font-medium">
-        Restrict to a member · optional
-        <input
-          aria-label="Find member for activation code"
-          disabled={Boolean(value)}
-          placeholder="Search name or email; leave blank for any account"
-          className="mt-1.5 min-h-11 w-full rounded-xl border bg-background px-3 text-sm"
-          value={query}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setRows([]);
-          }}
-        />
-      </label>
-      {value ? (
-        <div className="flex items-center justify-between gap-2 rounded-xl bg-primary/5 p-3 text-xs">
-          <span>This code is restricted to the selected member.</span>
-          <button
-            type="button"
-            className="font-semibold text-primary"
-            onClick={() => {
-              onChange('');
-              setQuery('');
-              setRows([]);
-            }}
+    <fieldset className="space-y-3 rounded-2xl border p-4">
+      <legend className="px-1 text-sm font-semibold">
+        Who can use these codes?
+      </legend>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {(
+          [
+            [
+              'any',
+              'Any approved account',
+              'Each code can be used once, globally.',
+            ],
+            [
+              'member',
+              'One specific account',
+              'Only the selected account can use these codes.',
+            ],
+          ] as const
+        ).map(([scope, title, description]) => (
+          <label
+            key={scope}
+            aria-label={title}
+            className={`relative flex cursor-pointer items-start gap-2 rounded-xl border p-3 ${audience === scope ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'}`}
           >
-            Clear restriction
-          </button>
-        </div>
-      ) : (
-        query.trim().length >= 2 && (
-          <div className="max-h-48 overflow-y-auto rounded-xl border">
-            {rows.length ? (
-              rows.map((member) => (
-                <button
-                  type="button"
-                  className="block w-full p-3 text-left hover:bg-muted"
-                  key={member.uid}
-                  onClick={() => {
-                    onChange(member.uid);
-                    setQuery(`${member.name} · ${member.email}`);
-                  }}
-                >
-                  <strong className="block text-sm">{member.name}</strong>
-                  <small className="text-muted-foreground">
-                    {member.email}
-                  </small>
-                </button>
-              ))
-            ) : (
-              <p className="p-3 text-xs text-muted-foreground">
-                {error ||
-                  'Search for a member, then choose the matching account.'}
+            <input
+              type="radio"
+              name={radioName}
+              value={scope}
+              checked={audience === scope}
+              className="mt-0.5 size-4 shrink-0 accent-primary"
+              onChange={() => {
+                clearSelection();
+                onAudienceChange(scope);
+              }}
+            />
+            <span>
+              <strong className="block text-sm">{title}</strong>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                {description}
+              </span>
+            </span>
+          </label>
+        ))}
+      </div>
+      {audience === 'member' &&
+        (value ? (
+          <div className="flex items-start justify-between gap-3 rounded-xl bg-primary/5 p-3">
+            <div className="min-w-0">
+              <strong className="block break-words text-sm">
+                {value.name || value.email}
+              </strong>
+              <span className="block break-all text-xs text-muted-foreground">
+                {value.email}
+              </span>
+              <span className="mt-1 block break-all text-xs text-muted-foreground">
+                Account ID: {value.uid}
+              </span>
+              <p className="mt-2 text-xs font-medium">
+                Only this account can activate these codes.
               </p>
-            )}
+            </div>
+            <button
+              type="button"
+              className="shrink-0 text-xs font-semibold text-primary"
+              onClick={clearSelection}
+            >
+              Change account
+            </button>
           </div>
-        )
-      )}
-      <p className="text-xs text-muted-foreground">
-        {value
-          ? 'Only this account can redeem it, once.'
-          : 'Any approved account can redeem it. One use globally.'}
-      </p>
-    </div>
+        ) : (
+          <div className="space-y-2">
+            <label className="block text-sm font-medium">
+              Choose the allowed account
+              <input
+                aria-label="Find member for activation code"
+                placeholder="Search name, email or account ID"
+                className="mt-1.5 min-h-11 w-full rounded-xl border bg-background px-3 text-sm"
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setRows([]);
+                  setError('');
+                  setLoading(event.target.value.trim().length >= 2);
+                }}
+              />
+            </label>
+            <div aria-live="polite">
+              {query.trim().length >= 2 && (
+                <div className="max-h-48 overflow-y-auto rounded-xl border">
+                  {rows.length ? (
+                    rows.map((member) => (
+                      <button
+                        type="button"
+                        className="block w-full p-3 text-left hover:bg-muted"
+                        key={member.uid}
+                        onClick={() => {
+                          onChange(member);
+                          setRows([]);
+                          setLoading(false);
+                        }}
+                      >
+                        <strong className="block text-sm">
+                          {member.name || member.email}
+                        </strong>
+                        <span className="block break-all text-xs text-muted-foreground">
+                          {member.email}
+                        </span>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="p-3 text-xs text-muted-foreground">
+                      {error ||
+                        (loading
+                          ? 'Searching accounts…'
+                          : 'No matching accounts. Try another name, email or account ID.')}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Select an account from the results before generating codes.
+            </p>
+          </div>
+        ))}
+    </fieldset>
   );
 }

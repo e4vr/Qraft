@@ -24,10 +24,14 @@ import {
   durationEnd,
   durationText,
   type AccessGrant,
-  type ActivationCode,
+  type ActivationCodeAudience,
+  type ActivationCodeListing,
   type DurationUnit,
 } from '@/features/subscriptions/domain/access-model';
-import { SubscriptionAccountPicker } from '@/components/subscription-account-picker';
+import {
+  SubscriptionAccountPicker,
+  type SubscriptionCodeMember,
+} from '@/components/subscription-account-picker';
 import { DiscountAdmin } from '@/components/subscription-discounts';
 
 type Member = {
@@ -39,7 +43,13 @@ type Member = {
   account_status: string;
   effective_expires_at: string | null;
 };
-type Code = ActivationCode & { status: string };
+type Code = ActivationCodeListing;
+type GeneratedCode = {
+  name: string;
+  code: string;
+  duration: string;
+  member: SubscriptionCodeMember | null;
+};
 type GiftRow = {
   id: string;
   user_id: string;
@@ -148,9 +158,12 @@ export function SubscriptionManager({
     [paid, setPaid] = useState('100'),
     [reference, setReference] = useState('');
   const [count, setCount] = useState(1),
-    [boundUser, setBoundUser] = useState(''),
+    [codeAudience, setCodeAudience] = useState<ActivationCodeAudience>('any'),
+    [boundMember, setBoundMember] = useState<SubscriptionCodeMember | null>(
+      null,
+    ),
     [deadline, setDeadline] = useState(''),
-    [generated, setGenerated] = useState<{ name: string; code: string }[]>([]);
+    [generated, setGenerated] = useState<GeneratedCode[]>([]);
   const [cancel, setCancel] = useState<{
       member: Member;
       grant?: AccessGrant;
@@ -317,7 +330,8 @@ export function SubscriptionManager({
     setUnit('month');
     setPaid(String(prices.full_monthly / 100));
     setReference('');
-    setBoundUser('');
+    setCodeAudience('any');
+    setBoundMember(null);
     setDeadline('');
     setCount(1);
     pendingCodes.current = null;
@@ -348,6 +362,10 @@ export function SubscriptionManager({
   }
   const saveEditor = async () => {
     if (editor === 'codes') {
+      if (codeAudience === 'member' && !boundMember) {
+        setError('Select the account allowed to use these codes.');
+        return;
+      }
       if (!pendingCodes.current)
         pendingCodes.current = {
           requestId: crypto.randomUUID(),
@@ -366,7 +384,8 @@ export function SubscriptionManager({
         name,
         duration,
         unit,
-        userId: boundUser,
+        audience: codeAudience,
+        userId: codeAudience === 'member' ? boundMember!.uid : '',
         redeemBefore: deadline ? new Date(deadline).toISOString() : null,
       });
       if (result) {
@@ -374,6 +393,8 @@ export function SubscriptionManager({
           request.codes.map((code, index) => ({
             name: count === 1 ? name : `${name} · ${index + 1}`,
             code: code.match(/.{1,5}/g)!.join('-'),
+            duration: durationText(duration, unit),
+            member: codeAudience === 'member' ? boundMember : null,
           })),
         );
         setEditor(null);
@@ -404,11 +425,24 @@ export function SubscriptionManager({
   };
   const download = () => {
     const csv =
-      'Name,Activation code\r\n' +
+      'Name,Activation code,Duration,Allowed account,Account ID,Email\r\n' +
       generated
-        .map(
-          (row) =>
-            `"${(/^[=+@-]/.test(row.name) ? "'" : '') + row.name.replaceAll('"', '""')}","${row.code}"`,
+        .map((row) =>
+          [
+            row.name,
+            row.code,
+            row.duration,
+            row.member
+              ? row.member.name || row.member.email
+              : 'Any approved account',
+            row.member?.uid || '',
+            row.member?.email || '',
+          ]
+            .map(
+              (value) =>
+                `"${(/^[=+@-]/.test(value) ? "'" : '') + value.replaceAll('"', '""')}"`,
+            )
+            .join(','),
         )
         .join('\r\n');
     const url = URL.createObjectURL(
@@ -528,7 +562,7 @@ export function SubscriptionManager({
                 aria-label={`Search ${tab}`}
                 placeholder={
                   tab === 'codes'
-                    ? 'Search code name or ending…'
+                    ? 'Search code name, ending or allowed account…'
                     : 'Search name, email or account ID…'
                 }
                 className={`${inputClass} pl-9`}
@@ -600,7 +634,13 @@ export function SubscriptionManager({
                     {(tab === 'members'
                       ? ['Member', 'Access', 'Access ends', '']
                       : tab === 'codes'
-                        ? ['Code', 'Duration', 'Status', 'Redemption', '']
+                        ? [
+                            'Code',
+                            'Duration',
+                            'Status',
+                            'Allowed account / Redemption',
+                            '',
+                          ]
                         : tab === 'gifts'
                           ? ['Member', 'Gift duration', 'Status', 'Issued']
                           : ['Action', 'Member', 'Date']
@@ -670,16 +710,28 @@ export function SubscriptionManager({
                         </td>
                         <td className="px-4 py-4">{badge(code.status)}</td>
                         <td className="px-4 py-4 text-xs text-muted-foreground">
+                          {code.bound_user_id ? (
+                            <div className="mb-2">
+                              <strong className="block text-foreground">
+                                {code.bound_user_name || 'Restricted account'}
+                              </strong>
+                              <span className="block break-all">
+                                {code.bound_user_email || code.bound_user_id}
+                              </span>
+                              <span className="block">Only this account</span>
+                            </div>
+                          ) : (
+                            <span className="mb-2 block">
+                              Any approved account
+                            </span>
+                          )}
                           {code.redeemed_at ? (
                             <>
-                              {date(code.redeemed_at)}
+                              Used {date(code.redeemed_at)}
                               <span className="block">{code.redeemed_by}</span>
                             </>
                           ) : (
                             <>
-                              {code.bound_user_id
-                                ? 'Account: ' + code.bound_user_id
-                                : 'Any approved account'}
                               <span className="block">
                                 {code.redeem_before
                                   ? 'Use before ' + date(code.redeem_before)
@@ -1159,10 +1211,17 @@ export function SubscriptionManager({
                     />
                   </label>
                   <SubscriptionAccountPicker
-                    value={boundUser}
-                    onChange={(uid) => {
-                      setBoundUser(uid);
+                    audience={codeAudience}
+                    onAudienceChange={(audience) => {
+                      setCodeAudience(audience);
                       pendingCodes.current = null;
+                      setError('');
+                    }}
+                    value={boundMember}
+                    onChange={(member) => {
+                      setBoundMember(member);
+                      pendingCodes.current = null;
+                      setError('');
                     }}
                   />
                   <label className="block text-sm font-medium">
@@ -1192,7 +1251,13 @@ export function SubscriptionManager({
             <button
               type="submit"
               className="q-button q-button-primary w-full"
-              disabled={busy || !previewEnd}
+              disabled={
+                busy ||
+                !previewEnd ||
+                (editor === 'codes' &&
+                  codeAudience === 'member' &&
+                  !boundMember)
+              }
             >
               {busy
                 ? 'Saving…'
@@ -1221,6 +1286,13 @@ export function SubscriptionManager({
             {generated.map((row) => (
               <div key={row.code} className="rounded-xl border p-3">
                 <p className="mb-2 text-xs font-semibold">{row.name}</p>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  {row.duration} ·{' '}
+                  {row.member
+                    ? `Only ${row.member.name || row.member.email} (${row.member.email})`
+                    : 'Any approved account'}{' '}
+                  · One use
+                </p>
                 <div className="flex items-center gap-2">
                   <code className="min-w-0 flex-1 break-all text-xs">
                     {row.code}

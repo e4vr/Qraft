@@ -10,6 +10,7 @@ import {
   validateDuration,
   type AccessGrant,
   type ActivationCode,
+  type ActivationCodeListing,
   type DurationUnit,
 } from '../domain/access-model';
 import { type PlanId } from '../domain/plan-config';
@@ -355,6 +356,20 @@ async function createCodes(actor: Actor, input: Record<string, unknown>) {
     throw new AccessError('Enter a code name (up to 160 characters).');
   const { duration, unit } = validateDuration(input.duration, input.unit);
   const bound = text(input, 'userId');
+  if (input.userId != null && typeof input.userId !== 'string')
+    throw new AccessError('Choose a valid account for this code.');
+  if (
+    input.audience !== undefined &&
+    input.audience !== 'any' &&
+    input.audience !== 'member'
+  )
+    throw new AccessError('Choose who can use this code.');
+  if (input.audience === 'member' && !bound)
+    throw new AccessError('Select the account allowed to use this code.');
+  if (input.audience === 'any' && bound)
+    throw new AccessError(
+      'An unrestricted code cannot have a selected account.',
+    );
   if (bound) await target(bound);
   const beforeInput = text(input, 'redeemBefore'),
     before = beforeInput ? new Date(beforeInput).toISOString() : null;
@@ -586,7 +601,7 @@ export async function subscriptionApi(
         env.DB.prepare(
           `${cte} SELECT uid,email,name,tier,role,account_status,effective_expires_at FROM selected ORDER BY CASE WHEN tier<>'free' THEN 0 ELSE 1 END,effective_expires_at,email LIMIT 51 OFFSET ?`,
         ).bind(...args, offset),
-          env.DB.prepare(`${accessSourcesCte()} SELECT count(*) AS accounts,sum(tier<>'free' AND coalesce(json_extract(profile_json,'$.role'),'student')<>'super_admin') AS full,sum(tier='free') AS free,
+        env.DB.prepare(`${accessSourcesCte()} SELECT count(*) AS accounts,sum(tier<>'free' AND coalesce(json_extract(profile_json,'$.role'),'student')<>'super_admin') AS full,sum(tier='free') AS free,
           sum(effective_expires_at>? AND effective_expires_at<=?) AS endingSoon,
           (SELECT count(*) FROM activation_codes WHERE redeemed_at IS NULL AND disabled_at IS NULL AND (redeem_before IS NULL OR redeem_before>?)) AS unusedCodes,
           (SELECT coalesce(sum(amount),0) FROM access_payments) AS confirmedPayments FROM resolved`).bind(
@@ -653,9 +668,12 @@ export async function subscriptionApi(
         now = nowIso();
       const rows =
         await env.DB.prepare(`WITH selected AS (SELECT ${codeFields},CASE WHEN redeemed_at IS NOT NULL THEN 'used' WHEN disabled_at IS NOT NULL THEN 'disabled' WHEN redeem_before IS NOT NULL AND redeem_before<=? THEN 'expired' ELSE 'unused' END AS status FROM activation_codes)
-        SELECT * FROM selected WHERE (instr(lower(name),lower(?))>0 OR instr(hint,upper(?))>0) AND (?='all' OR status=?) ORDER BY created_at DESC,id DESC LIMIT 51 OFFSET ?`)
-          .bind(now, query, query, filter, filter, offset)
-          .all<ActivationCode>();
+        SELECT c.*,json_extract(p.profile_json,'$.displayName') AS bound_user_name,p.email AS bound_user_email
+        FROM selected c LEFT JOIN profiles p ON p.uid=c.bound_user_id
+        WHERE (instr(lower(c.name),lower(?))>0 OR instr(c.hint,upper(?))>0 OR instr(lower(coalesce(p.email,'')),lower(?))>0 OR instr(lower(coalesce(json_extract(p.profile_json,'$.displayName'),'')),lower(?))>0 OR instr(lower(coalesce(c.bound_user_id,'')),lower(?))>0)
+        AND (?='all' OR c.status=?) ORDER BY c.created_at DESC,c.id DESC LIMIT 51 OFFSET ?`)
+          .bind(now, query, query, query, query, query, filter, filter, offset)
+          .all<ActivationCodeListing>();
       return json({
         codes: rows.results.map((code) => ({
           ...code,
@@ -790,7 +808,8 @@ export async function subscriptionApi(
     }
     return json({ error: 'Method not allowed.' }, 405);
   } catch (error) {
-    if (error instanceof ValidationError) return json({ error: error.message }, 400);
+    if (error instanceof ValidationError)
+      return json({ error: error.message }, 400);
     if (String(error).includes('DISCOUNT_UNAVAILABLE'))
       return json(
         { error: 'This discount is no longer available. Refresh the quote.' },

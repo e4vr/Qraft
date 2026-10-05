@@ -167,7 +167,10 @@ print(json.dumps(out))`,
   await t.test(
     'code status filters, gift issuance retries and disable/redeem races remain consistent',
     async () => {
-      assert.equal((await call('admin', '/platform/access-admin')).data.summary.full, 0);
+      assert.equal(
+        (await call('admin', '/platform/access-admin')).data.summary.full,
+        0,
+      );
       const uid = await account(),
         requestId = randomUUID(),
         giftBody = {
@@ -441,6 +444,148 @@ print(json.dumps(out))`,
     },
   );
   await t.test(
+    'explicit code audience requires a real selected account and cannot silently create public codes',
+    async () => {
+      const uid = await account();
+      const countBefore = (
+        await db.prepare('SELECT count(*) AS n FROM activation_codes').first()
+      ).n;
+      for (const [options, expected] of [
+        [{ audience: 'member' }, 400],
+        [{ audience: 'member', userId: '  ' }, 400],
+        [{ audience: 'member', userId: { uid } }, 400],
+        [{ audience: 'member', userId: 'missing-account' }, 404],
+        [{ audience: 'member', userId: 'admin' }, 400],
+        [{ audience: 'any', userId: uid }, 400],
+        [{ audience: 'invalid' }, 400],
+        [{ audience: ['member'] }, 400],
+      ]) {
+        const response = await call('admin', '/platform/activation-codes', {
+          operation: 'create',
+          requestId: randomUUID(),
+          name: 'Invalid audience',
+          duration: 7,
+          unit: 'day',
+          codes: [randomBytes(20).toString('hex')],
+          ...options,
+        });
+        assert.equal(response.status, expected, JSON.stringify(response));
+      }
+      assert.equal(
+        (await db.prepare('SELECT count(*) AS n FROM activation_codes').first())
+          .n,
+        countBefore,
+      );
+      assert.equal(
+        (await generate({ audience: 'any' })).code.bound_user_id,
+        null,
+      );
+      assert.equal(
+        (await generate({ audience: 'member', userId: uid })).code
+          .bound_user_id,
+        uid,
+      );
+    },
+  );
+  await t.test(
+    'account codes remain bound to identity; unauthorized attempts cannot consume a code or spoof its owner',
+    async () => {
+      const uid = await account(undefined, {
+          displayName: 'Allowed Code Member',
+        }),
+        other = await account(),
+        code = await generate({ audience: 'member', userId: uid });
+      for (const search of [
+        'Allowed Code Member',
+        uid + '@example.test',
+        uid,
+      ]) {
+        const listing = await call(
+          'admin',
+          '/platform/activation-codes?search=' + encodeURIComponent(search),
+        );
+        assert.equal(listing.status, 200, JSON.stringify(listing));
+        const row = listing.data.codes.find((item) => item.id === code.code.id);
+        assert.equal(row.bound_user_name, 'Allowed Code Member');
+        assert.equal(row.bound_user_email, uid + '@example.test');
+        assert.equal(row.bound_user_id, uid);
+        assert.ok(!JSON.stringify(listing).includes(code.secret));
+      }
+      assert.equal(
+        (await call(other, '/platform/activation-codes')).status,
+        403,
+      );
+      const deniedId = randomUUID();
+      const denied = await call(other, '/platform/activation-code', {
+        code: code.secret,
+        requestId: deniedId,
+        userId: uid,
+        audience: 'any',
+      });
+      assert.equal(denied.status, 409);
+      assert.equal(
+        (
+          await db
+            .prepare('SELECT redeemed_at FROM activation_codes WHERE id=?')
+            .bind(code.code.id)
+            .first()
+        ).redeemed_at,
+        null,
+      );
+      assert.equal(
+        (
+          await db
+            .prepare('SELECT count(*) AS n FROM access_operations WHERE id=?')
+            .bind(deniedId)
+            .first()
+        ).n,
+        0,
+      );
+      assert.equal((await user(other)).effectivePlan, 'free');
+      // A changed display name/email must not transfer the restriction away from the account UID.
+      await db
+        .prepare(
+          "UPDATE profiles SET email=?,profile_json=json_set(profile_json,'$.email',?,'$.displayName',?) WHERE uid=?",
+        )
+        .bind(
+          'renamed-owner@example.test',
+          'renamed-owner@example.test',
+          'Renamed Owner',
+          uid,
+        )
+        .run();
+      const requestId = randomUUID();
+      const [allowed, racingOther] = await Promise.all([
+        redeem(uid, code.secret, requestId),
+        redeem(other, code.secret),
+      ]);
+      assert.equal(allowed.status, 200, JSON.stringify(allowed));
+      assert.equal(racingOther.status, 409);
+      assert.equal(
+        (await redeem(uid, code.secret, requestId)).data.duplicate,
+        true,
+      );
+      assert.equal((await redeem(other, code.secret, requestId)).status, 409);
+      assert.equal((await redeem(uid, code.secret)).status, 409);
+      const grants = await db
+        .prepare(
+          "SELECT user_id FROM access_grants WHERE source='activation_code' AND source_id=?",
+        )
+        .bind(code.code.id)
+        .all();
+      assert.deepEqual(grants.results, [{ user_id: uid }]);
+      assert.equal(
+        (
+          await db
+            .prepare('SELECT redeemed_by FROM activation_codes WHERE id=?')
+            .bind(code.code.id)
+            .first()
+        ).redeemed_by,
+        uid,
+      );
+    },
+  );
+  await t.test(
     'bound, disabled and expired codes cannot be consumed; account ownership preserved',
     async () => {
       const uid = await account(),
@@ -673,18 +818,56 @@ print(json.dumps(out))`,
       );
     },
   );
-  await t.test('a deleted test ID cannot be reused with different questions; retirement still cleans existing tests', async () => {
-    const uid = await account(), id = randomUUID(), question = 'synthetic-' + randomUUID(), s = state();
-    s.tests = [{ id, title:'Synthetic trial', questionIds:[question], answers:{}, revealed:[],graded:[],currentIndex:0,startedAt:now }];
-    assert.equal((await call(uid,'/state',{state:s},'PUT')).status,200);
-    assert.equal((await call(uid,'/state',{state:state()},'PUT')).status,200);
-    const replaced = structuredClone(s); replaced.tests[0].questionIds = ['replacement-' + randomUUID()];
-    const rejection = await call(uid,'/state',{state:replaced},'PUT'); assert.equal(rejection.status,409); assert.equal(rejection.data.code,'EXAM_CONTENT_CHANGED');
-    assert.equal((await call(uid,'/state',{state:s},'PUT')).status,200);
-    await db.prepare('INSERT INTO retired_questions(id,uuid,deleted_at) VALUES(?,?,?)').bind(question,randomUUID(),now).run();
-    assert.equal((await call(uid,'/state',{state:s},'PUT')).status,200);
-    const next = await call(uid,'/state'); assert.deepEqual(next.data.state.tests[0].questionIds,[]);
-  });
+  await t.test(
+    'a deleted test ID cannot be reused with different questions; retirement still cleans existing tests',
+    async () => {
+      const uid = await account(),
+        id = randomUUID(),
+        question = 'synthetic-' + randomUUID(),
+        s = state();
+      s.tests = [
+        {
+          id,
+          title: 'Synthetic trial',
+          questionIds: [question],
+          answers: {},
+          revealed: [],
+          graded: [],
+          currentIndex: 0,
+          startedAt: now,
+        },
+      ];
+      assert.equal(
+        (await call(uid, '/state', { state: s }, 'PUT')).status,
+        200,
+      );
+      assert.equal(
+        (await call(uid, '/state', { state: state() }, 'PUT')).status,
+        200,
+      );
+      const replaced = structuredClone(s);
+      replaced.tests[0].questionIds = ['replacement-' + randomUUID()];
+      const rejection = await call(uid, '/state', { state: replaced }, 'PUT');
+      assert.equal(rejection.status, 409);
+      assert.equal(rejection.data.code, 'EXAM_CONTENT_CHANGED');
+      assert.equal(
+        (await call(uid, '/state', { state: s }, 'PUT')).status,
+        200,
+      );
+      await db
+        .prepare(
+          'INSERT INTO retired_questions(id,uuid,deleted_at) VALUES(?,?,?)',
+        )
+        .bind(question, randomUUID(), now)
+        .run();
+      assert.equal(
+        (await call(uid, '/state', { state: s }, 'PUT')).status,
+        200,
+      );
+      const next = await call(uid, '/state');
+      assert.deepEqual(next.data.state.tests[0].questionIds, []);
+    },
+  );
   await t.test(
     'free notes and cards cannot poison cloud state; disabled Full flashcards flag is authoritative',
     async () => {

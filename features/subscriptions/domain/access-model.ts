@@ -2,6 +2,7 @@ import { addCalendarDuration } from './calendar-duration';
 import type { PlanId } from './plan-config';
 
 export type DurationUnit = 'day' | 'month' | 'year';
+export type ActivationCodeAudience = 'any' | 'member';
 export type AccessGrant = {
   id: string;
   user_id: string;
@@ -34,6 +35,11 @@ export type ActivationCode = {
   redeemed_at: string | null;
   redeemed_by: string | null;
   grant_id: string | null;
+};
+export type ActivationCodeListing = ActivationCode & {
+  status: string;
+  bound_user_name: string | null;
+  bound_user_email: string | null;
 };
 export function validateDuration(
   value: unknown,
