@@ -28,7 +28,7 @@ const questionsById = new Map(
   questions.map((question) => [question.id, question]),
 );
 
-test('bookmark folders include only accessible banks with loaded bookmarked questions', () => {
+void test('bookmark folders include only accessible banks with loaded bookmarked questions', () => {
   const groups = groupBookmarkedQuestions(banks, questions, bookmarkIds);
   assert.deepEqual(
     groups.map((group) => [
@@ -49,7 +49,7 @@ test('bookmark folders include only accessible banks with loaded bookmarked ques
   );
 });
 
-test('live bookmark or access changes update counts and remove unavailable folders', () => {
+void test('live bookmark or access changes update counts and remove unavailable folders', () => {
   const remaining = bookmarkIds.filter((id) => id !== 's1');
   assert.deepEqual(
     groupBookmarkedQuestions(banks, questions, remaining)[0].questions.map(
@@ -65,7 +65,7 @@ test('live bookmark or access changes update counts and remove unavailable folde
   );
 });
 
-test('Tutor sessions validate bank membership and current bookmarks, deduplicate IDs and preserve order', () => {
+void test('Tutor sessions validate bank membership and current bookmarks, deduplicate IDs and preserve order', () => {
   const before = JSON.stringify({ questions, progress, bookmarkIds });
   const session = createBookmarkStudySession({
     bankId: 'surgery',
@@ -91,7 +91,7 @@ test('Tutor sessions validate bank membership and current bookmarks, deduplicate
   assert.equal(JSON.stringify({ questions, progress, bookmarkIds }), before);
 });
 
-test('removed, unloaded or foreign bookmarks cannot start an empty Tutor session', () => {
+void test('removed, unloaded or foreign bookmarks cannot start an empty Tutor session', () => {
   const input = {
     bankId: 'surgery',
     title: 'Surgery Bookmarks',
@@ -127,7 +127,7 @@ test('removed, unloaded or foreign bookmarks cannot start an empty Tutor session
   );
 });
 
-test('opening one bookmarked question and studying legacy-bank bookmarks remain supported', () => {
+void test('opening one bookmarked question and studying legacy-bank bookmarks remain supported', () => {
   const input = { title: 'Bookmarks', questionsById, progress };
   assert.deepEqual(
     createBookmarkStudySession({

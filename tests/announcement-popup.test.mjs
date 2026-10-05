@@ -226,7 +226,7 @@ void test('popup waits for sign-in, appears once per account and activation, and
     // A response initiated for a signed-in account must be ignored after logout.
     fixture.hooks.dispose();
     fixture.hooks = lifecycle();
-    const originalApi = fixture.api;
+    const originalApi = fixture.api.bind(fixture);
     let resolveRead;
     fixture.api = () => new Promise(resolve => { resolveRead = resolve; });
     assert.equal((await settle({ userId: 'late' })).props.open, false);
