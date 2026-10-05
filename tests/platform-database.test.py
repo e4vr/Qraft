@@ -48,8 +48,10 @@ class PlatformDatabaseTests(unittest.TestCase):
     def test_redemption_is_atomic_and_cannot_exceed_cap(self):
         self.code()
         self.redeem()
-        self.assertEqual(self.db.execute("SELECT plan FROM subscriptions WHERE user_id='one'").fetchone()[0],'full_monthly')
-        self.assertEqual(self.db.execute("SELECT expires_at FROM subscriptions WHERE user_id='one'").fetchone()[0],'2027-09-05T00:00:00Z')
+        # Coupon confirmation records payment history; access is granted separately.
+        self.assertEqual(self.db.execute("SELECT count(*) FROM subscriptions WHERE user_id='one'").fetchone()[0],0)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM access_grants WHERE user_id='one'").fetchone()[0],0)
+        self.assertEqual(self.db.execute("SELECT expires_at FROM subscription_events WHERE user_id='one'").fetchone()[0],'2027-09-05T00:00:00Z')
         with self.assertRaises(sqlite3.IntegrityError): self.redeem('two','event2')
         self.assertEqual(self.db.execute('SELECT uses FROM discount_codes').fetchone()[0],1)
         self.assertEqual(self.db.execute('SELECT count(*) FROM subscription_events').fetchone()[0],1)
@@ -75,7 +77,7 @@ class PlatformDatabaseTests(unittest.TestCase):
     def test_fixed_discount_uses_current_plan_price(self):
         self.code(kind='fixed',amount=500,max_uses=None)
         self.redeem(final=9500,discount=500)
-        self.assertEqual(self.db.execute("SELECT paid FROM subscriptions WHERE user_id='one'").fetchone()[0],9500)
+        self.assertEqual(self.db.execute("SELECT final FROM subscription_events WHERE user_id='one'").fetchone()[0],9500)
 
     def test_registry_keeps_idempotent_test_identity(self):
         for i in range(3):

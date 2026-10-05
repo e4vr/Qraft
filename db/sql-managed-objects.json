@@ -11,6 +11,6 @@
     "enforce_qbank_classification_revision", "import_question_search_delete",
     "import_question_search_insert", "import_question_search_update", "purge_question_state",
     "question_id_release_to_pool", "question_identity_delete", "question_identity_insert",
-    "question_identity_update", "redeem_discount", "sync_plan_period_price", "update_question_bank"
+    "question_identity_update", "redeem_discount", "redeem_discount_account", "sync_plan_period_price", "update_question_bank"
   ]
 }

@@ -238,9 +238,13 @@ export const discountCodes = sqliteTable(
     perUser: integer('per_user'),
     uses: integer('uses').notNull().default(0),
     allowedPlans: text('allowed_plans').notNull().default('["full_monthly","full_quarterly"]'),
+    boundUserId: text('bound_user_id'),
     updatedAt: text('updated_at').notNull(),
   },
-  (table) => [uniqueIndex('idx_discount_codes_code').on(sql`${table.code} COLLATE NOCASE`)],
+  (table) => [
+    uniqueIndex('idx_discount_codes_code').on(sql`${table.code} COLLATE NOCASE`),
+    index('idx_discount_codes_bound_user').on(table.boundUserId),
+  ],
 );
 
 export const accountAccessRevisions = sqliteTable('account_access_revisions', {

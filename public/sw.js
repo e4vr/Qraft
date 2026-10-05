@@ -1,4 +1,4 @@
-const CACHE_NAME = 'qraft-shell-v4.7.14';
+const CACHE_NAME = 'qraft-shell-v4.7.15';
 const APP_SHELL = [
   '/offline',
   '/manifest.webmanifest',

@@ -11,11 +11,13 @@ export type SubscriptionCodeMember = {
 };
 
 export function SubscriptionAccountPicker({
+  codeKind = 'activation',
   audience,
   onAudienceChange,
   value,
   onChange,
 }: {
+  codeKind?: 'activation' | 'discount';
   audience: ActivationCodeAudience;
   onAudienceChange: (audience: ActivationCodeAudience) => void;
   value: SubscriptionCodeMember | null;
@@ -65,7 +67,9 @@ export function SubscriptionAccountPicker({
   return (
     <fieldset className="space-y-3 rounded-2xl border p-4">
       <legend className="px-1 text-sm font-semibold">
-        Who can use these codes?
+        {codeKind === 'discount'
+          ? 'Who can use this discount?'
+          : 'Who can use these codes?'}
       </legend>
       <div className="grid gap-2 sm:grid-cols-2">
         {(
@@ -73,12 +77,16 @@ export function SubscriptionAccountPicker({
             [
               'any',
               'Any approved account',
-              'Each code can be used once, globally.',
+              codeKind === 'discount'
+                ? 'Available within the configured usage limits.'
+                : 'Each code can be used once, globally.',
             ],
             [
               'member',
               'One specific account',
-              'Only the selected account can use these codes.',
+              codeKind === 'discount'
+                ? 'Only the selected account can use this discount.'
+                : 'Only the selected account can use these codes.',
             ],
           ] as const
         ).map(([scope, title, description]) => (
@@ -121,7 +129,9 @@ export function SubscriptionAccountPicker({
                 Account ID: {value.uid}
               </span>
               <p className="mt-2 text-xs font-medium">
-                Only this account can activate these codes.
+                {codeKind === 'discount'
+                  ? 'Only this account can use this discount.'
+                  : 'Only this account can activate these codes.'}
               </p>
             </div>
             <button
@@ -137,7 +147,7 @@ export function SubscriptionAccountPicker({
             <label className="block text-sm font-medium">
               Choose the allowed account
               <input
-                aria-label="Find member for activation code"
+                aria-label={`Find member for ${codeKind} code`}
                 placeholder="Search name, email or account ID"
                 className="mt-1.5 min-h-11 w-full rounded-xl border bg-background px-3 text-sm"
                 value={query}
@@ -184,7 +194,9 @@ export function SubscriptionAccountPicker({
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              Select an account from the results before generating codes.
+              {codeKind === 'discount'
+                ? 'Select an account from the results before saving the discount.'
+                : 'Select an account from the results before generating codes.'}
             </p>
           </div>
         ))}

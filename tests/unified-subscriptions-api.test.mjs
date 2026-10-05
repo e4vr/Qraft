@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { accountBoundDiscountTests } from './account-bound-discount-api.mjs';
 
 void test('unified subscription ledger, one-use activation codes and clean migration', async (t) => {
   await mkdir('.ui-review', { recursive: true });
@@ -234,6 +235,7 @@ print(json.dumps(out))`,
     },
   );
 
+  await accountBoundDiscountTests(t, { db, call, account, user });
   await t.test(
     'manual coupon confirmation is atomic, one-use and idempotent; rejected confirmations grant nothing',
     async () => {

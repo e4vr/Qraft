@@ -1,5 +1,10 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  SubscriptionAccountPicker,
+  type SubscriptionCodeMember,
+} from '@/components/subscription-account-picker';
+import type { ActivationCodeAudience } from '@/features/subscriptions/domain/access-model';
 import {
   Check,
   Search,
@@ -39,6 +44,9 @@ type Code = {
   per_user: number | null;
   uses: number;
   allowed_plans: string;
+  bound_user_id: string | null;
+  bound_user_name?: string | null;
+  bound_user_email?: string | null;
 };
 type Usage = {
   id: string;
@@ -67,6 +75,7 @@ const emptyCode: Code = {
   per_user: 1,
   uses: 0,
   allowed_plans: '["full_monthly","full_quarterly"]',
+  bound_user_id: null,
 };
 const codeSignature = (code: Code) =>
   JSON.stringify({
@@ -79,11 +88,17 @@ const codeSignature = (code: Code) =>
     expires_at: code.expires_at,
     max_uses: code.max_uses,
     per_user: code.per_user,
+    bound_user_id: code.bound_user_id ?? null,
     allowedPlans: [
       ...(JSON.parse(code.allowed_plans || '[]') as string[]),
     ].sort(),
   });
 export function DiscountAdmin() {
+  const saveFlight = useRef(false);
+  const [audience, setAudience] = useState<ActivationCodeAudience>('any');
+  const [boundMember, setBoundMember] = useState<SubscriptionCodeMember | null>(
+    null,
+  );
   const [today] = useState(() => Date.now());
   const [confirmAction, confirmationDialog] = useConfirmationDialog();
   const [codes, setCodes] = useState<Code[]>([]),
@@ -137,6 +152,8 @@ export function DiscountAdmin() {
     };
   }, [queryPath, revision]);
   async function save(body: unknown, method = 'POST') {
+    if (saveFlight.current) return;
+    saveFlight.current = true;
     setSaving(true);
     setError('');
     setMessage('');
@@ -161,6 +178,7 @@ export function DiscountAdmin() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to save.');
     } finally {
+      saveFlight.current = false;
       setSaving(false);
     }
   }
@@ -220,6 +238,8 @@ export function DiscountAdmin() {
             className="q-button q-button-primary"
             onClick={() => {
               setDraft(emptyCode);
+              setAudience('any');
+              setBoundMember(null);
               setOriginalCode(null);
               setEditing(true);
               setError('');
@@ -234,7 +254,7 @@ export function DiscountAdmin() {
             <Search className="size-4" />
             <input
               aria-label="Search discount codes"
-              placeholder="Search by code…"
+              placeholder="Search code or allowed account…"
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
@@ -291,6 +311,12 @@ export function DiscountAdmin() {
                   <td data-label="Code">
                     <strong className="q-control-code">{c.code}</strong>
                     <small>{c.per_user ?? 'Unlimited'} per member</small>
+                    <small>
+                      {c.bound_user_id
+                        ? `Only ${c.bound_user_name || c.bound_user_email || c.bound_user_id}`
+                        : 'Any approved account'}
+                    </small>
+                    {c.bound_user_email && <small>{c.bound_user_email}</small>}
                   </td>
                   <td data-label="Discount & plans">
                     <strong>
@@ -339,6 +365,18 @@ export function DiscountAdmin() {
                         aria-label={`Edit ${c.code}`}
                         onClick={() => {
                           setDraft(c);
+                          setAudience(c.bound_user_id ? 'member' : 'any');
+                          setBoundMember(
+                            c.bound_user_id
+                              ? {
+                                  uid: c.bound_user_id,
+                                  name:
+                                    c.bound_user_name || 'Restricted account',
+                                  email: c.bound_user_email || '',
+                                  role: 'student',
+                                }
+                              : null,
+                          );
                           setOriginalCode(c);
                           setEditing(true);
                           setError('');
@@ -507,8 +545,13 @@ export function DiscountAdmin() {
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog open={editing} onOpenChange={setEditing}>
-        <DialogContent className="sm:max-w-xl">
+      <Dialog
+        open={editing}
+        onOpenChange={(open) => {
+          if (!saving) setEditing(open);
+        }}
+      >
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
           <DialogTitle>
             {draft.id ? 'Edit' : 'Create'} discount code
           </DialogTitle>
@@ -516,6 +559,10 @@ export function DiscountAdmin() {
             className="grid gap-3 sm:grid-cols-2"
             onSubmit={(e) => {
               e.preventDefault();
+              if (audience === 'member' && !draft.bound_user_id) {
+                setError('Select the account allowed to use this discount.');
+                return;
+              }
               if (
                 originalCode &&
                 codeSignature(draft) === codeSignature(originalCode)
@@ -526,147 +573,178 @@ export function DiscountAdmin() {
               }
               void save({
                 ...draft,
+                audience,
                 allowedPlans: JSON.parse(draft.allowed_plans || '[]'),
               });
             }}
           >
-            <label>
-              Code
-              <input
-                required
-                className={field}
-                value={draft.code}
-                onChange={(e) => setDraft({ ...draft, code: e.target.value })}
-              />
-            </label>
-            <label>
-              Type
-              <select
-                className={field}
-                value={draft.kind}
-                onChange={(e) =>
-                  setDraft({ ...draft, kind: e.target.value, amount: 0 })
-                }
-              >
-                <option value="percent">Percentage</option>
-                <option value="fixed">Fixed SAR</option>
-              </select>
-            </label>
-            <label>
-              {draft.kind === 'percent' ? 'Percentage' : 'Amount (SAR)'}
-              <input
-                required
-                type="number"
-                min="0"
-                max={draft.kind === 'percent' ? 100 : 100000}
-                step={draft.kind === 'percent' ? 1 : 0.01}
-                className={field}
-                value={
-                  draft.kind === 'fixed' ? draft.amount / 100 : draft.amount
-                }
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    amount: Math.round(
-                      Number(e.target.value) *
-                        (draft.kind === 'fixed' ? 100 : 1),
-                    ),
-                  })
-                }
-              />
-            </label>
-            {(['starts_at', 'expires_at'] as const).map((k) => (
-              <label key={k}>
-                {k === 'starts_at' ? 'Start date' : 'Expiration date'}
+            <fieldset disabled={saving} className="contents">
+              <label>
+                Code
                 <input
-                  type="datetime-local"
+                  required
                   className={field}
-                  value={localDateTime(draft[k])}
-                  onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      [k]: e.target.value
-                        ? new Date(e.target.value).toISOString()
-                        : null,
-                    })
-                  }
+                  value={draft.code}
+                  onChange={(e) => setDraft({ ...draft, code: e.target.value })}
                 />
               </label>
-            ))}
-            {(['max_uses', 'per_user'] as const).map((k) => (
-              <label key={k}>
-                {k === 'max_uses' ? 'Total uses' : 'Uses per user'}
+              <label>
+                Type
+                <select
+                  className={field}
+                  value={draft.kind}
+                  onChange={(e) =>
+                    setDraft({ ...draft, kind: e.target.value, amount: 0 })
+                  }
+                >
+                  <option value="percent">Percentage</option>
+                  <option value="fixed">Fixed SAR</option>
+                </select>
+              </label>
+              <label>
+                {draft.kind === 'percent' ? 'Percentage' : 'Amount (SAR)'}
                 <input
+                  required
                   type="number"
-                  min="1"
-                  placeholder="Unlimited"
+                  min="0"
+                  max={draft.kind === 'percent' ? 100 : 100000}
+                  step={draft.kind === 'percent' ? 1 : 0.01}
                   className={field}
-                  value={draft[k] ?? ''}
+                  value={
+                    draft.kind === 'fixed' ? draft.amount / 100 : draft.amount
+                  }
                   onChange={(e) =>
                     setDraft({
                       ...draft,
-                      [k]: e.target.value ? Number(e.target.value) : null,
+                      amount: Math.round(
+                        Number(e.target.value) *
+                          (draft.kind === 'fixed' ? 100 : 1),
+                      ),
                     })
                   }
                 />
               </label>
-            ))}
-            <fieldset className="sm:col-span-2">
-              <legend className="text-sm font-semibold">
-                Allowed paid plans
-              </legend>
-              <div className="mt-2 flex flex-wrap gap-3">
-                {PAID_PLAN_IDS.map((plan) => {
-                  const selected = (
-                    JSON.parse(draft.allowed_plans || '[]') as string[]
-                  ).includes(plan);
-                  return (
-                    <label
-                      key={plan}
-                      className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm capitalize"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={(event) => {
-                          const current = new Set(
-                            JSON.parse(draft.allowed_plans || '[]') as string[],
-                          );
-                          if (event.target.checked) current.add(plan);
-                          else current.delete(plan);
-                          setDraft({
-                            ...draft,
-                            allowed_plans: JSON.stringify([...current]),
-                          });
-                        }}
-                      />
-                      {plan}
-                    </label>
-                  );
-                })}
+              {(['starts_at', 'expires_at'] as const).map((k) => (
+                <label key={k}>
+                  {k === 'starts_at' ? 'Start date' : 'Expiration date'}
+                  <input
+                    type="datetime-local"
+                    className={field}
+                    value={localDateTime(draft[k])}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        [k]: e.target.value
+                          ? new Date(e.target.value).toISOString()
+                          : null,
+                      })
+                    }
+                  />
+                </label>
+              ))}
+              {(['max_uses', 'per_user'] as const).map((k) => (
+                <label key={k}>
+                  {k === 'max_uses' ? 'Total uses' : 'Uses per user'}
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Unlimited"
+                    className={field}
+                    value={draft[k] ?? ''}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        [k]: e.target.value ? Number(e.target.value) : null,
+                      })
+                    }
+                  />
+                </label>
+              ))}
+              <div className="sm:col-span-2">
+                <SubscriptionAccountPicker
+                  key={draft.id || 'new-discount'}
+                  codeKind="discount"
+                  audience={audience}
+                  value={boundMember}
+                  onAudienceChange={(next) => {
+                    setAudience(next);
+                    setError('');
+                  }}
+                  onChange={(member) => {
+                    setBoundMember(member);
+                    setDraft((current) => ({
+                      ...current,
+                      bound_user_id: member?.uid ?? null,
+                      bound_user_name: member?.name ?? null,
+                      bound_user_email: member?.email ?? null,
+                    }));
+                    setError('');
+                  }}
+                />
               </div>
-            </fieldset>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={Boolean(draft.enabled)}
-                onChange={(e) =>
-                  setDraft({ ...draft, enabled: e.target.checked ? 1 : 0 })
+              <fieldset className="sm:col-span-2">
+                <legend className="text-sm font-semibold">
+                  Allowed paid plans
+                </legend>
+                <div className="mt-2 flex flex-wrap gap-3">
+                  {PAID_PLAN_IDS.map((plan) => {
+                    const selected = (
+                      JSON.parse(draft.allowed_plans || '[]') as string[]
+                    ).includes(plan);
+                    return (
+                      <label
+                        key={plan}
+                        className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm capitalize"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={(event) => {
+                            const current = new Set(
+                              JSON.parse(
+                                draft.allowed_plans || '[]',
+                              ) as string[],
+                            );
+                            if (event.target.checked) current.add(plan);
+                            else current.delete(plan);
+                            setDraft({
+                              ...draft,
+                              allowed_plans: JSON.stringify([...current]),
+                            });
+                          }}
+                        />
+                        {plan}
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(draft.enabled)}
+                  onChange={(e) =>
+                    setDraft({ ...draft, enabled: e.target.checked ? 1 : 0 })
+                  }
+                />
+                Enabled
+              </label>
+              {error && (
+                <p role="alert" className="text-destructive">
+                  {error}
+                </p>
+              )}
+              <button
+                disabled={
+                  busy ||
+                  saving ||
+                  (audience === 'member' && !draft.bound_user_id)
                 }
-              />
-              Enabled
-            </label>
-            {error && (
-              <p role="alert" className="text-destructive">
-                {error}
-              </p>
-            )}
-            <button
-              disabled={busy || saving}
-              className="q-button bg-primary text-primary-foreground"
-            >
-              Save
-            </button>
+                className="q-button bg-primary text-primary-foreground"
+              >
+                Save
+              </button>
+            </fieldset>
           </form>
         </DialogContent>
       </Dialog>

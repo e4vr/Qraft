@@ -2185,14 +2185,15 @@ export async function platformApi(request: Request, action: string) {
       if (request.method === 'GET') {
         const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset')) || 0));
         const usageOffset = Math.max(0, Math.floor(Number(url.searchParams.get('usageOffset')) || 0));
-        const search = `%${(url.searchParams.get('search') || '').slice(0, 100)}%`;
+        const search = (url.searchParams.get('search') || '').slice(0, 100);
         const status = url.searchParams.get('status') || '';
         const now = new Date().toISOString();
-        const where = `WHERE code LIKE ? AND (?='' OR (?='disabled' AND enabled=0) OR (?='active' AND enabled=1 AND (starts_at IS NULL OR starts_at<=?) AND (expires_at IS NULL OR expires_at>?) AND (max_uses IS NULL OR uses<max_uses)) OR (?='expired' AND expires_at<=?) OR (?='scheduled' AND starts_at>?) OR (?='exhausted' AND max_uses IS NOT NULL AND uses>=max_uses))`;
-        const args = [search,status,status,status,now,now,status,now,status,now,status];
+        const from = `FROM discount_codes d LEFT JOIN profiles p ON p.uid=d.bound_user_id`;
+        const where = `WHERE (instr(lower(d.code),lower(?))>0 OR instr(lower(coalesce(p.email,'')),lower(?))>0 OR instr(lower(coalesce(json_extract(p.profile_json,'$.displayName'),'')),lower(?))>0 OR instr(lower(coalesce(d.bound_user_id,'')),lower(?))>0) AND (?='' OR (?='disabled' AND d.enabled=0) OR (?='active' AND d.enabled=1 AND (d.starts_at IS NULL OR d.starts_at<=?) AND (d.expires_at IS NULL OR d.expires_at>?) AND (d.max_uses IS NULL OR d.uses<d.max_uses)) OR (?='expired' AND d.expires_at<=?) OR (?='scheduled' AND d.starts_at>?) OR (?='exhausted' AND d.max_uses IS NOT NULL AND d.uses>=d.max_uses))`;
+        const args = [search,search,search,search,status,status,status,now,now,status,now,status,now,status];
         const [rows, totals] = await env.DB.batch([
-          env.DB.prepare(`SELECT * FROM discount_codes ${where} ORDER BY updated_at DESC,id LIMIT 51 OFFSET ?`).bind(...args,offset),
-          env.DB.prepare(`SELECT count(*) AS total,coalesce(sum(enabled=1),0) AS enabled,coalesce(sum(uses),0) AS uses FROM discount_codes ${where}`).bind(...args),
+          env.DB.prepare(`SELECT d.*,p.email AS bound_user_email,json_extract(p.profile_json,'$.displayName') AS bound_user_name ${from} ${where} ORDER BY d.updated_at DESC,d.id LIMIT 51 OFFSET ?`).bind(...args,offset),
+          env.DB.prepare(`SELECT count(*) AS total,coalesce(sum(d.enabled=1),0) AS enabled,coalesce(sum(d.uses),0) AS uses ${from} ${where}`).bind(...args),
         ]);
         const events = url.searchParams.get('id')
           ? await env.DB.prepare('SELECT * FROM subscription_events WHERE code_id=? ORDER BY created_at DESC,id LIMIT 51 OFFSET ?').bind(url.searchParams.get('id'),usageOffset).all()
@@ -2216,6 +2217,23 @@ export async function platformApi(request: Request, action: string) {
         ]);
         return json({ ok: true, deletedId: id });
       }
+      if (input.bound_user_id != null && typeof input.bound_user_id !== 'string')
+        throw new ValidationError('Choose a valid account for this discount.');
+      const boundUserId = Object.hasOwn(input, 'bound_user_id')
+        ? text('bound_user_id') || null
+        : old?.bound_user_id ?? null;
+      if (input.audience !== undefined && input.audience !== 'any' && input.audience !== 'member')
+        throw new ValidationError('Choose who can use this discount.');
+      if (input.audience === 'member' && !boundUserId)
+        throw new ValidationError('Select the account allowed to use this discount.');
+      if (input.audience === 'any' && boundUserId)
+        throw new ValidationError('An unrestricted discount cannot have a selected account.');
+      const boundRow = boundUserId ? await profileById(boundUserId) : null;
+      const boundMember = boundRow ? JSON.parse(boundRow.profile_json) as AppUser : null;
+      if (boundUserId && !boundMember)
+        return json({ error: 'Account not found.' }, 404);
+      if (boundMember?.role === 'super_admin')
+        throw new ValidationError('Choose a member account for this discount.');
       const code = text('code').toUpperCase(),
         kind = text('kind'),
         amount = Number(input.amount);
@@ -2263,16 +2281,18 @@ export async function platformApi(request: Request, action: string) {
         max,
         per,
         allowedPlans,
+        bound_user_id: boundUserId,
       };
       const unchanged = Boolean(old &&
         old.code === code && old.kind === kind && old.amount === amount && old.enabled === next.enabled &&
         old.starts_at === starts && old.expires_at === expires && old.max_uses === max && old.per_user === per &&
-        JSON.stringify(JSON.parse(old.allowed_plans || '[]')) === JSON.stringify(allowedPlans));
+        JSON.stringify(JSON.parse(old.allowed_plans || '[]')) === JSON.stringify(allowedPlans) &&
+        (old.bound_user_id ?? null) === boundUserId);
       if (unchanged) return json({ ok: true, unchanged: true, code: old }, 200, { 'x-qraft-unchanged': '1' });
       const updatedAt = new Date().toISOString();
       await env.DB.batch([
         env.DB.prepare(
-          'INSERT INTO discount_codes(id,code,kind,amount,enabled,starts_at,expires_at,max_uses,per_user,updated_at,allowed_plans) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET code=excluded.code,kind=excluded.kind,amount=excluded.amount,enabled=excluded.enabled,starts_at=excluded.starts_at,expires_at=excluded.expires_at,max_uses=excluded.max_uses,per_user=excluded.per_user,updated_at=excluded.updated_at,allowed_plans=excluded.allowed_plans',
+          'INSERT INTO discount_codes(id,code,kind,amount,enabled,starts_at,expires_at,max_uses,per_user,updated_at,allowed_plans,bound_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET code=excluded.code,kind=excluded.kind,amount=excluded.amount,enabled=excluded.enabled,starts_at=excluded.starts_at,expires_at=excluded.expires_at,max_uses=excluded.max_uses,per_user=excluded.per_user,updated_at=excluded.updated_at,allowed_plans=excluded.allowed_plans,bound_user_id=excluded.bound_user_id',
         ).bind(
           id,
           code,
@@ -2285,6 +2305,7 @@ export async function platformApi(request: Request, action: string) {
           per,
           updatedAt,
           JSON.stringify(allowedPlans),
+          boundUserId,
         ),
         auditStatement(
           user,
@@ -2301,6 +2322,9 @@ export async function platformApi(request: Request, action: string) {
           expires_at: expires, max_uses: max, per_user: per,
           uses: old?.uses ?? 0, updated_at: updatedAt,
           allowed_plans: JSON.stringify(allowedPlans),
+          bound_user_id: boundUserId,
+          bound_user_name: boundMember?.displayName ?? null,
+          bound_user_email: boundRow?.email ?? null,
         },
       });
     }

@@ -109,6 +109,7 @@ export function historicalIdentityStatements(
     toShared('UPDATE activation_codes SET redeemed_by=? WHERE redeemed_by=?'),
     toShared('UPDATE activation_codes SET created_by=? WHERE created_by=?'),
     env.DB.prepare('UPDATE activation_codes SET disabled_at=coalesce(disabled_at,?) WHERE bound_user_id=? AND redeemed_at IS NULL').bind(new Date().toISOString(), uid),
+    env.DB.prepare('UPDATE discount_codes SET enabled=0,updated_at=? WHERE bound_user_id=?').bind(new Date().toISOString(), uid),
     toShared('UPDATE access_grants SET created_by=? WHERE created_by=?'),
     toShared('UPDATE access_grants SET revoked_by=? WHERE revoked_by=?'),
     toShared('UPDATE question_ids SET created_by_id=? WHERE created_by_id=?'),

@@ -12,6 +12,10 @@ The historical `drizzle/meta` journal/snapshots stop at 0004. They are retained 
 
 For a database change: add the next numbered SQL migration, update the declaration and any SQL-owned object inventory, add behavior tests, run `npm run db:check`, both Python migration suites, the migration splitter, API tests and a local build. Review and back up the target database before the separate release/migration operation.
 
+## 0036 account-bound discounts
+
+`0036_account_bound_discounts.sql` adds a nullable account UID to discount codes. Existing promotions keep their prices, limits, usage and unrestricted audience. The `redeem_discount_account` trigger validates the account inside the manual confirmation transaction, alongside the existing price and usage trigger. Failed ownership checks roll back access grants, payment records and discount consumption together. Apply this additive migration before releasing the matching administration UI and API.
+
 ## 0029 collaboration assertion
 
 `0029_collaboration_write_guard.sql` adds one empty assertion table. A save inserts a row only if all targeted stored payloads still match the versions read during authorization; the same atomic D1 batch mutates records, writes audit entries and removes the assertion. Failure rolls back everything and returns a conflict. Answer-selection patches retain the existing atomic per-user merge and do not need this assertion.

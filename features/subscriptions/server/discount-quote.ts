@@ -14,6 +14,7 @@ export type Discount = {
   per_user: number | null;
   uses: number;
   allowed_plans: string;
+  bound_user_id: string | null;
 };
 export async function quote(
   user: AppUser,
@@ -48,6 +49,10 @@ export async function quote(
     : null;
   if (code && !discount) throw new ValidationError('Invalid discount code.');
   if (discount) {
+    if (discount.bound_user_id && discount.bound_user_id !== user.uid)
+      throw new ValidationError(
+        'This discount code is not available for your account.',
+      );
     const now = new Date().toISOString();
     if (!discount.enabled)
       throw new ValidationError('This discount code is disabled.');

@@ -7,7 +7,7 @@ void test('SQL migrations and the declarative schema agree on tables, columns, k
   const result = await checkDatabaseSchema();
   assert.equal(result.ok, true);
   assert.ok(result.tables > 40);
-  assert.equal(result.sqlManagedTriggers, 31);
+  assert.equal(result.sqlManagedTriggers, 32);
 });
 void test('automatic generation refuses the obsolete journal instead of creating destructive migrations', () => {
   const result = spawnSync(process.execPath, ['scripts/database-schema.mjs', 'generate'], { encoding: 'utf8' });
