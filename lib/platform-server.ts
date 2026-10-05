@@ -6,6 +6,7 @@ import { DEFAULT_ANNOUNCEMENT, DEFAULT_COMMUNITY_LINKS, validAnnouncementLink, v
 import { announcementSettings } from '@/features/announcements/server/announcement-settings';
 import { validImageAttachments } from '@/features/media/domain/image-attachments';
 import { contributionReward } from '@/features/contributions/domain/contribution-reward';
+import { giftNotificationApi } from '@/features/contributions/server/gift-notification';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 import { directQuestionEdit } from '@/features/qbanks/server/direct-question-edit';
 import { classificationCleanupStatements } from '@/features/qbanks/server/classification-cleanup';
@@ -541,6 +542,7 @@ export async function platformApi(request: Request, action: string) {
     user.role === 'super_admin' && user.mfaEnrolled && user.mfaVerified;
   let activeImportContext: ImportMonitorContext | undefined;
   try {
+    if (action === 'gift-notification') return giftNotificationApi(request, user.uid, input);
     if (action === 'announcement-dismiss') {
       if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
       const current = await announcementSettings();
@@ -1360,10 +1362,14 @@ export async function platformApi(request: Request, action: string) {
       return json({ started: true, startedAt: now }, 201);
     }
     if (action === 'contributions' && request.method === 'GET') {
+      const focusedGiftId = url.searchParams.get('gift') ?? '';
+      if (focusedGiftId.length > 160) return json({ error: 'Invalid gift.' }, 400);
       const [account, transactions, passes, pending, submissions] = await env.DB.batch([
         env.DB.prepare('SELECT credits_balance,lifetime_score FROM contribution_accounts WHERE user_id=?').bind(user.uid),
         env.DB.prepare('SELECT id,amount,type,reason,reference_type,reference_id,created_at FROM credit_transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 30').bind(user.uid),
-        env.DB.prepare('SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE user_id=? ORDER BY created_at DESC LIMIT 50').bind(user.uid),
+        focusedGiftId ? env.DB.prepare(`SELECT * FROM (SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 50)
+          UNION SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE id=? AND user_id=? ORDER BY created_at DESC,id DESC`).bind(user.uid, focusedGiftId, user.uid)
+          : env.DB.prepare('SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE user_id=? ORDER BY created_at DESC LIMIT 50').bind(user.uid),
         env.DB.prepare("SELECT count(*) AS value FROM records WHERE type='questionProposals' AND owner_id=? AND json_extract(payload,'$.status')='pending'").bind(user.uid),
         env.DB.prepare("SELECT id,json_extract(payload,'$.status') AS status,json_extract(payload,'$.type') AS type,updated_at FROM records WHERE type='questionProposals' AND owner_id=? AND json_extract(payload,'$.status')<>'approved' ORDER BY updated_at DESC LIMIT 20").bind(user.uid),
       ]);

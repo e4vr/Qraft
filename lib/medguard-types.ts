@@ -363,6 +363,7 @@ export interface MemberProfile {
   approvedByName?: string;
   universityIdRegistered?: boolean;
   universityIdVerifiedManually?: boolean;
+  approvalMethod?: 'university_id_match';
   deletedAt?: string;
 }
 

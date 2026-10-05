@@ -26,6 +26,7 @@ import { QraftBrand } from '@/components/brand/qraft-brand';
 import { QuestionNavigator } from '@/components/exams/question-navigator';
 import { QraftAppShell } from '@/components/presentation/qraft-app-shell';
 import { ContributionCenter } from '@/components/contribution-center';
+import { GiftNotification } from '@/components/gift-notification';
 import { AccountProfile } from '@/components/account-profile';
 import { SystemStatePage } from '@/components/system-state-page';
 import { QuestionImportReview } from '@/components/question-import-review';
@@ -5748,6 +5749,12 @@ export default function MedGuardApp({
   const [hydrated, setHydrated] = useState(false);
   const [collaborationHydrated, setCollaborationHydrated] = useState(false);
   const [view, setViewState] = useState<View>(initialView);
+  const [giftPopupOpen, setGiftPopupOpen] = useState(false);
+  const [focusedGiftId, setFocusedGiftId] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    const id = new URL(window.location.href).searchParams.get('gift') ?? '';
+    return id.length <= 160 ? id : '';
+  });
   const [directTestCode, setDirectTestCode] = useState(() => {
     if (typeof window === 'undefined') return '';
     return (
@@ -7203,6 +7210,26 @@ export default function MedGuardApp({
     return () => lifecycle.abort();
   }, [user, hydrated, collaborationHydrated, state, questions, quickTest]);
 
+  const giftNotification = user?.status === 'approved' && !user.suspended &&
+    (user.role !== 'super_admin' || Boolean(user.mfaEnrolled && user.mfaVerified)) ? (
+      <GiftNotification key={user.uid} userId={user.uid} onOpenChange={setGiftPopupOpen}
+        onViewGift={passId => {
+          const destination = `${pathForView('contribution-center')}?gift=${encodeURIComponent(passId)}`;
+          if (directTestCode || (view === 'test' && activeTest)) {
+            // Preserve the runner, its timer and answers while visiting the gift.
+            window.open(destination, '_blank', 'noopener');
+          } else if (portal !== 'app') window.location.assign(destination);
+          else {
+            setFocusedGiftId(passId);
+            setView('contribution-center');
+            window.history.replaceState({ qraftView: 'contribution-center' }, '', destination);
+          }
+        }} />
+    ) : null;
+  const withGiftNotification = (content: React.ReactNode) => (
+    <>{giftNotification}{content}</>
+  );
+
   if (!online && !offlineDismissed)
     return (
       <SystemStatePage
@@ -7221,7 +7248,7 @@ export default function MedGuardApp({
   if (directTestCode) {
     const participant =
       user?.status === 'approved' && !user.suspended ? user : null;
-    return (
+    return withGiftNotification(
       <PreformedTestRunner
         key={`${participant?.uid ?? 'guest'}:${directTestCode}`}
         user={participant}
@@ -7270,7 +7297,7 @@ export default function MedGuardApp({
     return <AppLoadingScreen status="Syncing your workspace…" />;
   if (portal === 'superadmin') {
     if (user.role !== 'super_admin' || !user.mfaVerified)
-      return (
+      return withGiftNotification(
         <main className="grid min-h-screen place-items-center bg-background p-6">
           <section className="w-full max-w-lg rounded-3xl border bg-card p-8 text-center shadow-xl">
             <ShieldCheck className="mx-auto size-10 text-muted-foreground" />
@@ -7290,7 +7317,7 @@ export default function MedGuardApp({
           </section>
         </main>
       );
-    return (
+    return withGiftNotification(
       <main className="q-admin-dashboard min-h-screen bg-background text-foreground">
         <AdminDashboard
           user={user}
@@ -7304,7 +7331,7 @@ export default function MedGuardApp({
     );
   }
   if (view === 'test' && activeTest)
-    return (
+    return withGiftNotification(
       <TestView
         confirmUpdate={confirmUpdate}
         user={user}
@@ -7328,7 +7355,7 @@ export default function MedGuardApp({
       />
     );
   if (view === 'qbank-management' && managedBank)
-    return (
+    return withGiftNotification(
       <QBankManagement
         confirmUpdate={confirmUpdate}
         key={`${managedBank.id}:${managedBank.section}`}
@@ -7352,10 +7379,10 @@ export default function MedGuardApp({
       />
     );
 
-  return (
+  return withGiftNotification(
     <>
       <UpgradeDialog user={user} onUser={setUser} />
-      <AlertDialog open={Boolean(linkInvitation)}>
+      <AlertDialog open={Boolean(linkInvitation) && !giftPopupOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogMedia className="bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300">
@@ -7470,8 +7497,8 @@ export default function MedGuardApp({
           <span>{syncIssue}</span>
           <button type="button" className="shrink-0 underline" onClick={() => setView('settings')}>Open Settings</button>
         </output>}
-        <ExamAccessNotice user={user} request={examUpgradeRequest} defer={view === 'test' || view === 'subscribe' || portal !== 'app'} onViewPlans={() => { setExamUpgradeRequest(null); setTestError(''); setView('subscribe'); }} />
-        <SiteAnnouncement userId={user.uid} defer={view === 'test' || portal !== 'app'} />
+        <ExamAccessNotice user={user} request={examUpgradeRequest} defer={giftPopupOpen || view === 'test' || view === 'subscribe' || portal !== 'app'} onViewPlans={() => { setExamUpgradeRequest(null); setTestError(''); setView('subscribe'); }} />
+        <SiteAnnouncement userId={user.uid} defer={giftPopupOpen || view === 'test' || portal !== 'app'} />
         {view === 'subscribe' && (
           <>
             <PageHeader
@@ -7718,7 +7745,10 @@ export default function MedGuardApp({
               }
             />
             <ContributionCenter
+              key={user.uid}
               userId={user.uid}
+              focusedGiftId={focusedGiftId}
+              deferCelebrations={giftPopupOpen}
               onEntitlementChange={(next) => {
                 setAuthenticatedUserCache(next);
                 setUser(next);

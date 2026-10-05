@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Award, Check, Coins, Gift, LoaderCircle, PartyPopper, Play, Sparkles, Trophy, WalletCards } from 'lucide-react';
+import { Award, Check, Coins, Gift, LoaderCircle, Play, WalletCards } from 'lucide-react';
+import { CelebrationArtwork } from '@/components/reward-celebration-artwork';
+import { rewardPassLabel as rewardLabel, type RewardPass } from '@/features/contributions/domain/reward-pass';
 import { api, setApiCache } from '@/lib/api-client';
 import {
   PLAN_LIMITS,
@@ -18,19 +20,6 @@ type CreditTransaction = {
   amount: number;
   reason: string;
   created_at: string;
-};
-
-type RewardPass = {
-  id: string;
-  plan: Exclude<PlanId, 'free'>;
-  duration: number;
-  duration_unit: 'month' | 'year';
-  duration_days?: number | null;
-  status: 'available' | 'active' | 'used' | 'expired' | 'cancelled';
-  created_at: string;
-  activated_at: string | null;
-  expires_at: string | null;
-  source: string;
 };
 
 type Reward = RewardCatalogEntry;
@@ -53,7 +42,7 @@ type CenterData = {
 
 type Celebration = {
   id: string;
-  kind: 'goal' | 'redeemed' | 'admin-gift';
+  kind: 'goal' | 'redeemed';
   title: string;
   description: string;
   rewardLabel: string;
@@ -63,10 +52,6 @@ type CelebrationMemory = {
   lastBalance: number;
   seenAdminGiftIds: string[];
 };
-
-function rewardLabel(reward: Pick<RewardPass, 'plan' | 'duration' | 'duration_unit' | 'duration_days'>) {
-  return `${PLAN_LIMITS[reward.plan].name} · ${rewardDurationLabel({ duration: reward.duration, durationUnit: reward.duration_unit, durationDays: reward.duration_days })}`;
-}
 
 function findNewCelebrations(data: CenterData, userId: string): Celebration[] {
   const storageKey = `qraft-reward-celebration:${userId}`;
@@ -87,20 +72,6 @@ function findNewCelebrations(data: CenterData, userId: string): Celebration[] {
   }
 
   const queued: Celebration[] = [];
-  const unseenGift = data.rewardPasses.find(
-    (pass) => pass.source === 'admin' && !memory.seenAdminGiftIds.includes(pass.id),
-  );
-  if (unseenGift) {
-    queued.push({
-      id: `admin-gift:${unseenGift.id}`,
-      kind: 'admin-gift',
-      title: 'A gift is waiting for you',
-      description: 'The Qraft team has added a reward to your wallet. You can activate it whenever you are ready.',
-      rewardLabel: rewardLabel(unseenGift),
-    });
-    memory.seenAdminGiftIds = [unseenGift.id, ...memory.seenAdminGiftIds].slice(0, 100);
-  }
-
   const reachedReward = [...data.rewards]
     .filter((reward) => memory.lastBalance < reward.credits && data.creditsBalance >= reward.credits)
     .sort((a, b) => b.credits - a.credits)[0];
@@ -123,56 +94,26 @@ function findNewCelebrations(data: CenterData, userId: string): Celebration[] {
   return queued;
 }
 
-function CelebrationArtwork({ kind }: { kind: Celebration['kind'] }) {
-  const Icon = kind === 'goal' ? Trophy : kind === 'admin-gift' ? Gift : PartyPopper;
-  const pieces = [
-    ['12%', '18%', '#5ee0bd', '0ms'],
-    ['24%', '64%', '#ffffff', '180ms'],
-    ['38%', '12%', '#fbbf24', '340ms'],
-    ['55%', '72%', '#67e8f9', '90ms'],
-    ['69%', '19%', '#ffffff', '260ms'],
-    ['82%', '58%', '#5ee0bd', '420ms'],
-    ['91%', '27%', '#fbbf24', '140ms'],
-  ] as const;
-
-  return (
-    <div className="relative grid min-h-48 place-items-center overflow-hidden bg-[radial-gradient(circle_at_50%_20%,rgba(94,224,189,0.34),transparent_42%),linear-gradient(135deg,#07233e,#0c4f60_58%,#228e85)] px-6 py-9 text-white">
-      <div aria-hidden="true" className="absolute inset-0 opacity-70 [background-image:linear-gradient(rgba(255,255,255,.06)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.06)_1px,transparent_1px)] [background-size:28px_28px] [mask-image:linear-gradient(to_bottom,black,transparent)]" />
-      {pieces.map(([left, top, color, delay], index) => (
-        <span
-          aria-hidden="true"
-          className="q-celebration-confetti absolute h-2.5 w-1.5 rounded-full"
-          key={`${left}:${top}`}
-          style={{ left, top, backgroundColor: color, animationDelay: delay, rotate: `${index * 23}deg` }}
-        />
-      ))}
-      <div className="relative flex flex-col items-center">
-        <div className="grid size-20 place-items-center rounded-[1.75rem] border border-white/35 bg-white/15 shadow-[0_18px_55px_rgba(0,0,0,.28)] backdrop-blur-md">
-          <Icon className="size-10" strokeWidth={1.8} />
-        </div>
-        <div className="mt-5 flex items-center gap-2 text-[11px] font-black tracking-[0.24em] text-emerald-100">
-          <Sparkles className="size-3.5" /> CONGRATULATIONS <Sparkles className="size-3.5" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function ContributionCenter({
   userId,
   onEntitlementChange,
+  focusedGiftId,
+  deferCelebrations = false,
 }: {
   userId: string;
   onEntitlementChange: (user: AppUser) => void;
+  focusedGiftId?: string;
+  deferCelebrations?: boolean;
 }) {
   const [data, setData] = useState<CenterData>();
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [celebrations, setCelebrations] = useState<Celebration[]>([]);
+  const contributionPath = `/platform/contributions${focusedGiftId ? `?gift=${encodeURIComponent(focusedGiftId)}` : ''}`;
   const load = useCallback(async () => {
     try {
-      const next = await api<CenterData>('/platform/contributions');
+      const next = await api<CenterData>(contributionPath, { cacheScope: userId, expectedUserId: userId });
       setData(next);
       const queued = findNewCelebrations(next, userId);
       if (queued.length) {
@@ -184,7 +125,7 @@ export function ContributionCenter({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to load contribution activity.');
     }
-  }, [userId]);
+  }, [userId, contributionPath]);
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
@@ -206,6 +147,13 @@ export function ContributionCenter({
   );
 
   const currentCelebration = celebrations[0];
+  useEffect(() => {
+    if (!focusedGiftId || !data?.rewardPasses.some(pass => pass.id === focusedGiftId)) return;
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(`reward-pass-${focusedGiftId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusedGiftId, data]);
 
   async function redeem(rewardId: string) {
     setBusy(`redeem:${rewardId}`);
@@ -214,6 +162,7 @@ export function ContributionCenter({
     try {
       const result = await api<{ pass: RewardPass; creditsBalance: number; duplicate?: boolean }>('/platform/rewards', {
         method: 'POST',
+        expectedUserId: userId,
         body: JSON.stringify({ operation: 'redeem', rewardId, requestId: crypto.randomUUID() }),
       });
       setData(current => {
@@ -224,7 +173,7 @@ export function ContributionCenter({
           rewardPasses: [result.pass, ...current.rewardPasses.filter(pass => pass.id !== result.pass.id)],
           transactions: current.transactions,
         };
-        setApiCache('/platform/contributions', next);
+        setApiCache(contributionPath, next, { cacheScope: userId });
         return next;
       });
       setMessage('Reward added to your wallet. Activate it whenever you are ready.');
@@ -251,12 +200,13 @@ export function ContributionCenter({
     try {
       const result = await api<{ pass: RewardPass; effectivePlan: PlanId; user: AppUser }>('/platform/rewards', {
         method: 'POST',
+        expectedUserId: userId,
         body: JSON.stringify({ operation: 'activate', passId }),
       });
       setData(current => {
         if (!current) return current;
         const next = { ...current, rewardPasses: current.rewardPasses.map(pass => pass.id === passId ? result.pass : pass) };
-        setApiCache('/platform/contributions', next);
+        setApiCache(contributionPath, next, { cacheScope: userId });
         return next;
       });
       setMessage('Reward Pass activated. Your effective plan has been refreshed.');
@@ -274,7 +224,7 @@ export function ContributionCenter({
   return (
     <section className="q-page mx-auto w-full max-w-6xl space-y-6">
       <Dialog
-        open={Boolean(currentCelebration)}
+        open={Boolean(currentCelebration) && !deferCelebrations}
         onOpenChange={(open) => {
           if (!open) setCelebrations((current) => current.slice(1));
         }}
@@ -355,7 +305,7 @@ export function ContributionCenter({
               <h2 className="font-bold">Reward Pass wallet</h2>
               <div className="mt-4 space-y-2">
                 {data.rewardPasses.length ? data.rewardPasses.map((pass) => (
-                  <div key={pass.id} className="rounded-xl border p-3">
+                  <div key={pass.id} id={`reward-pass-${pass.id}`} className={`rounded-xl border p-3 ${pass.id === focusedGiftId ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : ''}`}>
                     <div className="flex items-center gap-3">
                       <div className="min-w-0 flex-1">
                         <strong>{rewardLabel(pass)}</strong>

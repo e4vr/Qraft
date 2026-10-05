@@ -15,6 +15,8 @@ import { env } from 'cloudflare:workers';
 import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
 import { accountBlocked } from '@/features/administration/domain/account-block';
 import { DELETED_USER_ID, isDeletedAccountProfile } from '@/features/administration/domain/deleted-registration';
+import { registrationIsBlocked, registrationProfileStatement, pendingRegistrationApprovalStatements, notifyApprovedRegistrations } from '@/features/auth/server/registration-approval';
+import { REGISTRATION_POLICY_ID } from '@/features/administration/domain/registration-policy';
 import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { appStateFreshness } from './merge-app-state';
 import { stateBudgetError, stateBytes, STATE_BUDGET_BYTES } from '@/features/state/domain/state-budget';
@@ -538,7 +540,7 @@ export async function register(request: Request) {
   const now = new Date().toISOString();
   const uid = crypto.randomUUID();
   const passwordData = await hashPassword(password);
-  const profile: MemberProfile = {
+  let profile: MemberProfile = {
     uid,
     email,
     displayName: name,
@@ -552,8 +554,8 @@ export async function register(request: Request) {
     universityIdRegistered: isRoot ? true : universityIdRegistered,
   };
   const statements = [
-    env.DB.prepare(
-      'INSERT INTO profiles (uid, email, password_hash, password_salt, profile_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    isRoot ? env.DB.prepare(
+      'INSERT INTO profiles (uid, email, password_hash, password_salt, profile_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING profile_json',
     ).bind(
       uid,
       email,
@@ -562,7 +564,7 @@ export async function register(request: Request) {
       JSON.stringify(profile),
       now,
       now,
-    ),
+    ) : registrationProfileStatement(profile, passwordData, now),
   ];
   if (isRoot)
     statements.push(
@@ -571,12 +573,6 @@ export async function register(request: Request) {
       ).bind(JSON.stringify({ superAdminUid: uid, updatedAt: now }), now),
     );
   else {
-    const allowed = {
-      id: universityId,
-      claimedById: uid,
-      claimedByName: name,
-      claimedAt: now,
-    };
     statements.push(
       env.DB.prepare(
         'INSERT INTO university_claims (university_id, user_id, claimed_at) VALUES (?, ?, ?)',
@@ -584,13 +580,18 @@ export async function register(request: Request) {
     );
     statements.push(
       env.DB.prepare(
-        "UPDATE records SET payload = ?, updated_at = ? WHERE type = 'universityIds' AND id = ? AND json_extract(payload, '$.claimedById') IS NULL",
-      ).bind(JSON.stringify(allowed), now, universityId),
+        "UPDATE records SET payload=json_set(payload,'$.claimedById',?,'$.claimedByName',?,'$.claimedAt',?),updated_at=? WHERE type='universityIds' AND id=? AND coalesce(json_extract(payload,'$.claimedById'),'')=''",
+      ).bind(uid, name, now, now, universityId),
     );
   }
   try {
-    await env.DB.batch(statements);
+    const results = await env.DB.batch<{profile_json:string}>(statements);
+    const saved = results[0].results[0];
+    if (!saved) throw new Error('Registration profile was not created.');
+    profile = JSON.parse(saved.profile_json) as MemberProfile;
   } catch (error) {
+    if (!isRoot && await registrationIsBlocked(email, phone, universityId))
+      return json({ error: 'This email, university ID, or mobile number is blocked.' }, 403);
     if (
       error instanceof Error &&
       /profiles\.email|idx_profiles_email/i.test(error.message)
@@ -2445,7 +2446,7 @@ function recordAllowed(
   )
     return isRoot;
   if (operation.collection === 'system')
-    return operation.id === 'accessControl' ? accessManager : isRoot;
+    return operation.id === REGISTRATION_POLICY_ID ? false : operation.id === 'accessControl' ? accessManager : isRoot;
   // Audit entries are evidence, not collaborative content. Every accepted
   // mutation is recorded below from the authenticated server context.
   if (operation.collection === 'auditLog') return false;
@@ -2995,14 +2996,22 @@ export async function saveCollaboration(request: Request) {
     .map(operation => bankIdForOperation(operation, isRecord(operation.value) ? operation.value : {}, state))
     .filter((id): id is string => Boolean(id) && !deletedBanks.has(id!));
   statements.push(...classificationCleanupStatements(env.DB, classificationBanks, now));
+  const changedUniversityIds = input.operations.filter(operation => operation.collection === 'universityIds' && operation.type === 'set').map(operation => operation.id);
+  const approvalResultIndex = changedUniversityIds.length ? statements.length + 1 : -1;
+  if (changedUniversityIds.length) statements.push(...pendingRegistrationApprovalStatements(now, { universityIds: changedUniversityIds }));
   if (guardedSnapshots.length) statements.push(env.DB.prepare('DELETE FROM collaboration_write_guards WHERE id=?').bind(guardId));
+  let approvedIds: string[] = [];
   try {
-    if (statements.length) await env.DB.batch(statements);
+    if (statements.length) {
+      const results = await env.DB.batch<{ uid: string }>(statements);
+      if (approvalResultIndex >= 0) approvedIds = (results[approvalResultIndex].results ?? []).map(row => row.uid);
+    }
   } catch (error) {
     if (error instanceof Error && error.message.includes('collaboration_snapshot_matches'))
       return json({ error: 'This data changed while saving. Review your preserved draft.', code: 'COLLABORATION_CONFLICT' }, 409);
     throw error;
   }
+  await notifyApprovedRegistrations(approvedIds);
   await emitUsage(user.uid, { privateBanksCreated: input.operations.filter(operation => operation.collection === 'qbanks' && operation.type === 'set' && (operation.value as QBank)?.visibility === 'private' && !state.qbanks.some(bank => bank.id === operation.id)).length });
   return json({ ok: true, operations: input.operations }, 200, deletedQBankIds.length ? { 'x-qraft-media-cleanup': '1' } : undefined);
 }

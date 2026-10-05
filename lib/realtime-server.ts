@@ -71,9 +71,10 @@ export function needsMutationNotification(request: Request): boolean {
   if (['GET', 'HEAD', 'OPTIONS'].includes(request.method)) return false;
   const path = new URL(request.url).pathname.split('/').slice(3);
   if (
+    (path[0] === 'platform' && path[1] === 'registration-policy') ||
     (['state', 'media', 'ids'].includes(path[0]) && !(path[0] === 'state' && path[1] === 'exam')) ||
     (path[0] === 'auth' && path[1] !== 'register') ||
-    (path[0] === 'platform' && ['exam-start', 'quote', 'import-preview', 'announcement-dismiss'].includes(path[1]))
+    (path[0] === 'platform' && ['exam-start', 'quote', 'import-preview', 'announcement-dismiss', 'gift-notification'].includes(path[1]))
   )
     return false;
   return true;

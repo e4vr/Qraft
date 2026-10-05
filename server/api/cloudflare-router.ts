@@ -49,7 +49,7 @@ function notFound(): Response {
 async function routeGet(request: Request): Promise<Response> {
   const [scope, action, ...rest] = cloudflarePathParts(request);
   if (scope === 'platform' && action === 'monitoring') return monitoringApi(request);
-  if (scope === 'platform' && ['site-operations', 'plan-pricing', 'plan-catalog'].includes(action)) return operationsApi(request, action);
+  if (scope === 'platform' && ['site-operations', 'plan-pricing', 'plan-catalog', 'registration-policy'].includes(action)) return operationsApi(request, action);
   if (scope === 'realtime') return connectRealtime(request);
   if (scope === 'preformed' && action)
     return preformedTestApi(request, action);
@@ -75,7 +75,7 @@ async function routePost(request: Request): Promise<Response> {
   const [scope, action] = cloudflarePathParts(request);
   if (scope === 'qbanks' && !action) return createQBank(request);
   if (scope === 'platform' && action === 'monitoring') return monitoringApi(request);
-  if (scope === 'platform' && action === 'account-block') return operationsApi(request, action);
+  if (scope === 'platform' && ['account-block', 'registration-policy'].includes(action)) return operationsApi(request, action);
   if (scope === 'preformed' && action)
     return preformedTestApi(request, action);
   if (scope === 'platform' && action) return platformApi(request, action);
@@ -103,7 +103,7 @@ async function routePost(request: Request): Promise<Response> {
 
 async function routePut(request: Request): Promise<Response> {
   const [scope, action] = cloudflarePathParts(request);
-  if (scope === 'platform' && ['site-operations', 'plan-pricing'].includes(action)) return operationsApi(request, action);
+  if (scope === 'platform' && ['site-operations', 'plan-pricing', 'registration-policy'].includes(action)) return operationsApi(request, action);
   if (scope === 'preformed' && action)
     return preformedTestApi(request, action);
   if (scope === 'auth' && action === 'profile')
@@ -125,6 +125,7 @@ async function routePut(request: Request): Promise<Response> {
 
 async function routeDelete(request: Request): Promise<Response> {
   const [scope, action] = cloudflarePathParts(request);
+  if (scope === 'platform' && action === 'registration-policy') return operationsApi(request, action);
   if (scope === 'platform' && action === 'deleted-registration') return operationsApi(request, action);
   if (scope === 'qbanks' && action) return deleteQBank(request, action);
   if (scope === 'preformed' && action)

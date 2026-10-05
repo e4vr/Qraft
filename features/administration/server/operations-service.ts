@@ -14,6 +14,7 @@ import { publishChanges } from '@/lib/realtime-server';
 import { validatePlanPolicy } from '../domain/plan-policy';
 import { removeDeletedRegistration } from './deleted-registration';
 import { isDeletedAccountProfile } from '../domain/deleted-registration';
+import { registrationPolicyApi } from './registration-policy';
 export { accountBlocked } from '../domain/account-block';
 
 export type SiteOperations = {
@@ -75,6 +76,7 @@ export async function operationsApi(request: Request, action: string) {
     return json(await planCatalog());
   }
   const user = await requireRoot(request);
+  if (action === 'registration-policy') return registrationPolicyApi(request, user);
   if (action === 'deleted-registration') {
     if (request.method !== 'DELETE') return json({ error: 'Method not allowed.' }, 405);
     return removeDeletedRegistration(request, user);

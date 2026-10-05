@@ -20,6 +20,8 @@ import { collaborationConflictApiTests } from './collaboration-conflicts-api.mjs
 import { collaborationDeltaApiTests } from './collaboration-delta-api.mjs';
 import { classificationCleanupApiTests } from './classification-cleanup-api.mjs';
 import { deletedRegistrationApiTests } from './deleted-registration-api.mjs';
+import { registrationPolicyApiTests } from './registration-policy-api.mjs';
+import { giftNotificationApiTests } from './gift-notification-api.mjs';
 
 function decodeBase32(value) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -3454,6 +3456,8 @@ print(json.dumps(out))`,
     fetch: (url, init) => mf.dispatchFetch(url, init),
   });
   await deletedRegistrationApiTests(t, { db, call, fetch: (url, init) => mf.dispatchFetch(url, init) });
+  await registrationPolicyApiTests(t, { db, call, fetch: (url, init) => mf.dispatchFetch(url, init) });
+  await giftNotificationApiTests(t, { db, call, mf });
   await directQuestionEditApiTests(t, { db, call });
   await contributionEconomyApiTests(t, { db, call });
   await serverEfficiencyApiTests(t, { db, call, mf, assets });

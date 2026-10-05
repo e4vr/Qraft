@@ -38,6 +38,7 @@ import {
   UserRoundX,
 } from 'lucide-react';
 import { QraftBrand } from '@/components/brand/qraft-brand';
+import { RegistrationApprovalSettings } from '@/components/registration-approval-settings';
 import { DEFAULT_LEGAL_LINKS } from '@/lib/legal-links';
 import { AnnouncementAdmin } from '@/components/announcement-admin';
 import Link from 'next/link';
@@ -687,6 +688,7 @@ export function AdminDashboard({
         'contact',
         'announcement',
         'legal-links',
+        'registration-policy',
         'audit',
         'review-history',
         'preformed-tests',
@@ -2061,6 +2063,7 @@ export function AdminDashboard({
             )}
             {tab === 'registrations' && (
               <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">
+                {isRoot && <RegistrationApprovalSettings key={user.uid} user={user} refreshRevision={refreshRevision} />}
                 <div className="border-b p-5">
                   <h2 className="font-bold">Registration and access</h2>
                   <p className="text-xs text-muted-foreground">
