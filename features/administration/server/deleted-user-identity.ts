@@ -131,5 +131,8 @@ export function historicalIdentityStatements(
     toShared(
       'UPDATE account_plan_overrides SET updated_by=? WHERE updated_by=?',
     ),
+    toShared(
+      'UPDATE account_access_revisions SET revoked_by=? WHERE revoked_by=?',
+    ),
   ];
 }

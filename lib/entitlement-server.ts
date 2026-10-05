@@ -1,8 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { serverPlanLimits } from '@/features/subscriptions/server/plan-policy';
+import { accessSourcesCte, accessSourceTimes } from '@/features/subscriptions/server/access-sources';
 import type { AppUser, MemberProfile } from './medguard-types';
 import {
-  highestPlan,
   isPlanId,
   type PlanId,
 } from '@/features/subscriptions/domain/plan-config';
@@ -14,57 +14,31 @@ export type EffectiveEntitlement = {
   rewardPlan: PlanId | null;
   adminPlan: PlanId | null;
   adminOverridePlan: PlanId | null;
+  accessRevision: number;
+  accessRevokedAt: string | null;
 };
 
 export async function getEffectiveEntitlement(
   profile: Pick<MemberProfile, 'uid' | 'tier'>,
   now = new Date().toISOString(),
 ): Promise<EffectiveEntitlement> {
-  const [subscription, reward, admin, override] = await env.DB.batch([
-    env.DB.prepare(
-      "SELECT plan,expires_at FROM subscriptions WHERE user_id=? AND status IN ('active','manually_activated') AND (expires_at IS NULL OR expires_at>?) LIMIT 1",
-    ).bind(profile.uid, now),
-    env.DB.prepare(
-      "SELECT plan,expires_at FROM reward_passes WHERE user_id=? AND status='active' AND expires_at>? ORDER BY CASE plan WHEN 'full_quarterly' THEN 2 WHEN 'full_monthly' THEN 1 ELSE 0 END DESC LIMIT 1",
-    ).bind(profile.uid, now),
-    env.DB.prepare(
-      "SELECT plan,expires_at FROM admin_plan_entitlements WHERE user_id=? AND active=1 AND (expires_at IS NULL OR expires_at>?) ORDER BY CASE plan WHEN 'full_quarterly' THEN 2 WHEN 'full_monthly' THEN 1 ELSE 0 END DESC LIMIT 1",
-    ).bind(profile.uid, now),
-    env.DB.prepare(
-      'SELECT plan,expires_at FROM account_plan_overrides WHERE user_id=? AND (expires_at IS NULL OR expires_at>?)',
-    ).bind(profile.uid, now),
-  ]);
-  const overrideRow = override.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
-  const subscriptionRow = subscription.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
-  const rewardRow = reward.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
-  const adminRow = admin.results[0] as { plan?: unknown; expires_at?: string | null } | undefined;
-  const subscriptionPlan = isPlanId(subscriptionRow?.plan)
-    ? subscriptionRow.plan
-    : null;
-  const rewardPlan = isPlanId(rewardRow?.plan) ? rewardRow.plan : null;
-  const adminPlan = isPlanId(adminRow?.plan) ? adminRow.plan : null;
-  const basePlan = isPlanId(profile.tier) ? profile.tier : 'free';
-  const adminOverridePlan = isPlanId(overrideRow?.plan) ? overrideRow.plan : null;
-  const effectivePlan = adminOverridePlan ?? highestPlan(
-    basePlan,
-    subscriptionPlan,
-    rewardPlan,
-    adminPlan,
-  );
-  const matchingExpirations = [
-    subscriptionPlan === effectivePlan ? subscriptionRow?.expires_at : null,
-    rewardPlan === effectivePlan ? rewardRow?.expires_at : null,
-    adminPlan === effectivePlan ? adminRow?.expires_at : null,
-  ].filter((value): value is string => Boolean(value));
+  // Read the stored base tier, not an already resolved user tier. Revocation and
+  // all access sources are evaluated from the same SQL snapshot.
+  const row = await env.DB.prepare(`${accessSourcesCte('WHERE p.uid=?')}
+    SELECT tier,effective_expires_at,paid_plan,reward_plan,admin_plan,override_plan,access_revision,access_revoked_at FROM resolved`)
+    .bind(profile.uid, ...accessSourceTimes(now))
+    .first<{ tier: unknown; effective_expires_at: string | null; paid_plan: unknown; reward_plan: unknown;
+      admin_plan: unknown; override_plan: unknown; access_revision: number; access_revoked_at: string | null }>();
+  const plan = (value: unknown) => isPlanId(value) ? value : null;
   return {
-    effectivePlan,
-    effectivePlanExpiresAt: adminOverridePlan !== null ? overrideRow?.expires_at ?? null : matchingExpirations.length
-      ? matchingExpirations.sort().at(-1) ?? null
-      : null,
-    subscriptionPlan,
-    rewardPlan,
-    adminPlan,
-    adminOverridePlan,
+    effectivePlan: plan(row?.tier) ?? 'free',
+    effectivePlanExpiresAt: row?.effective_expires_at ?? null,
+    subscriptionPlan: plan(row?.paid_plan),
+    rewardPlan: plan(row?.reward_plan),
+    adminPlan: plan(row?.admin_plan),
+    adminOverridePlan: plan(row?.override_plan),
+    accessRevision: row?.access_revision ?? 0,
+    accessRevokedAt: row?.access_revoked_at ?? null,
   };
 }
 

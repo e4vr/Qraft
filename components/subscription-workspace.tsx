@@ -450,6 +450,9 @@ type Subscription = {
   override_plan: PlanId | null;
   override_expires_at: string | null;
   override_reason: string | null;
+  access_revision?: number;
+  access_revoked_at?: string | null;
+  effective_expires_at?: string | null;
   reward_plan: PlanId | null;
   status: string | null;
   starts_at: string | null;
@@ -580,17 +583,25 @@ export function SubscriptionAdmin({
     setError('');
     setMessage('');
     try {
+      const accessAssignment = body && typeof body === 'object' && 'operation' in body && body.operation === 'override';
+      const revocation = accessAssignment && 'plan' in body && body.plan === 'free';
+      const requestBody = revocation ? { ...body, requestId: crypto.randomUUID(), expires_at: null } : body;
       const result = await api<{
         effectivePlan?: PlanId;
         code?: Code;
         deletedId?: string;
         price?: number;
         subscription?: Partial<Subscription>;
-        override?: { plan: PlanId; expires_at: string | null; reason: string };
+        override?: { plan: PlanId; expires_at: string | null; reason: string } | null;
+        adminOverridePlan?: PlanId | null;
+        effectivePlanExpiresAt?: string | null;
+        accessRevision?: number;
+        accessRevokedAt?: string | null;
+        revoked?: boolean;
         unchanged?: boolean;
-      }>(`/platform/${section}`, { method, body: JSON.stringify(body) });
+      }>(`/platform/${section}`, { method, body: JSON.stringify(requestBody) });
       const override = body && typeof body === 'object' && 'operation' in body && body.operation === 'override';
-      setMessage(override ? `${PLAN_LIMITS[result.effectivePlan!].name} access is active now.` : 'Changes saved successfully.');
+      setMessage(result.revoked ? 'Current access revoked. Stored gifts can still be activated.' : override ? `${PLAN_LIMITS[result.effectivePlan!].name} access is active now.` : 'Changes saved successfully.');
       setEditing(false);
       setOriginalCode(null);
       setSelected(undefined);
@@ -609,9 +620,12 @@ export function SubscriptionAdmin({
             ...row,
             ...result.subscription,
             tier: result.effectivePlan!,
-            override_plan: override ? result.override?.plan ?? result.effectivePlan! : row.override_plan,
-            override_expires_at: override ? result.override?.expires_at ?? null : row.override_expires_at,
-            override_reason: override ? result.override?.reason ?? '' : row.override_reason,
+            override_plan: result.adminOverridePlan ?? null,
+            override_expires_at: result.adminOverridePlan ? result.override?.expires_at ?? row.override_expires_at : null,
+            override_reason: result.adminOverridePlan ? result.override?.reason ?? row.override_reason : null,
+            access_revision: result.accessRevision,
+            access_revoked_at: result.accessRevokedAt,
+            effective_expires_at: result.effectivePlanExpiresAt,
           } : row);
           setSubscriptions(nextSubscriptions);
         }
@@ -667,9 +681,9 @@ export function SubscriptionAdmin({
               <td data-label="Actions"><div className="q-control-row-actions"><button aria-label={`Edit ${c.code}`} onClick={() => { setDraft(c); setOriginalCode(c); setEditing(true); setError(''); }}><Pencil className="size-4" />Edit</button><button aria-label={`Usage history for ${c.code}`} onClick={() => { setUsageCode(c.id); setUsageOffset(0); }}><History className="size-4" />History</button><details><summary aria-label={`More actions for ${c.code}`}><SlidersHorizontal className="size-4" /></summary><div><button disabled={saving} onClick={() => void save({ ...c, enabled: !c.enabled })}>{c.enabled ? 'Disable code' : 'Enable code'}</button><button disabled={saving} className="text-destructive" onClick={async () => { if(await confirmAction({title:`Delete code ${c.code}?`,description:'The discount code will be removed, while its usage history remains available for auditing.',confirmLabel:'Delete code',tone:'destructive'})) void save({id:c.id},'DELETE'); }}>Delete code</button></div></details></div></td>
             </tr>) : subscriptions.slice(0,50).map(row => <tr key={row.uid}>
               <td data-label="Member"><strong>{row.name}</strong><span className="q-control-email">{row.email}</span><small className="q-control-uid" title={row.uid}>{row.uid}</small></td>
-              <td data-label="Effective access"><span className="q-control-badge" data-plan={row.tier}>{PLAN_LIMITS[row.tier]?.name ?? row.tier}</span><small>{row.override_plan ? 'Admin assigned' : row.reward_plan === row.tier ? 'Reward access' : 'Standard access'}</small></td>
-              <td data-label="Assign plan"><div className="q-control-plan-editor"><select aria-label={`Plan for ${row.email}`} disabled={saving} value={planDrafts[row.uid] ?? row.tier} onChange={e => setPlanDrafts(current => ({...current,[row.uid]:e.target.value as PlanId}))}>{PLAN_ORDER.map(plan => <option key={plan} value={plan}>{PLAN_LIMITS[plan].name} · {planDurationLabel(plan)}</option>)}</select><button disabled={saving || !planDrafts[row.uid]} onClick={() => void save({operation:'override',userId:row.uid,plan:planDrafts[row.uid],expires_at:null,reason:'Assigned from subscribers dashboard'})}>Apply</button></div><small>Immediate · no expiration</small></td>
-              <td data-label="Access / billing dates"><span>{row.override_plan ? row.override_expires_at ? `Access until ${date(row.override_expires_at)}` : 'Access has no expiration' : row.expires_at ? `Billing until ${date(row.expires_at)}` : 'No billing expiration'}</span><small>{row.starts_at ? `Billing since ${date(row.starts_at)}` : 'No billing start date'}</small>{row.expires_at && <small>{Math.max(0,Math.ceil((Date.parse(row.expires_at)-today)/86400000))} billing days left</small>}</td>
+              <td data-label="Effective access"><span className="q-control-badge" data-plan={row.tier}>{PLAN_LIMITS[row.tier]?.name ?? row.tier}</span><small>{row.override_plan ? 'Admin assigned' : row.tier === 'free' && (row.access_revision ?? 0)>0 ? 'Current access revoked' : row.reward_plan === row.tier ? 'Reward access' : 'Standard access'}</small></td>
+              <td data-label="Assign plan"><div className="q-control-plan-editor"><select aria-label={`Plan for ${row.email}`} disabled={saving} value={planDrafts[row.uid] ?? row.tier} onChange={e => setPlanDrafts(current => ({...current,[row.uid]:e.target.value as PlanId}))}>{PLAN_ORDER.map(plan => <option key={plan} value={plan}>{plan === 'free' ? 'Revoke current access' : `${PLAN_LIMITS[plan].name} · ${planDurationLabel(plan)}`}</option>)}</select><button disabled={saving || !planDrafts[row.uid]} onClick={() => void save({operation:'override',userId:row.uid,plan:planDrafts[row.uid],expires_at:null,reason:'Assigned from subscribers dashboard'})}>Apply</button></div><small>{(planDrafts[row.uid] ?? row.tier) === 'free' ? 'Revokes current access · new gifts allowed' : 'Immediate · no expiration'}</small></td>
+              <td data-label="Access / billing dates"><span>{row.tier === 'free' ? 'Free access' : row.effective_expires_at ? `Access until ${date(row.effective_expires_at)}` : 'Access has no expiration'}</span><small>{row.expires_at ? `Billing until ${date(row.expires_at)}` : 'No billing expiration'}</small><small>{row.starts_at ? `Billing since ${date(row.starts_at)}` : 'No billing start date'}</small>{row.expires_at && <small>{Math.max(0,Math.ceil((Date.parse(row.expires_at)-today)/86400000))} billing days left</small>}</td>
               <td data-label="Payment record"><strong>{sar(row.paid ?? 0)}</strong><small>{row.method || 'No payment method'} · {row.status?.replaceAll('_',' ') || 'No billing record'}</small><small>Code: {row.discount_code || '—'}</small></td>
               <td data-label="Actions"><button className="q-control-manage" onClick={() => openSubscription(row)}><SlidersHorizontal className="size-4" />Manage</button></td>
             </tr>)}
@@ -837,16 +851,18 @@ export function SubscriptionAdmin({
           <DialogTitle>Manage access</DialogTitle>
           <div className="q-control-member-heading"><strong>{selected?.name}</strong><span>{selected?.email}</span></div>
           <form className="q-control-access-form" onSubmit={event => { event.preventDefault(); void save({operation:'override',userId:selected?.uid,plan:manualPlan,expires_at:noExpiration ? null : `${end}T23:59:59.999Z`,reason}); }}>
-            <p className="q-control-assignment-note"><ShieldCheck className="size-5" />This assignment takes priority over subscriptions, active gifts and rewards. Access changes immediately.</p>
-            <fieldset disabled={saving}><legend>Assign plan</legend><div className="q-control-plan-options">{PLAN_ORDER.map(plan => <label key={plan} data-selected={manualPlan===plan}><input type="radio" name="override-plan" value={plan} checked={manualPlan===plan} onChange={() => setManualPlan(plan)} /><span>{PLAN_LIMITS[plan].name} · {planDurationLabel(plan)}</span></label>)}</div></fieldset>
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={noExpiration} onChange={event => setNoExpiration(event.target.checked)} />No expiration · keep until changed</label>
-            {!noExpiration && <label>Access expiration<input required type="date" className={field} value={end} min={new Date().toISOString().slice(0,10)} onChange={e => setEnd(e.target.value)} /><small>Access remains until 23:59:59 UTC on this date, then returns to the other eligible plans.</small></label>}
-            <div className="q-ops-form-grid"><label>Extend by days<input className={field} type="number" min="1" max="730" value={extensionDays} onChange={event=>setExtensionDays(event.target.value)} /></label><button type="button" className="q-ops-button" disabled={saving || !Number.isInteger(Number(extensionDays)) || Number(extensionDays)<1 || Number(extensionDays)>730} onClick={()=>{setNoExpiration(false);setEnd(new Date(Math.max(Date.now(),Number.isFinite(Date.parse(end))?Date.parse(end):Date.now())+Number(extensionDays)*86_400_000).toISOString().slice(0,10));}}>Preview new date</button></div>
+            <p className="q-control-assignment-note"><ShieldCheck className="size-5" />{manualPlan === 'free' ? 'Revoke existing access immediately. Stored gifts and new subscriptions can still be activated later.' : 'Grant Full access. Previously revoked access stays revoked when this grant expires.'}</p>
+            <fieldset disabled={saving}><legend>Access action</legend><div className="q-control-plan-options">{PLAN_ORDER.map(plan => <label key={plan} data-selected={manualPlan===plan}><input type="radio" name="override-plan" value={plan} checked={manualPlan===plan} onChange={() => setManualPlan(plan)} /><span>{plan === 'free' ? 'Revoke current access' : `${PLAN_LIMITS[plan].name} · ${planDurationLabel(plan)}`}</span></label>)}</div></fieldset>
+            {manualPlan !== 'free' && <>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={noExpiration} onChange={event => setNoExpiration(event.target.checked)} />No expiration · keep until changed</label>
+              {!noExpiration && <label>Access expiration<input required type="date" className={field} value={end} min={new Date().toISOString().slice(0,10)} onChange={e => setEnd(e.target.value)} /><small>Access remains until 23:59:59 UTC on this date, then returns to the other eligible grants.</small></label>}
+              <div className="q-ops-form-grid"><label>Extend by days<input className={field} type="number" min="1" max="730" value={extensionDays} onChange={event=>setExtensionDays(event.target.value)} /></label><button type="button" className="q-ops-button" disabled={saving || !Number.isInteger(Number(extensionDays)) || Number(extensionDays)<1 || Number(extensionDays)>730} onClick={()=>{setNoExpiration(false);setEnd(new Date(Math.max(Date.now(),Number.isFinite(Date.parse(end))?Date.parse(end):Date.now())+Number(extensionDays)*86_400_000).toISOString().slice(0,10));}}>Preview new date</button></div>
+            </>}
             <label>Reason <span className="text-muted-foreground">(optional)</span><textarea maxLength={500} rows={2} className={field} value={reason} onChange={e => setReason(e.target.value)} placeholder="Add a note to the audit log…" /></label>
             {error && <p role="alert" className="text-destructive text-sm">{error}</p>}
-            <button disabled={saving} className="q-button q-button-primary w-full" type="submit">{saving ? 'Applying…' : `Apply ${PLAN_LIMITS[manualPlan].name} now`}</button>
+            <button disabled={saving} className="q-button q-button-primary w-full" type="submit">{saving ? 'Applying…' : manualPlan === 'free' ? 'Revoke current access now' : `Apply ${PLAN_LIMITS[manualPlan].name} now`}</button>
           </form>
-          <details className="q-control-billing-details"><summary>Payment & renewal records</summary><p>Update billing history separately. An admin access assignment keeps its priority.</p><label>Billing expiration<input type="date" className={field} value={end} onChange={e => setEnd(e.target.value)} /></label><button className="q-button border" onClick={() => setEnd(addCalendarDuration(new Date(Math.max(Date.now(), Number.isFinite(Date.parse(end)) ? Date.parse(end) : Date.now())).toISOString(), PLAN_DURATION_MONTHS[manualPlan] || 1, 'month').slice(0,10))}>Extend selected period</button><label>Final amount paid (SAR)<input type="number" min="0" step="0.01" className={field} value={paid} onChange={e => setPaid(e.target.value)} /></label><label>Discount code<input className={field} value={manualCode} onChange={e => setManualCode(e.target.value)} /></label><button disabled={saving || manualPlan==='free' || !end} className="q-button border" onClick={() => void save({userId:selected?.uid,plan:manualPlan,expires_at:`${end}T23:59:59.999Z`,paid:Math.round(Number(paid)*100),code:manualCode})}>Save {PLAN_LIMITS[manualPlan].name} billing record</button><button disabled={saving} className="q-button text-destructive" onClick={() => void save({userId:selected?.uid,operation:'cancel'})}>Cancel paid subscription</button></details>
+          <details className="q-control-billing-details"><summary>Payment & renewal records</summary><p>Payment history stays separate. A new activation can grant access after revocation.</p><label>Billing expiration<input type="date" className={field} value={end} onChange={e => setEnd(e.target.value)} /></label><button className="q-button border" onClick={() => setEnd(addCalendarDuration(new Date(Math.max(Date.now(), Number.isFinite(Date.parse(end)) ? Date.parse(end) : Date.now())).toISOString(), PLAN_DURATION_MONTHS[manualPlan] || 1, 'month').slice(0,10))}>Extend selected period</button><label>Final amount paid (SAR)<input type="number" min="0" step="0.01" className={field} value={paid} onChange={e => setPaid(e.target.value)} /></label><label>Discount code<input className={field} value={manualCode} onChange={e => setManualCode(e.target.value)} /></label><button disabled={saving || manualPlan==='free' || !end} className="q-button border" onClick={() => void save({userId:selected?.uid,plan:manualPlan,expires_at:`${end}T23:59:59.999Z`,paid:Math.round(Number(paid)*100),code:manualCode})}>Save {PLAN_LIMITS[manualPlan].name} billing record</button><button disabled={saving} className="q-button text-destructive" onClick={() => void save({userId:selected?.uid,operation:'cancel'})}>Cancel paid subscription</button></details>
         </DialogContent>
       </Dialog>
       {confirmationDialog}

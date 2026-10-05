@@ -22,6 +22,7 @@ import { classificationCleanupApiTests } from './classification-cleanup-api.mjs'
 import { deletedRegistrationApiTests } from './deleted-registration-api.mjs';
 import { registrationPolicyApiTests } from './registration-policy-api.mjs';
 import { giftNotificationApiTests } from './gift-notification-api.mjs';
+import { accessRevocationApiTests } from './access-revocation-api.mjs';
 
 function decodeBase32(value) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -306,8 +307,9 @@ print(json.dumps(out))`,
   await collaborationConflictApiTests(t, { db, call });
   await collaborationDeltaApiTests(t, { db, call, mf });
   await classificationCleanupApiTests(t, { db, call });
+  await accessRevocationApiTests(t, { db, call });
   await t.test(
-    'Superadmin plan assignments override every entitlement, including Free, and preserve billing and gifts',
+    'Superadmin paid assignments keep their priority; revocation preserves history and allows new gifts',
     async () => {
       const uid = 'override-member',
         now = new Date().toISOString(),
@@ -359,14 +361,14 @@ print(json.dumps(out))`,
         assert.equal(changed.data.effectivePlan, plan);
         const session = await call(uid, '/auth/session');
         assert.equal(session.data.user.tier, plan);
-        assert.equal(session.data.user.adminOverridePlan, plan);
+        assert.equal(session.data.user.adminOverridePlan, plan === 'free' ? null : plan);
         const listing = await call(
           'admin',
           `/platform/subscriptions?search=${uid}&status=${plan}`,
         );
         assert.equal(listing.data.subscriptions[0].tier, plan);
         assert.equal(listing.data.summary.total, 1);
-        assert.equal(listing.data.subscriptions[0].override_plan, plan);
+        assert.equal(listing.data.subscriptions[0].override_plan, plan === 'free' ? null : plan);
       }
       assert.equal(
         (
@@ -390,7 +392,7 @@ print(json.dumps(out))`,
         400,
       );
       assert.equal((await call(uid, '/auth/session')).data.user.tier, 'free');
-      // A gift activated after assignment must not bypass the assignment either.
+      // A gift activated after revocation is a new grant; earlier grants stay revoked.
       await db
         .prepare(
           "INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,source) VALUES('override-new-gift',?,'full_quarterly',1,'year','available',?,'admin')",
@@ -402,7 +404,7 @@ print(json.dumps(out))`,
         passId: 'override-new-gift',
       });
       assert.equal(gift.status, 200, JSON.stringify(gift.data));
-      assert.equal((await call(uid, '/auth/session')).data.user.tier, 'free');
+      assert.equal((await call(uid, '/auth/session')).data.user.tier, 'full_quarterly');
       const billing = await db
         .prepare('SELECT plan,paid FROM subscriptions WHERE user_id=?')
         .bind(uid)

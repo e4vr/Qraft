@@ -55,6 +55,8 @@ import {
   type PlanId,
 } from '@/features/subscriptions/domain/plan-config';
 import { addCalendarDuration } from '@/features/subscriptions/domain/calendar-duration';
+import { accessGenerationSql, rewardWalletFields } from '@/features/subscriptions/server/access-sources';
+import { activateRewardAccess, revokeCurrentAccess } from '@/features/subscriptions/server/access-grants';
 import {
   compareDuplicateContent,
   detectDuplicateReview,
@@ -1367,9 +1369,9 @@ export async function platformApi(request: Request, action: string) {
       const [account, transactions, passes, pending, submissions] = await env.DB.batch([
         env.DB.prepare('SELECT credits_balance,lifetime_score FROM contribution_accounts WHERE user_id=?').bind(user.uid),
         env.DB.prepare('SELECT id,amount,type,reason,reference_type,reference_id,created_at FROM credit_transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 30').bind(user.uid),
-        focusedGiftId ? env.DB.prepare(`SELECT * FROM (SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 50)
-          UNION SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE id=? AND user_id=? ORDER BY created_at DESC,id DESC`).bind(user.uid, focusedGiftId, user.uid)
-          : env.DB.prepare('SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE user_id=? ORDER BY created_at DESC LIMIT 50').bind(user.uid),
+        focusedGiftId ? env.DB.prepare(`SELECT * FROM (SELECT ${rewardWalletFields()} FROM reward_passes r WHERE r.user_id=? ORDER BY r.created_at DESC,r.id DESC LIMIT 50)
+          UNION SELECT ${rewardWalletFields()} FROM reward_passes r WHERE r.id=? AND r.user_id=? ORDER BY created_at DESC,id DESC`).bind(user.uid, focusedGiftId, user.uid)
+          : env.DB.prepare(`SELECT ${rewardWalletFields()} FROM reward_passes r WHERE r.user_id=? ORDER BY r.created_at DESC LIMIT 50`).bind(user.uid),
         env.DB.prepare("SELECT count(*) AS value FROM records WHERE type='questionProposals' AND owner_id=? AND json_extract(payload,'$.status')='pending'").bind(user.uid),
         env.DB.prepare("SELECT id,json_extract(payload,'$.status') AS status,json_extract(payload,'$.type') AS type,updated_at FROM records WHERE type='questionProposals' AND owner_id=? AND json_extract(payload,'$.status')<>'approved' ORDER BY updated_at DESC LIMIT 20").bind(user.uid),
       ]);
@@ -1389,7 +1391,7 @@ export async function platformApi(request: Request, action: string) {
     if (action === 'rewards') {
       if (request.method === 'GET') {
         const rows = await env.DB.prepare(
-          'SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE user_id=? ORDER BY created_at DESC LIMIT 100',
+          `SELECT ${rewardWalletFields()} FROM reward_passes r WHERE r.user_id=? ORDER BY r.created_at DESC LIMIT 100`,
         ).bind(user.uid).all();
         return json({ rewards: REWARD_CATALOG, passes: rows.results });
       }
@@ -1401,7 +1403,7 @@ export async function platformApi(request: Request, action: string) {
         if (!reward || !/^[a-zA-Z0-9-]{20,80}$/.test(requestId))
           return json({ error: 'Invalid reward request.' }, 400);
         const passId = `reward-${requestId}`;
-        const prior = await env.DB.prepare('SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE id=? AND user_id=?')
+        const prior = await env.DB.prepare(`SELECT ${rewardWalletFields()} FROM reward_passes r WHERE r.id=? AND r.user_id=?`)
           .bind(passId, user.uid).first();
         if (prior) {
           const account = await env.DB.prepare('SELECT credits_balance FROM contribution_accounts WHERE user_id=?').bind(user.uid).first<{ credits_balance: number }>();
@@ -1417,7 +1419,7 @@ export async function platformApi(request: Request, action: string) {
             auditStatement(user, 'reward_redeemed', passId, null, { rewardId: reward.id, credits: reward.credits }),
           ]);
         } catch (error) {
-          const recovered = await env.DB.prepare('SELECT * FROM reward_passes WHERE id=? AND user_id=?')
+          const recovered = await env.DB.prepare(`SELECT ${rewardWalletFields()} FROM reward_passes r WHERE r.id=? AND r.user_id=?`)
             .bind(passId, user.uid).first();
           if (recovered) return json({ pass: recovered, duplicate: true });
           if (String(error).includes('INSUFFICIENT_CREDITS'))
@@ -1425,7 +1427,7 @@ export async function platformApi(request: Request, action: string) {
           throw error;
         }
         const [passResult, accountResult] = await env.DB.batch([
-          env.DB.prepare('SELECT id,plan,duration,duration_unit,duration_days,status,created_at,activated_at,expires_at,source FROM reward_passes WHERE id=?').bind(passId),
+          env.DB.prepare(`SELECT ${rewardWalletFields()} FROM reward_passes r WHERE r.id=?`).bind(passId),
           env.DB.prepare('SELECT credits_balance FROM contribution_accounts WHERE user_id=?').bind(user.uid),
         ]);
         return json({ pass: passResult.results[0], creditsBalance: Number((accountResult.results[0] as { credits_balance?: number } | undefined)?.credits_balance ?? 0) }, 201);
@@ -1440,15 +1442,9 @@ export async function platformApi(request: Request, action: string) {
           return json({ error: 'This reward pass is no longer available.' }, 409);
         const now = new Date().toISOString();
         const expiresAt = pass.duration_days ? new Date(Date.parse(now) + pass.duration_days*86_400_000).toISOString() : addCalendarDuration(now, pass.duration, pass.duration_unit);
-        const activated = await env.DB.prepare(
-          "UPDATE reward_passes SET status='active',activated_at=?,expires_at=? WHERE id=? AND user_id=? AND status='available'",
-        ).bind(now, expiresAt, passId, user.uid).run();
-        if (!activated.meta.changes)
+        const activated = await activateRewardAccess(user, pass, now, expiresAt);
+        if (!activated)
           return json({ error: 'This reward pass was already activated.' }, 409);
-        await env.DB.batch([
-          auditStatement(user, 'reward_activated', passId, null, { plan: pass.plan, expiresAt }),
-          env.DB.prepare("UPDATE reward_passes SET status='expired' WHERE user_id=? AND status='active' AND expires_at<=?").bind(user.uid, now),
-        ]);
         const entitlement = await getEffectiveEntitlement(user);
         return json({
           activated: true,
@@ -1501,7 +1497,7 @@ export async function platformApi(request: Request, action: string) {
         const [account, ledger, passes, suspensions, reviews, collusionFlags, contributionHistory] = await env.DB.batch([
           env.DB.prepare('SELECT * FROM contribution_accounts WHERE user_id=?').bind(targetUserId),
           env.DB.prepare('SELECT * FROM credit_transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 100').bind(targetUserId),
-          env.DB.prepare('SELECT * FROM reward_passes WHERE user_id=? ORDER BY created_at DESC LIMIT 100').bind(targetUserId),
+          env.DB.prepare(`SELECT ${rewardWalletFields()},r.user_id,r.credit_transaction_id,r.metadata,r.access_generation FROM reward_passes r WHERE r.user_id=? ORDER BY r.created_at DESC LIMIT 100`).bind(targetUserId),
           env.DB.prepare('SELECT * FROM json_import_suspensions WHERE user_id=? ORDER BY starts_at DESC LIMIT 50').bind(targetUserId),
           env.DB.prepare('SELECT * FROM contribution_reviews WHERE author_id=? OR reviewer_id=? ORDER BY created_at DESC LIMIT 100').bind(targetUserId, targetUserId),
           env.DB.prepare(`SELECT reviewer_id,author_id,count(*) AS approvals,
@@ -2436,7 +2432,7 @@ export async function platformApi(request: Request, action: string) {
       const member = await profileById(text('userId'));
       if (!member) throw new ValidationError('User not found.');
       const old = await env.DB.prepare(
-        'SELECT * FROM subscriptions WHERE user_id=?',
+        'SELECT s.*,coalesce(a.generation,0) AS current_generation FROM subscriptions s LEFT JOIN account_access_revisions a ON a.user_id=s.user_id WHERE s.user_id=?',
       )
         .bind(member.uid)
         .first();
@@ -2444,20 +2440,27 @@ export async function platformApi(request: Request, action: string) {
       if (text('operation') === 'override') {
         const plan = text('plan');
         if (!isPlanId(plan)) throw new ValidationError('Choose Free trial or a Full Access subscription period.');
+        if (plan === 'free') {
+          const requestId = text('requestId') || crypto.randomUUID();
+          if (!/^[a-zA-Z0-9-]{20,80}$/.test(requestId)) throw new ValidationError('Invalid access request ID.');
+          const result = await revokeCurrentAccess(user, member.uid, text('reason').slice(0, 500), requestId);
+          return json({ ok: true, revoked: true, ...result, ...(await getEffectiveEntitlement(profile)), override: null }, 200,
+            result.unchanged ? { 'x-qraft-unchanged': '1' } : {});
+        }
         const now = new Date().toISOString();
         const requestedEnd = text('expires_at');
         if (requestedEnd && (!Number.isFinite(Date.parse(requestedEnd)) || Date.parse(requestedEnd) <= Date.parse(now)))
           throw new ValidationError('Select a future expiration date or no expiration.');
         const expiresAt = requestedEnd ? new Date(requestedEnd).toISOString() : null;
         const reason = text('reason').slice(0, 500);
-        const previous = await env.DB.prepare('SELECT * FROM account_plan_overrides WHERE user_id=?').bind(member.uid).first();
-        const priorOverride = previous as { plan?: string; expires_at?: string | null; reason?: string } | null;
-        if (priorOverride?.plan === plan && priorOverride.expires_at === expiresAt && (priorOverride.reason ?? '') === reason)
+        const previous = await env.DB.prepare('SELECT o.*,coalesce(a.generation,0) AS current_generation FROM account_plan_overrides o LEFT JOIN account_access_revisions a ON a.user_id=o.user_id WHERE o.user_id=?').bind(member.uid).first();
+        const priorOverride = previous as { plan?: string; expires_at?: string | null; reason?: string; access_generation?: number; current_generation?: number } | null;
+        if (priorOverride?.plan === plan && priorOverride.expires_at === expiresAt && (priorOverride.reason ?? '') === reason && priorOverride.access_generation === priorOverride.current_generation)
           return json({ ok: true, unchanged: true, ...(await getEffectiveEntitlement(profile)), override: { plan, expires_at: expiresAt, reason } }, 200, { 'x-qraft-unchanged': '1' });
         await env.DB.batch([
-          env.DB.prepare(`INSERT INTO account_plan_overrides(user_id,plan,expires_at,reason,updated_by,updated_at) VALUES(?,?,?,?,?,?)
-            ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan,expires_at=excluded.expires_at,reason=excluded.reason,updated_by=excluded.updated_by,updated_at=excluded.updated_at`)
-            .bind(member.uid, plan, expiresAt, reason, user.uid, now),
+          env.DB.prepare(`INSERT INTO account_plan_overrides(user_id,plan,expires_at,reason,updated_by,updated_at,access_generation) VALUES(?,?,?,?,?,?,${accessGenerationSql('?')})
+            ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan,expires_at=excluded.expires_at,reason=excluded.reason,updated_by=excluded.updated_by,updated_at=excluded.updated_at,access_generation=excluded.access_generation`)
+            .bind(member.uid, plan, expiresAt, reason, user.uid, now, member.uid),
           auditStatement(user, 'subscription_plan_overridden', member.uid, previous, { plan, expires_at: expiresAt, reason, previousSubscription: old }),
         ]);
         return json({ ok: true, ...(await getEffectiveEntitlement(profile)), override: { plan, expires_at: expiresAt, reason } });
@@ -2476,12 +2479,12 @@ export async function platformApi(request: Request, action: string) {
       if (!Number.isInteger(paid) || paid < 0)
         throw new ValidationError('Invalid paid amount.');
       const status = cancel ? 'cancelled' : 'manually_activated';
-      const previousSubscription = old as { status?: string; expires_at?: string | null; paid?: number; discount_code?: string | null; plan?: string } | null;
+      const previousSubscription = old as { status?: string; expires_at?: string | null; paid?: number; discount_code?: string | null; plan?: string; access_generation?: number; current_generation?: number } | null;
       if (cancel && previousSubscription?.status === 'cancelled')
         return json({ ok: true, unchanged: true, ...(await getEffectiveEntitlement(profile)), subscription: previousSubscription }, 200, { 'x-qraft-unchanged': '1' });
       if (!cancel && previousSubscription?.status === status && previousSubscription.expires_at === end &&
         previousSubscription.paid === paid && previousSubscription.plan === subscriptionPlan &&
-        (previousSubscription.discount_code ?? '') === text('code'))
+        (previousSubscription.discount_code ?? '') === text('code') && previousSubscription.access_generation === previousSubscription.current_generation)
         return json({ ok: true, unchanged: true, ...(await getEffectiveEntitlement(profile)), subscription: previousSubscription }, 200, { 'x-qraft-unchanged': '1' });
       const discounted =
         !cancel && text('code')
@@ -2527,7 +2530,7 @@ export async function platformApi(request: Request, action: string) {
             ]
           : []),
         env.DB.prepare(
-          `INSERT INTO subscriptions(user_id,status,starts_at,expires_at,method,discount_code,paid,updated_at,plan) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status,starts_at=CASE WHEN subscriptions.status IN ('active','manually_activated') THEN coalesce(subscriptions.starts_at,excluded.starts_at) ELSE excluded.starts_at END,expires_at=excluded.expires_at,method=excluded.method,discount_code=excluded.discount_code,paid=excluded.paid,updated_at=excluded.updated_at,plan=excluded.plan`,
+          `INSERT INTO subscriptions(user_id,status,starts_at,expires_at,method,discount_code,paid,updated_at,plan,access_generation) VALUES(?,?,?,?,?,?,?,?,?,${accessGenerationSql('?')}) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status,starts_at=CASE WHEN subscriptions.status IN ('active','manually_activated') THEN coalesce(subscriptions.starts_at,excluded.starts_at) ELSE excluded.starts_at END,expires_at=excluded.expires_at,method=excluded.method,discount_code=excluded.discount_code,paid=excluded.paid,updated_at=excluded.updated_at,plan=excluded.plan,access_generation=excluded.access_generation`,
         ).bind(
           member.uid,
           status,
@@ -2538,6 +2541,7 @@ export async function platformApi(request: Request, action: string) {
           paid,
           now,
           subscriptionPlan,
+          member.uid,
         ),
         env.DB.prepare(
           'INSERT INTO subscription_events(id,user_id,email,name,admin_id,code,action,original,discount,final,status,starts_at,expires_at,created_at,detail,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',

@@ -213,6 +213,13 @@ export const discountCodes = sqliteTable(
   (table) => [uniqueIndex('idx_discount_codes_code').on(sql`${table.code} COLLATE NOCASE`)],
 );
 
+export const accountAccessRevisions = sqliteTable('account_access_revisions', {
+  userId: text('user_id').primaryKey().references(() => profiles.uid, { onDelete: 'cascade' }),
+  generation: integer('generation').notNull(),
+  revokedAt: text('revoked_at').notNull(),
+  revokedBy: text('revoked_by').notNull(),
+}, table => [check('account_access_revisions_generation', sql`${table.generation}>=1`)]);
+
 export const accountPlanOverrides = sqliteTable('account_plan_overrides', {
   userId: text('user_id').primaryKey().references(() => profiles.uid, { onDelete: 'cascade' }),
   plan: text('plan', { enum: ['free', 'full_monthly', 'full_quarterly'] }).notNull(),
@@ -220,6 +227,7 @@ export const accountPlanOverrides = sqliteTable('account_plan_overrides', {
   reason: text('reason').notNull().default(''),
   updatedBy: text('updated_by').notNull(),
   updatedAt: text('updated_at').notNull(),
+  accessGeneration: integer('access_generation').notNull().default(0),
 });
 
 export const subscriptions = sqliteTable(
@@ -236,6 +244,7 @@ export const subscriptions = sqliteTable(
     discountCode: text('discount_code'),
     paid: integer('paid').notNull().default(0),
     updatedAt: text('updated_at').notNull(),
+    accessGeneration: integer('access_generation').notNull().default(0),
   },
   (table) => [
     index('idx_subscriptions_expiration').on(table.status, table.expiresAt),
@@ -663,6 +672,7 @@ export const rewardPasses = sqliteTable(
     creditTransactionId: text('credit_transaction_id').unique().references(() => creditTransactions.id),
     durationDays: integer('duration_days'),
     metadata: text('metadata').notNull().default('{}'),
+    accessGeneration: integer('access_generation').notNull().default(0),
   },
   (table) => [
     index('idx_reward_passes_user_status').on(
@@ -687,6 +697,7 @@ export const adminPlanEntitlements = sqliteTable(
     grantedBy: text('granted_by').notNull(),
     createdAt: text('created_at').notNull(),
     expiresAt: text('expires_at'),
+    accessGeneration: integer('access_generation').notNull().default(0),
   },
   (table) => [
     index('idx_admin_plan_entitlements_user').on(

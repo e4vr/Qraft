@@ -277,6 +277,8 @@ export interface AppUser {
   tier: AccountTier;
   effectivePlan?: AccountTier;
   adminOverridePlan?: AccountTier | null;
+  accessRevision?: number;
+  accessRevokedAt?: string | null;
   effectivePlanExpiresAt?: string | null;
   subscriptionPlan?: AccountTier | null;
   rewardPlan?: AccountTier | null;
