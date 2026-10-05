@@ -69,13 +69,15 @@ export function SiteAnnouncement({
   const [presented, setPresented] = useState('');
   const [readyFor, setReadyFor] = useState<string | null>(null);
   useEffect(() => {
+    if (!userId) return;
     let active = true;
     let requestNumber = 0;
     const refresh = () => {
       const currentRequest = ++requestNumber;
       void api<SiteAnnouncement>('/platform/announcement', {
         forceRefresh: true,
-        cacheScope: userId || 'visitor',
+        cacheScope: userId,
+        expectedUserId: userId,
       })
         .then((next) => {
           if (!active || currentRequest !== requestNumber) return;
@@ -84,13 +86,11 @@ export function SiteAnnouncement({
           try {
             seen ||=
               localStorage.getItem(
-                `qraft-announcement:${userId || 'visitor'}`,
+                `qraft-announcement:${userId}`,
               ) === nextIdentity;
             if (
-              userId &&
               next.enabled &&
               !next.dismissed &&
-              next.displayMode === 'once' &&
               localStorage.getItem(`qraft-announcement:${userId}`) ===
                 announcementIdentity(next)
             ) {
@@ -105,7 +105,7 @@ export function SiteAnnouncement({
           }
           if (!seen)
             setPresented(
-              `qraft-announcement:${userId || 'visitor'}:${nextIdentity}`,
+              `qraft-announcement:${userId}:${nextIdentity}`,
             );
           setReadyFor(userId);
           setValue(next);
@@ -127,16 +127,17 @@ export function SiteAnnouncement({
     };
   }, [userId]);
   const identity = announcementIdentity(value);
-  const storageKey = `qraft-announcement:${userId || 'visitor'}`;
+  const storageKey = `qraft-announcement:${userId}`;
   const presentationKey = `${storageKey}:${identity}`;
   let alreadySeen = value.dismissed;
   try {
-    if (value.displayMode === 'once' && typeof window !== 'undefined')
+    if (typeof window !== 'undefined')
       alreadySeen ||= localStorage.getItem(storageKey) === identity;
   } catch {
     /* A blocked storage area must not prevent closing the popup. */
   }
   const open =
+    Boolean(userId) &&
     !defer &&
     readyFor === userId &&
     value.enabled &&
@@ -147,26 +148,22 @@ export function SiteAnnouncement({
     if (!open || alreadySeen) return;
     // Remember the impression while keeping this dialog open until it is closed.
     // A reload or a different device must not show the same announcement again.
-    if (value.displayMode === 'once') {
-      try {
-        localStorage.setItem(storageKey, identity);
-      } catch {
-        /* The in-memory close still works. */
-      }
-      if (userId)
-        void api('/platform/announcement-dismiss', {
-          method: 'POST',
-          body: JSON.stringify({ revision: value.revision }),
-          expectedUserId: userId,
-        }).catch(() => undefined);
+    try {
+      localStorage.setItem(storageKey, identity);
+    } catch {
+      /* The in-memory close still works. */
     }
+    void api('/platform/announcement-dismiss', {
+      method: 'POST',
+      body: JSON.stringify({ revision: value.revision }),
+      expectedUserId: userId,
+    }).catch(() => undefined);
   }, [
     open,
     alreadySeen,
     storageKey,
     identity,
     userId,
-    value.displayMode,
     value.revision,
   ]);
   const dismiss = () => setDismissed(presentationKey);

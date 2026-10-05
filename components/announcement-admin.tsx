@@ -108,8 +108,8 @@ export function AnnouncementAdmin({ uid }: { uid: string }) {
           Site announcement popup
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Show news when people enter the site. Signed-in users see each new
-          announcement once. They can close it at any time.
+          Show news only after sign-in, once per user each time the popup is
+          enabled. To show it again, disable and save, then enable and save.
         </p>
         <fieldset
           disabled={!ready || busy || uploading}

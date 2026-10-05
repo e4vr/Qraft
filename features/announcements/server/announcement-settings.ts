@@ -13,6 +13,8 @@ export async function announcementSettings(): Promise<SiteAnnouncement> {
   return {
     ...DEFAULT_ANNOUNCEMENT,
     ...stored,
+    // Older records may use visit mode; every activation is now once per account.
+    displayMode: 'once',
     images: stored.images ?? [],
     revision: stored.revision ?? row.updated_at,
   };

@@ -94,7 +94,7 @@ function lifecycle() {
   };
 }
 
-void test('popup records its first appearance, stays open, survives reload without repeating, and shows a new revision', async () => {
+void test('popup waits for sign-in, appears once per account and activation, and survives reload without repeating', async () => {
   const oldGlobals = Object.fromEntries(
     ['window', 'document', 'localStorage', '__announcementFixture'].map(
       (key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)],
@@ -103,13 +103,14 @@ void test('popup records its first appearance, stays open, survives reload witho
   const storage = new Map();
   const seen = new Map();
   const writes = [];
+  const reads = [];
   let announcement = {
     enabled: true,
     title: 'News',
     content: 'Study news',
     href: '',
     images: [],
-    displayMode: 'once',
+    displayMode: 'visit', // Legacy records must still obey once-per-account policy.
     revision: 'first',
   };
   const listeners = new Map();
@@ -130,6 +131,8 @@ void test('popup records its first appearance, stays open, survives reload witho
         seen.set(init.expectedUserId, revision);
         return { ok: true };
       }
+      reads.push(init.cacheScope);
+      assert.equal(init.expectedUserId, init.cacheScope);
       return {
         ...announcement,
         dismissed: seen.get(init.cacheScope) === announcement.revision,
@@ -162,6 +165,9 @@ void test('popup records its first appearance, stays open, survives reload witho
     return output;
   };
   try {
+    assert.equal((await settle({})).props.open, false);
+    assert.deepEqual(reads, [], 'visitors must not fetch or acknowledge announcements');
+    assert.deepEqual(writes, []);
     const first = await settle();
     assert.equal(first.props.open, true);
     assert.deepEqual(writes, ['first']);
@@ -173,6 +179,11 @@ void test('popup records its first appearance, stays open, survives reload witho
     );
     first.props.onOpenChange(false);
     assert.equal((await settle()).props.open, false);
+    announcement = { ...announcement, content: 'Edited during the same activation' };
+    listeners.get('visibilitychange')();
+    assert.equal((await settle()).props.open, false, 'editing an active announcement must not replay it');
+    assert.equal((await settle({ userId: '' })).props.open, false, 'sign-out must hide the popup');
+    assert.equal((await settle()).props.open, false, 'signing back in must honor the same impression');
     fixture.hooks.dispose();
     fixture.hooks = lifecycle();
     storage.clear();
@@ -182,8 +193,12 @@ void test('popup records its first appearance, stays open, survives reload witho
       'a fresh device must honor the account acknowledgement',
     );
     assert.deepEqual(writes, ['first']);
+    announcement = { ...announcement, enabled: false };
+    listeners.get('visibilitychange')();
+    assert.equal((await settle()).props.open, false, 'disabled announcements must stay hidden');
     announcement = {
       ...announcement,
+      enabled: true,
       revision: 'second',
       content: 'New announcement',
     };
@@ -207,6 +222,19 @@ void test('popup records its first appearance, stays open, survives reload witho
       true,
     );
     assert.equal(seen.get('another'), 'second');
+
+    // A response initiated for a signed-in account must be ignored after logout.
+    fixture.hooks.dispose();
+    fixture.hooks = lifecycle();
+    const originalApi = fixture.api;
+    let resolveRead;
+    fixture.api = () => new Promise(resolve => { resolveRead = resolve; });
+    assert.equal((await settle({ userId: 'late' })).props.open, false);
+    assert.equal((await settle({ userId: '' })).props.open, false);
+    resolveRead({ ...announcement, dismissed: false });
+    assert.equal((await settle({ userId: '' })).props.open, false);
+    assert.equal(seen.has('late'), false);
+    fixture.api = originalApi;
   } finally {
     fixture.hooks.dispose();
     for (const [key, descriptor] of Object.entries(oldGlobals)) {

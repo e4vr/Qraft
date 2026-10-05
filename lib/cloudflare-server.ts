@@ -14,6 +14,7 @@ import { allocateQuestionIds } from './question-id-repository';
 import { env } from 'cloudflare:workers';
 import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
 import { accountBlocked } from '@/features/administration/domain/account-block';
+import { DELETED_USER_ID, isDeletedAccountProfile } from '@/features/administration/domain/deleted-registration';
 import { emitUsage } from '@/features/administration/server/usage-telemetry';
 import { appStateFreshness } from './merge-app-state';
 import { stateBudgetError, stateBytes, STATE_BUDGET_BYTES } from '@/features/state/domain/state-budget';
@@ -1783,6 +1784,7 @@ function accessManagerProfile(member: MemberProfile): MemberProfile {
     suspendedUntil: member.suspendedUntil,
     universityIdRegistered: member.universityIdRegistered,
     universityIdVerifiedManually: member.universityIdVerifiedManually,
+    deletedAt: member.deletedAt,
   } as MemberProfile;
 }
 
@@ -1879,7 +1881,7 @@ export async function loadCollaboration(request: Request) {
     ),
   ];
   const profileResult = !changedKeys && hasAccessManagerRole(user)
-    ? await env.DB.prepare('SELECT profile_json FROM profiles').all<{
+    ? await env.DB.prepare('SELECT profile_json FROM profiles WHERE uid<>?').bind(DELETED_USER_ID).all<{
         profile_json: string;
       }>()
     : { results: [] as { profile_json: string }[] };
@@ -2026,7 +2028,7 @@ function profileUpdateAllowed(
 ) {
   if (operation.type !== 'set' || value.uid !== operation.id) return false;
   const existing = state.members.find((member) => member.uid === operation.id);
-  if (!existing || existing.role === 'super_admin') return false;
+  if (!existing || existing.role === 'super_admin' || isDeletedAccountProfile(existing)) return false;
   const mutable = new Set<string>();
   if (hasAccessManagerRole(user)) {
     [

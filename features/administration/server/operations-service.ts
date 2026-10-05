@@ -12,6 +12,8 @@ import {
 } from '@/features/subscriptions/domain/plan-config';
 import { publishChanges } from '@/lib/realtime-server';
 import { validatePlanPolicy } from '../domain/plan-policy';
+import { removeDeletedRegistration } from './deleted-registration';
+import { isDeletedAccountProfile } from '../domain/deleted-registration';
 export { accountBlocked } from '../domain/account-block';
 
 export type SiteOperations = {
@@ -73,6 +75,10 @@ export async function operationsApi(request: Request, action: string) {
     return json(await planCatalog());
   }
   const user = await requireRoot(request);
+  if (action === 'deleted-registration') {
+    if (request.method !== 'DELETE') return json({ error: 'Method not allowed.' }, 405);
+    return removeDeletedRegistration(request, user);
+  }
   if (request.method === 'GET')
     return json(
       action === 'site-operations'
@@ -250,7 +256,7 @@ export async function operationsApi(request: Request, action: string) {
     const profile = row
       ? (JSON.parse(row.profile_json) as MemberProfile)
       : null;
-    if (!profile || profile.role === 'super_admin')
+    if (!profile || profile.role === 'super_admin' || isDeletedAccountProfile(profile))
       return json({ error: 'This account cannot be blocked.' }, 403);
     const next = {
       ...profile,

@@ -32,7 +32,10 @@ export type ProposalEditKind =
   | 'source'
   | 'typo_formatting'
   | 'duplicate'
-  | 'outdated_guideline';
+  | 'outdated_guideline'
+  | 'missing_information'
+  | 'image_media'
+  | 'other';
 
 export {
   PLATFORM_ROLES,
@@ -360,6 +363,7 @@ export interface MemberProfile {
   approvedByName?: string;
   universityIdRegistered?: boolean;
   universityIdVerifiedManually?: boolean;
+  deletedAt?: string;
 }
 
 export interface AllowedUniversityId {

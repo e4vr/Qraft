@@ -125,6 +125,7 @@ async function routePut(request: Request): Promise<Response> {
 
 async function routeDelete(request: Request): Promise<Response> {
   const [scope, action] = cloudflarePathParts(request);
+  if (scope === 'platform' && action === 'deleted-registration') return operationsApi(request, action);
   if (scope === 'qbanks' && action) return deleteQBank(request, action);
   if (scope === 'preformed' && action)
     return preformedTestApi(request, action);

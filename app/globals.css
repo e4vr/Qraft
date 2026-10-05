@@ -2,6 +2,17 @@
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 
+.q-review-filter-bar { container-type: inline-size; }
+.q-review-filter-main { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: 8px; }
+.q-review-filter-tabs { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.q-review-filter-tabs > button { min-height: 40px; white-space: nowrap; }
+.q-review-kind-filter { width: 220px; max-width: 100%; justify-self: center; }
+@container (min-width: 1000px) {
+  .q-review-filter-main { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+  .q-review-filter-tabs { grid-column: 2; }
+  .q-review-kind-filter { grid-column: 3; justify-self: end; }
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

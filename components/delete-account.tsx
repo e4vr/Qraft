@@ -34,7 +34,7 @@ export function DeleteAccount({ uid, onDeleted }: { uid: string; onDeleted: () =
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete your account permanently?</AlertDialogTitle>
-          <AlertDialogDescription>Your sign-in, flashcards, decks, personal tests and unshared private QBanks will be deleted. Public questions, contributions and review history remain under “Deleted user”. Shared QBanks are preserved and transferred to a Superadmin. You will be signed out. This cannot be undone.</AlertDialogDescription>
+          <AlertDialogDescription>Your sign-in, flashcards, decks, personal tests and unshared private QBanks will be deleted. Public questions, contributions and review history remain under the shared “Deleted user” identity. Shared QBanks are preserved under that identity and remain accessible to their existing members. You will be signed out. This cannot be undone.</AlertDialogDescription>
         </AlertDialogHeader>
         <label htmlFor="delete-account-confirmation" className="text-sm font-semibold">Type DELETE to confirm</label>
         <Input id="delete-account-confirmation" value={confirmation} onChange={event => setConfirmation(event.target.value)} autoComplete="off" disabled={busy} />

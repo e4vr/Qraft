@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { useState } from 'react';
 import { ExplanationImageEditor } from '@/components/explanation-image-editor';
 import type { NoteImage } from '@/lib/medguard-types';
+import { PROPOSAL_EDIT_KINDS } from '@/features/contributions/domain/proposal-filters';
 
 export interface QuestionEditDraft {
   stem: string;
@@ -20,13 +21,6 @@ export interface QuestionEditDraft {
   rationale: string;
   kinds: ProposalEditKind[];
 }
-
-const EDIT_KINDS: Array<[ProposalEditKind, string]> = [
-  ['question_text', 'Question text'], ['options', 'Options'],
-  ['correct_answer', 'Correct answer'], ['explanation', 'Explanation'],
-  ['source', 'Source'], ['typo_formatting', 'Typo / formatting'],
-  ['duplicate', 'Duplicate question'], ['outdated_guideline', 'Outdated guideline'],
-];
 
 export function QuestionEditDialog({ open, onClose, questionNumber, immediate, draft, onChange, busy, error, onSubmit, uid, qbankId, questionId }: {
   open: boolean;
@@ -75,7 +69,7 @@ export function QuestionEditDialog({ open, onClose, questionNumber, immediate, d
                 <span className="q-edit-field-note">Select one or more</span>
               </div>
               <div className="flex flex-wrap gap-2">
-                {EDIT_KINDS.map(([kind, label]) => (
+                {PROPOSAL_EDIT_KINDS.map(([kind, label]) => (
                   <button key={kind} type="button" aria-pressed={draft.kinds.includes(kind)} onClick={() => onChange({ kinds: draft.kinds.includes(kind) ? draft.kinds.filter(value => value !== kind) : [...draft.kinds, kind] })} className={cn('q-edit-kind', draft.kinds.includes(kind) && 'q-edit-kind-selected')}>
                     {draft.kinds.includes(kind) && <Check className="size-3.5" />}{label}
                   </button>

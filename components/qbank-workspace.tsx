@@ -1,5 +1,5 @@
 'use client';
-import { FormattedQuestionText } from '@/components/formatted-question-text';
+import { BookmarkLibrary } from '@/components/bookmark-library';
 
 import { ReviewerSearch } from '@/components/reviewer-search';
 import { WorkspaceHeader } from '@/components/workspace-header';
@@ -102,7 +102,7 @@ export function QBankWorkspace({
   }) => void;
   bookmarkedQuestionIds: string[];
   onToggleBookmark: (questionId: string) => void;
-  onStartBookmarks: (questionIds: string[], title: string) => void;
+  onStartBookmarks: (bankId: string, questionIds: string[], title: string) => void;
   onSelect: (id: string) => void;
   onManageBank: (
     id: string,
@@ -280,20 +280,6 @@ export function QBankWorkspace({
     }
     return counts;
   }, [questionPool]);
-  const bookmarkedGroups = useMemo(() => {
-    const accessibleIds = new Set(accessible.map((bank) => bank.id));
-    return accessible
-      .map((bank) => ({
-        bank,
-        questions: questionPool.filter(
-          (question) =>
-            (question.qbankId ?? 'smle-gs') === bank.id &&
-            bookmarkedQuestionIds.includes(question.id) &&
-            accessibleIds.has(bank.id),
-        ),
-      }))
-      .filter((group) => group.questions.length > 0);
-  }, [accessible, bookmarkedQuestionIds, questionPool]);
   const mobileActionsBank = accessible.find(
     (bank) => bank.id === mobileActionsBankId,
   );
@@ -594,77 +580,14 @@ export function QBankWorkspace({
             </div>
           </nav>
           {activeSection === 'bookmarks' ? (
-            <div className="space-y-4">
-              {bookmarkedGroups.length ? (
-                bookmarkedGroups.map(({ bank, questions }) => (
-                  <section
-                    key={bank.id}
-                    className="overflow-hidden rounded-2xl bg-card ring-1 ring-border"
-                  >
-                    <header className="flex items-center gap-3 border-b p-4">
-                      <Folder className="size-5 text-primary" />
-                      <div className="min-w-0 flex-1">
-                        <h3 className="truncate font-bold">{bank.name}</h3>
-                        <p className="text-xs text-muted-foreground">
-                          {questions.length} bookmarked questions
-                        </p>
-                      </div>
-                      <button
-                        onClick={() =>
-                          onStartBookmarks(
-                            questions.map((question) => question.id),
-                            `${bank.shortName} Bookmarks`,
-                          )
-                        }
-                        className="q-button q-button-study"
-                      >
-                        Start test
-                      </button>
-                    </header>
-                    <div className="divide-y">
-                      {questions.map((question, index) => (
-                        <div
-                          key={question.id}
-                          className="flex items-center gap-3 p-3"
-                        >
-                          <button
-                            onClick={() =>
-                              onStartBookmarks(
-                                [question.id],
-                                `Bookmarked question ${question.questionId ?? index + 1}`,
-                              )
-                            }
-                            className="min-w-0 flex-1 text-left"
-                          >
-                            <strong className="line-clamp-1 text-sm">
-                              <FormattedQuestionText text={question.stem} />
-                            </strong>
-                            <span className="mt-1 block text-xs text-muted-foreground">
-                              Question {question.questionId ?? index + 1}
-                            </span>
-                          </button>
-                          <button
-                            onClick={() => onToggleBookmark(question.id)}
-                            aria-label="Remove bookmark"
-                            className="q-icon text-primary"
-                          >
-                            <Bookmark className="size-4 fill-current" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                ))
-              ) : (
-                <div className="rounded-2xl border border-dashed bg-card p-12 text-center">
-                  <Bookmark className="mx-auto size-8 text-muted-foreground" />
-                  <h3 className="mt-3 font-bold">No bookmarks yet</h3>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Bookmark questions while solving a test.
-                  </p>
-                </div>
-              )}
-            </div>
+            <BookmarkLibrary
+              key={user.uid}
+              banks={accessible}
+              questionPool={questionPool}
+              bookmarkedQuestionIds={bookmarkedQuestionIds}
+              onToggleBookmark={onToggleBookmark}
+              onStartBookmarks={onStartBookmarks}
+            />
           ) : (
             <>
               <label className="mb-4 flex items-center gap-3 rounded-xl border bg-card px-4 py-3">

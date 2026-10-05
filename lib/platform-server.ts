@@ -515,11 +515,12 @@ async function rejectImport(
 export async function platformApi(request: Request, action: string) {
   if (request.method !== 'GET') assertSameOrigin(request);
   if (action === 'announcement' && request.method === 'GET' && new URL(request.url).searchParams.get('manage') !== '1') {
+    const viewer = await currentUser(request);
+    if (!viewer || viewer.status !== 'approved' || viewer.suspended) return json(DEFAULT_ANNOUNCEMENT);
     const current = await announcementSettings();
     if (!current.enabled) return json(DEFAULT_ANNOUNCEMENT);
-    const viewer = await currentUser(request);
-    const seen = viewer ? await env.DB.prepare("SELECT json_extract(payload,'$.revision') AS revision FROM records WHERE type='announcementDismissals' AND id=? AND owner_id=?").bind(viewer.uid, viewer.uid).first<{ revision: string }>() : null;
-    return json({ ...current, dismissed: current.displayMode === 'once' && seen?.revision === current.revision });
+    const seen = await env.DB.prepare("SELECT json_extract(payload,'$.revision') AS revision FROM records WHERE type='announcementDismissals' AND id=? AND owner_id=?").bind(viewer.uid, viewer.uid).first<{ revision: string }>();
+    return json({ ...current, dismissed: seen?.revision === current.revision });
   }
   const user = await currentUser(request);
   if (!user || user.status !== 'approved' || user.suspended)
@@ -979,13 +980,16 @@ export async function platformApi(request: Request, action: string) {
         content: text('content'),
         href,
         images,
-        displayMode: input.displayMode === undefined ? current.displayMode : input.displayMode as 'once' | 'visit',
+        displayMode: 'once' as const,
         revision: current.revision,
       };
       if (next.enabled && !next.content && !next.images.length)
         return json({ error: 'Enter announcement content or add images before enabling it.' }, 400);
       if (JSON.stringify(next) === JSON.stringify(current)) return json({ ...next, unchanged: true }, 200, { 'x-qraft-unchanged': '1' });
-      next.revision = crypto.randomUUID();
+      // One identity per activation. Editing a live announcement must not
+      // replay it to accounts that already saw it; disabling then enabling does.
+      if (next.enabled && (!current.enabled || !current.revision))
+        next.revision = crypto.randomUUID();
       const now = new Date().toISOString();
       await env.DB.batch([
         env.DB.prepare(

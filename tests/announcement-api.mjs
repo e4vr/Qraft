@@ -111,7 +111,7 @@ export async function announcementApiTests(t, { db, call, mf, uploadImage }) {
     );
 
     await t.test(
-      'each account acknowledges a revision once across sessions and sees the next published revision',
+      'announcements require sign-in and each account sees each activation once across sessions',
       async () => {
         const published = await call(
           'admin',
@@ -122,7 +122,11 @@ export async function announcementApiTests(t, { db, call, mf, uploadImage }) {
         assert.equal(published.status, 200);
         const revision = published.data.revision;
         assert.ok(revision);
-        assert.equal((await publicRead()).data.content, draft.content);
+        assert.equal((await publicRead()).data.enabled, false);
+        assert.equal((await publicRead()).data.content, '');
+        assert.deepEqual((await publicRead()).data.images, []);
+        assert.equal((await call('root-unverified', '/platform/announcement')).data.enabled, false);
+        assert.equal((await call('free', '/platform/announcement')).data.content, draft.content);
         assert.equal(
           (await call('free', '/platform/announcement')).data.dismissed,
           false,
@@ -165,15 +169,15 @@ export async function announcementApiTests(t, { db, call, mf, uploadImage }) {
           { ...draft, enabled: true, content: 'A new announcement' },
           'PUT',
         );
-        assert.notEqual(changed.data.revision, revision);
+        assert.equal(changed.data.revision, revision, 'editing content is not a new activation');
         assert.equal(
           (await call('free', '/platform/announcement')).data.dismissed,
-          false,
+          true,
         );
         assert.equal(
           (await call('free', '/platform/announcement-dismiss', { revision }))
             .status,
-          409,
+          200,
         );
         const disabled = await call(
           'admin',
@@ -187,6 +191,23 @@ export async function announcementApiTests(t, { db, call, mf, uploadImage }) {
           (await call('admin', '/platform/announcement?manage=1')).data.content,
           'A new announcement',
         );
+        const reactivated = await call(
+          'admin', '/platform/announcement', { ...disabled.data, enabled: true, displayMode: 'visit' }, 'PUT',
+        );
+        assert.equal(reactivated.status, 200);
+        assert.notEqual(reactivated.data.revision, revision);
+        assert.equal(reactivated.data.displayMode, 'once', 'legacy visit mode must normalize to once');
+        const nextRevision = reactivated.data.revision;
+        for (const uid of ['free', 'monthly']) {
+          assert.equal((await call(uid, '/platform/announcement')).data.dismissed, false);
+          assert.equal((await call(uid, '/platform/announcement-dismiss', { revision: nextRevision })).status, 200);
+          assert.equal((await call(uid, '/platform/announcement')).data.dismissed, true);
+        }
+        assert.equal((await call('free', '/platform/announcement-dismiss', { revision })).status, 409);
+        const unchanged = await call('admin', '/platform/announcement', reactivated.data, 'PUT');
+        assert.equal(unchanged.data.revision, nextRevision);
+        assert.equal(unchanged.data.unchanged, true);
+        assert.equal((await call('free', '/platform/announcement')).data.dismissed, true);
       },
     );
 
@@ -323,7 +344,8 @@ export async function announcementApiTests(t, { db, call, mf, uploadImage }) {
             'PUT',
           );
           assert.equal(published.status, 200);
-          assert.deepEqual((await publicRead()).data.images, [image]);
+          assert.deepEqual((await publicRead()).data.images, []);
+          assert.deepEqual((await call('free', '/platform/announcement')).data.images, [image]);
           const publicImage = await fetchImage(url);
           assert.equal(publicImage.status, 200);
           assert.match(publicImage.headers.get('cache-control'), /no-store/);

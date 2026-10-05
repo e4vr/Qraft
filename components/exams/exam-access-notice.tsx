@@ -70,7 +70,7 @@ export function ExamAccessNotice({ user, request, defer, onViewPlans }: {
   const viewPlans = () => { dismiss(); onViewPlans(); };
   return <>
     {visible && (
-      <div className="px-4 pt-3 sm:px-6">
+      <div className="px-4 py-3 sm:px-6">
         <button type="button" onClick={viewPlans} aria-label="View subscription plans" className="group flex min-h-12 w-full items-center gap-3 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2.5 text-left transition hover:border-primary/40 hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-4">
           <Crown className="size-5 shrink-0 text-primary" />
           <span className="min-w-0 flex-1 text-sm font-medium">{exhausted || requested === 'exams' ? free ? 'Your free exams are complete. Keep studying with Full.' : 'Your exam allowance is used. View your subscription options.' : `Want more than ${questionLimit} questions? Explore Full.`}</span>

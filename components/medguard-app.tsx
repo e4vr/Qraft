@@ -4,6 +4,7 @@ import { HighlightedText } from '@/components/highlighted-question-text';
 import { selectedTextRange } from '@/features/exams/client/text-selection';
 import { readQuestionSource, validateQuestionSource } from '@/features/qbanks/domain/question-source';
 import { indexQuestionsById } from '@/features/qbanks/domain/question-index';
+import { createBookmarkStudySession } from '@/features/qbanks/domain/bookmarks';
 import { QuestionEditDialog } from '@/components/question-edit-dialog';
 import { QuestionSourceFields } from '@/components/question-source-fields';
 import { SharedNoteImages } from '@/components/shared-note-images';
@@ -6010,6 +6011,12 @@ export default function MedGuardApp({
     view,
   ]);
   const allQuestionsById = useMemo(() => indexQuestionsById(allQuestions), [allQuestions]);
+  const bookmarkedQuestionIds = useMemo(
+    () => Object.entries(state.progress)
+      .filter(([, progress]) => progress.bookmarked)
+      .map(([questionId]) => questionId),
+    [state.progress],
+  );
   const accessibleQBanks = useMemo(
     () =>
       collaboration.qbanks.filter(
@@ -7234,7 +7241,7 @@ export default function MedGuardApp({
   }
   if (!user)
     return (
-      <><SiteAnnouncement defer={portal !== 'app'} /><AuthScreen
+      <AuthScreen
         onAuthenticated={setUser}
         onJoinTest={(code) => {
           const url = new URL(window.location.href);
@@ -7246,7 +7253,7 @@ export default function MedGuardApp({
           );
           setDirectTestCode(code);
         }}
-      /></>
+      />
     );
   if (user.status !== 'approved' || user.suspended)
     return <PendingApproval user={user} onSignOut={() => void signOut()} />;
@@ -7527,9 +7534,7 @@ export default function MedGuardApp({
               quickAccessIds: state.settings.quickAccessQBankIds,
               orderBySection: state.settings.qbankOrderBySection,
             }}
-            bookmarkedQuestionIds={Object.entries(state.progress)
-              .filter(([, progress]) => progress.bookmarked)
-              .map(([questionId]) => questionId)}
+            bookmarkedQuestionIds={bookmarkedQuestionIds}
             onToggleBookmark={(questionId) =>
               setState((current) => {
                 const old = getQuestionProgress(current, questionId);
@@ -7546,26 +7551,12 @@ export default function MedGuardApp({
                 };
               })
             }
-            onStartBookmarks={(questionIds, title) => {
-              const now = new Date().toISOString();
-              const test: TestSession = {
-                id: crypto.randomUUID(),
-                title,
-                mode: 'tutor',
-                questionIds,
-                currentIndex: 0,
-                answers: {},
-                revealed: [],
-                graded: [],
-                startedAt: now,
-                updatedAt: now,
-                elapsedSeconds: 0,
-                timerStartedAt: now,
-                timerPaused: false,
-                status: 'active',
-                origin: 'bookmarks',
-                qbankId: activeQBankId,
-              };
+            onStartBookmarks={(bankId, questionIds, title) => {
+              if (!accessibleQBanks.some(bank => bank.id === bankId)) return;
+              const test = createBookmarkStudySession({
+                bankId, questionIds, title, questionsById: allQuestionsById, progress: state.progress,
+              });
+              if (!test) return;
               setState((current) => ({
                 ...current,
                 tests: [test, ...current.tests],

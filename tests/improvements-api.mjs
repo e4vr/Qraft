@@ -1359,7 +1359,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
                 .first()
             ).payload,
           ).ownerId,
-          'admin',
+          'deleted-user',
         );
       for (const id of ['shared-keep-question', 'public-keep-question']) {
         const q = JSON.parse(
@@ -1391,7 +1391,8 @@ export async function improvementsApiTests(t, db, call, runtime) {
         )
         .first();
       assert.match(review.reviewer_id, /^deleted-/);
-      assert.equal(review.author_id, review.reviewer_id);
+      assert.equal(review.author_id, 'deleted-user');
+      assert.match(review.reviewer_id, /^deleted-reviewer-/);
       assert.equal(
         (await db.prepare('PRAGMA foreign_key_check').all()).results.length,
         0,

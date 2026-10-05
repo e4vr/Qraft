@@ -1,5 +1,6 @@
 'use client';
 import { planAccessLabel } from '@/features/subscriptions/domain/plan-config';
+import { DELETED_USER_ID, isDeletedAccountProfile } from '@/features/administration/domain/deleted-registration';
 
 import {
   Activity,
@@ -617,6 +618,13 @@ export function AdminDashboard({
   const [memberSearch, setMemberSearch] = useState('');
   const [memberStatus, setMemberStatus] = useState('all');
   const [memberPage, setMemberPage] = useState(0);
+  const [removingRegistrationId, setRemovingRegistrationId] = useState('');
+  const [registrationMessage, setRegistrationMessage] = useState('');
+  const [registrationError, setRegistrationError] = useState('');
+  const [confirmRegistrationRemoval, registrationConfirmationDialog] = useConfirmationDialog();
+  const registrationRemovalBusy = useRef(false);
+  const currentCollaboration = useRef(collaboration);
+  useEffect(() => { currentCollaboration.current = collaboration; }, [collaboration]);
   const [auditSearch, setAuditSearch] = useState('');
   const [auditPage, setAuditPage] = useState(0);
   const [auditYear, setAuditYear] = useState(() => new Date().getUTCFullYear());
@@ -790,8 +798,8 @@ export function AdminDashboard({
     return collaboration.members
       .filter(
         (m) =>
-          (memberStatus === 'all' ||
-            (memberStatus === 'suspended'
+          m.uid !== DELETED_USER_ID && (memberStatus === 'all' ||
+            (memberStatus === 'deleted' ? isDeletedAccountProfile(m) : memberStatus === 'suspended'
               ? m.suspended
               : m.status === memberStatus)) &&
           [m.displayName, m.email, m.uid, m.phone, m.universityId].some(
@@ -1109,6 +1117,48 @@ export function AdminDashboard({
         ...current.auditLog,
       ],
     }));
+  }
+
+  async function removeRegistration(member: MemberProfile) {
+    if (!isRoot || member.uid === DELETED_USER_ID || !isDeletedAccountProfile(member) || registrationRemovalBusy.current) return;
+    registrationRemovalBusy.current = true;
+    try {
+      if (!(await confirmRegistrationRemoval({
+        title: 'Delete this registration record?',
+        description: 'This account has already been deleted. Its retained content will be transferred to the shared Deleted user identity, then this legacy account record will be permanently removed. Historical questions, reviews and audit evidence stay intact.',
+        confirmLabel: 'Delete record',
+        tone: 'destructive',
+      }))) return;
+      setRemovingRegistrationId(member.uid);
+      setRegistrationMessage('');
+      setRegistrationError('');
+      const result = await api<{ userId: string; audit?: AuditEntry }>(
+        '/platform/deleted-registration',
+        { method: 'DELETE', body: JSON.stringify({ userId: member.uid, confirmation: 'DELETE' }), expectedUserId: user.uid },
+      );
+      const latest = currentCollaboration.current;
+      replaceFromServer({
+        ...latest,
+        members: latest.members.filter(item => item.uid !== result.userId),
+        auditLog: result.audit && !latest.auditLog.some(entry => entry.id === result.audit!.id)
+          ? [result.audit, ...latest.auditLog] : latest.auditLog,
+      });
+      setRegistrationMessage('Legacy account removed. Its historical content now belongs to the shared Deleted user identity.');
+      setRefreshRevision(value => value + 1);
+      try {
+        const refreshed = await api<{ collaboration: CollaborationState }>('/collaboration', {
+          forceRefresh: true, cacheScope: user.uid, expectedUserId: user.uid, requestReason: 'explicit-refresh',
+        });
+        replaceFromServer(refreshed.collaboration);
+      } catch {
+        setRegistrationMessage('Account consolidated successfully. Refresh to update the historical content shown in this page.');
+      }
+    } catch (error) {
+      setRegistrationError(error instanceof Error ? error.message : 'Unable to remove this account record.');
+    } finally {
+      setRemovingRegistrationId('');
+      registrationRemovalBusy.current = false;
+    }
   }
 
   function toggleSuspended(member: MemberProfile) {
@@ -2053,6 +2103,7 @@ export function AdminDashboard({
                         'approved',
                         'rejected',
                         'suspended',
+                        ...(isRoot ? ['deleted'] : []),
                       ].map((status) => (
                         <option key={status} value={status}>
                           {status === 'all' ? 'All statuses' : status}
@@ -2064,6 +2115,8 @@ export function AdminDashboard({
                     {filteredMembers.length} matching members · Pending requests
                     appear first
                   </output>
+                  {registrationMessage && <output className="mt-3 block text-sm text-emerald-600 dark:text-emerald-300">{registrationMessage}</output>}
+                  {registrationError && <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-300">{registrationError}</p>}
                 </div>
                 {filteredMembers.length ? (
                   <div className="overflow-x-auto">
@@ -2132,7 +2185,9 @@ export function AdminDashboard({
                                 <strong className="block font-mono text-xs">
                                   {member.universityId}
                                 </strong>
-                                {member.role === 'super_admin' ? (
+                                {isDeletedAccountProfile(member) ? (
+                                  <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-1 text-xs font-bold text-muted-foreground">DELETED ACCOUNT</span>
+                                ) : member.role === 'super_admin' ? (
                                   <span className="mt-1 inline-flex rounded-full bg-primary/10 px-2 py-1 text-xs font-bold text-primary">
                                     SYSTEM ACCOUNT
                                   </span>
@@ -2218,6 +2273,11 @@ export function AdminDashboard({
                               )}
                               <td data-label="Actions" className="px-5 py-4">
                                 <div className="flex justify-end gap-2">
+                                  {isRoot && member.uid !== DELETED_USER_ID && isDeletedAccountProfile(member) && (
+                                    <button type="button" disabled={Boolean(removingRegistrationId)} onClick={() => void removeRegistration(member)} className="q-button q-button-danger">
+                                      <Trash2 className="size-4" /> {removingRegistrationId === member.uid ? 'Deleting…' : 'Delete record'}
+                                    </button>
+                                  )}
                                   {member.status === 'pending' && (
                                     <>
                                       <button
@@ -2961,6 +3021,7 @@ export function AdminDashboard({
         </div>
       </div>
       {qbankConfirmationDialog}
+      {registrationConfirmationDialog}
     </div>
   );
 }

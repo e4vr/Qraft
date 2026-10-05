@@ -2,6 +2,13 @@
 import { FormattedQuestionText } from '@/components/formatted-question-text';
 import { ExplanationImages } from '@/components/explanation-images';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
+import { ReviewFilters } from '@/components/review-filters';
+import {
+  matchesProposalFilters,
+  proposalEditKindLabel,
+  type ReportKindFilter,
+  type ReviewCategory,
+} from '@/features/contributions/domain/proposal-filters';
 
 /* oxlint-disable next/no-img-element */
 
@@ -207,7 +214,8 @@ export function ReviewWorkspace({
   embedded?: boolean;
 }) {
   const [section, setSection] = useState<'pending' | 'reviewed'>('pending');
-  const [category, setCategory] = useState<'all' | 'new' | 'edits' | 'duplicates'>('all');
+  const [category, setCategory] = useState<ReviewCategory>('all');
+  const [reportKind, setReportKind] = useState<ReportKindFilter>('all');
   const [duplicateSort, setDuplicateSort] = useState<'similarity' | 'newest' | 'oldest'>('similarity');
   const [duplicateNotes, setDuplicateNotes] = useState<Record<string, string>>({});
   const [scanProgress, setScanProgress] = useState<{ runId: string; cursor: number; status: 'running' | 'completed'; scanned: number; flagged: number }>();
@@ -380,12 +388,9 @@ export function ReviewWorkspace({
   );
   const visible = useMemo(() => {
     const source = section === 'pending' ? pending : reviewed;
-    const filtered = source.filter((proposal) =>
-      category === 'all' ? true
-        : category === 'new' ? proposal.type === 'new_question'
-          : category === 'edits' ? proposal.type === 'question_edit' && !proposalDuplicateCandidates(proposal).length
-            : proposalDuplicateCandidates(proposal).length > 0,
-    );
+    const filtered = source.filter((proposal) => matchesProposalFilters(
+      proposal, category, reportKind, proposalDuplicateCandidates(proposal).length > 0,
+    ));
     if (category !== 'duplicates') return filtered;
     return [...filtered].sort((left, right) => {
       if (duplicateSort === 'newest') return right.proposedAt.localeCompare(left.proposedAt);
@@ -394,7 +399,7 @@ export function ReviewWorkspace({
       const rightScore = Math.max(0, ...proposalDuplicateCandidates(right).map((item) => item.similarity));
       return rightScore - leftScore || right.proposedAt.localeCompare(left.proposedAt);
     });
-  }, [category, duplicateSort, pending, reviewed, section]);
+  }, [category, reportKind, duplicateSort, pending, reviewed, section]);
   const selectedProposals = useMemo(
     () =>
       bulkEligible.filter((proposal) => selectedProposalIds.includes(proposal.id)),
@@ -615,19 +620,15 @@ export function ReviewWorkspace({
             </button>
           )}
         </div>
-        <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border bg-card p-2">
-          {([
-            ['all', 'All'],
-            ['new', 'New questions'],
-            ['edits', 'Edits'],
-            ['duplicates', `Possible duplicates · ${pending.filter(isFlaggedDuplicate).length}`],
-          ] as const).map(([value, label]) => (
-            <button key={value} type="button" aria-pressed={category === value} onClick={() => setCategory(value)} className={cn('rounded-xl px-3 py-2 text-sm font-bold', category === value ? 'bg-primary text-primary-foreground' : 'hover:bg-muted')}>
-              {value === 'duplicates' && <ScanSearch className="mr-1 inline size-4" />}{label}
-            </button>
-          ))}
-          {category === 'duplicates' && (
-            <label className="ml-auto flex items-center gap-2 text-xs font-bold text-muted-foreground">
+        <ReviewFilters
+          category={category}
+          onCategoryChange={setCategory}
+          kind={reportKind}
+          onKindChange={setReportKind}
+          duplicateCount={(section === 'pending' ? pending : reviewed).filter((proposal) => matchesProposalFilters(proposal, 'duplicates', reportKind, proposalDuplicateCandidates(proposal).length > 0)).length}
+        >
+          {category === 'duplicates' ? <>
+            <label className="flex items-center gap-2 text-xs font-bold text-muted-foreground">
               Sort
               <select value={duplicateSort} onChange={(event) => setDuplicateSort(event.target.value as typeof duplicateSort)} className="h-9 rounded-lg border bg-background px-2 text-sm text-foreground">
                 <option value="similarity">Highest similarity</option>
@@ -635,14 +636,14 @@ export function ReviewWorkspace({
                 <option value="oldest">Oldest</option>
               </select>
             </label>
-          )}
-          {category === 'duplicates' && activeQBankId && (
-            <button type="button" disabled={scanBusy} onClick={() => void scanExistingQuestions()} className="q-button q-button-secondary">
-              <ScanSearch className="size-4" />
-              {scanBusy ? 'Scanning…' : scanProgress?.status === 'running' ? `Scan next batch · ${scanProgress.cursor} checked` : scanProgress?.status === 'completed' ? `Rescan existing QBank · last found ${scanProgress.flagged}` : 'Scan existing QBank'}
-            </button>
-          )}
-        </div>
+            {activeQBankId && (
+              <button type="button" disabled={scanBusy} onClick={() => void scanExistingQuestions()} className="q-button q-button-secondary">
+                <ScanSearch className="size-4" />
+                {scanBusy ? 'Scanning…' : scanProgress?.status === 'running' ? `Scan next batch · ${scanProgress.cursor} checked` : scanProgress?.status === 'completed' ? `Rescan existing QBank · last found ${scanProgress.flagged}` : 'Scan existing QBank'}
+              </button>
+            )}
+          </> : null}
+        </ReviewFilters>
         {section === 'pending' && bulkEligible.length > 0 && (
           <section className="mb-5 overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-card to-violet-500/5 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-4 border-b border-primary/15 p-4 sm:p-5">
@@ -873,7 +874,7 @@ export function ReviewWorkspace({
                         key={kind}
                         className="rounded-full bg-muted px-2.5 py-1 text-xs font-bold"
                       >
-                        {kind.replaceAll('_', ' ')}
+                        {proposalEditKindLabel(kind)}
                       </span>
                     ))}
                     {duplicateCandidates.length > 0 && (
@@ -1046,9 +1047,11 @@ export function ReviewWorkspace({
             <div className="grid min-h-64 place-items-center rounded-2xl bg-card text-sm text-muted-foreground ring-1 ring-border">
               <div className="text-center">
                 <FileCheck2 className="mx-auto mb-3 size-9 text-emerald-500" />
-                {section === 'pending'
-                  ? 'No new questions are waiting for review.'
-                  : 'No reviewed questions yet.'}
+                {category !== 'all' || reportKind !== 'all'
+                  ? 'No requests match these filters.'
+                  : section === 'pending'
+                    ? 'No requests are waiting for review.'
+                    : 'No reviewed questions yet.'}
               </div>
             </div>
           )}

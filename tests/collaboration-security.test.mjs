@@ -753,7 +753,7 @@ void test('QBank library uses Superadmin folders, personal shortcuts, and bookma
   assert.match(workspace, /Shared with me/);
   assert.match(workspace, /Public QBanks/);
   assert.match(workspace, /Quick Access QBanks/);
-  assert.match(workspace, /Start test/);
+  assert.match(workspace, /<BookmarkLibrary/);
   assert.match(workspace, /toggleList\('favoriteIds'/);
   assert.match(workspace, /toggleList\('pinnedIds'/);
   assert.match(workspace, /draggable=\{sortable && !coarsePointer\}/);
