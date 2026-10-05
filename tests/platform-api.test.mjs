@@ -1,3 +1,4 @@
+import { seedFullAccess } from './access-fixtures.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { preproductionApiTests } from './preproduction-api.mjs';
@@ -215,6 +216,7 @@ print(json.dumps(out))`,
       )
       .run();
   }
+  for (const uid of ['monthly','monthly-limit','monthly-pending','quarterly']) await seedFullAccess(db, uid, uid === 'quarterly' ? 'full_quarterly' : 'full_monthly');
   const call = async (uid, path, body, method = body ? 'POST' : 'GET', { withBaseValues = true } = {}) => {
     // Model the snapshot carried by current clients. Security/concurrency tests
     // can opt out to exercise missing or explicitly stale preconditions.
@@ -308,139 +310,13 @@ print(json.dumps(out))`,
   await collaborationDeltaApiTests(t, { db, call, mf });
   await classificationCleanupApiTests(t, { db, call });
   await accessRevocationApiTests(t, { db, call });
-  await t.test(
-    'Superadmin paid assignments keep their priority; revocation preserves history and allows new gifts',
-    async () => {
-      const uid = 'override-member',
-        now = new Date().toISOString(),
-        future = new Date(Date.now() + 86400000 * 365).toISOString();
-      await db
-        .prepare(
-          "UPDATE profiles SET profile_json=json_set(profile_json,'$.tier','full_quarterly') WHERE uid=?",
-        )
-        .bind(uid)
-        .run();
-      await db
-        .prepare(
-          "INSERT INTO subscriptions(user_id,status,method,paid,updated_at,plan,expires_at) VALUES(?,'active','manual',9900,?,'full_quarterly',?)",
-        )
-        .bind(uid, now, future)
-        .run();
-      await db
-        .prepare(
-          "INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,expires_at,source) VALUES('override-gift',?,'full_quarterly',1,'year','active',?,?,'admin')",
-        )
-        .bind(uid, now, future)
-        .run();
-      await db
-        .prepare(
-          "INSERT INTO admin_plan_entitlements(id,user_id,plan,reason,granted_by,created_at) VALUES('override-old-admin',?,'full_quarterly','test','admin',?)",
-        )
-        .bind(uid, now)
-        .run();
-      for (const role of ['free', 'moderator', 'access'])
-        assert.equal(
-          (
-            await call(role, '/platform/subscriptions', {
-              operation: 'override',
-              userId: uid,
-              plan: 'free',
-            })
-          ).status,
-          403,
-        );
-      for (const plan of ['free', 'full_monthly', 'full_quarterly', 'free']) {
-        const changed = await call('admin', '/platform/subscriptions', {
-          operation: 'override',
-          userId: uid,
-          plan,
-          expires_at: null,
-          reason: 'Explicit admin assignment',
-        });
-        assert.equal(changed.status, 200, JSON.stringify(changed.data));
-        assert.equal(changed.data.effectivePlan, plan);
-        const session = await call(uid, '/auth/session');
-        assert.equal(session.data.user.tier, plan);
-        assert.equal(session.data.user.adminOverridePlan, plan === 'free' ? null : plan);
-        const listing = await call(
-          'admin',
-          `/platform/subscriptions?search=${uid}&status=${plan}`,
-        );
-        assert.equal(listing.data.subscriptions[0].tier, plan);
-        assert.equal(listing.data.summary.total, 1);
-        assert.equal(listing.data.subscriptions[0].override_plan, plan === 'free' ? null : plan);
-      }
-      assert.equal(
-        (
-          await call('admin', '/platform/subscriptions', {
-            operation: 'override',
-            userId: uid,
-            plan: 'invalid',
-          })
-        ).status,
-        400,
-      );
-      assert.equal(
-        (
-          await call('admin', '/platform/subscriptions', {
-            operation: 'override',
-            userId: uid,
-            plan: 'full_monthly',
-            expires_at: '2020-01-01',
-          })
-        ).status,
-        400,
-      );
-      assert.equal((await call(uid, '/auth/session')).data.user.tier, 'free');
-      // A gift activated after revocation is a new grant; earlier grants stay revoked.
-      await db
-        .prepare(
-          "INSERT INTO reward_passes(id,user_id,plan,duration,duration_unit,status,created_at,source) VALUES('override-new-gift',?,'full_quarterly',1,'year','available',?,'admin')",
-        )
-        .bind(uid, now)
-        .run();
-      const gift = await call(uid, '/platform/rewards', {
-        operation: 'activate',
-        passId: 'override-new-gift',
-      });
-      assert.equal(gift.status, 200, JSON.stringify(gift.data));
-      assert.equal((await call(uid, '/auth/session')).data.user.tier, 'full_quarterly');
-      const billing = await db
-        .prepare('SELECT plan,paid FROM subscriptions WHERE user_id=?')
-        .bind(uid)
-        .first();
-      assert.equal(billing.plan, 'full_quarterly');
-      assert.equal(billing.paid, 9900);
-      assert.equal(
-        (
-          await db
-            .prepare(
-              "SELECT status FROM reward_passes WHERE id='override-gift'",
-            )
-            .first()
-        ).status,
-        'active',
-      );
-      const logged = await db
-        .prepare(
-          "SELECT count(*) AS n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='subscription_plan_overridden' AND json_extract(payload,'$.entityId')=?",
-        )
-        .bind(uid)
-        .first();
-      assert.equal(logged.n, 4);
-      await db
-        .prepare(
-          "UPDATE account_plan_overrides SET expires_at='2020-01-01' WHERE user_id=?",
-        )
-        .bind(uid)
-        .run();
-      assert.equal(
-        (await call(uid, '/auth/session')).data.user.tier,
-        'full_quarterly',
-      );
-    },
-  );
-
+  await t.test('Legacy subscription administration is retired and raw tiers cannot grant access', async () => {
+    const uid='override-member';
+    await db.prepare("UPDATE profiles SET profile_json=json_set(profile_json,'$.tier','full_quarterly') WHERE uid=?").bind(uid).run();
+    assert.equal((await call(uid,'/auth/session')).data.user.tier,'free');
+    assert.equal((await call('admin','/platform/subscriptions',{userId:uid,plan:'full_monthly'})).status,410);
+    for(const actor of ['free','moderator','access']) assert.equal((await call(actor,'/platform/access-admin',{operation:'grant',userId:uid})).status,403);
+  });
   await t.test(
     'Discount search and usage history use independent server pagination',
     async () => {
@@ -534,27 +410,12 @@ print(json.dumps(out))`,
         expires_at: '2029-12-31T12:00:00.000Z',
       });
 
-      const subscription = await call('admin', '/platform/subscriptions', {
-        operation: 'activate',
-        userId: 'manual-member',
-        plan: 'full_monthly',
-        expires_at: 'Wed, 02 Jan 2030 00:00:00 GMT',
-        paid: 5000,
-      });
-      assert.equal(subscription.status, 200, JSON.stringify(subscription));
-      assert.equal(
-        (
-          await db
-            .prepare('SELECT expires_at FROM subscriptions WHERE user_id=?')
-            .bind('manual-member')
-            .first()
-        ).expires_at,
-        '2030-01-02T00:00:00.000Z',
-      );
-      await db.batch([
-        db.prepare('DELETE FROM discount_codes WHERE id=?').bind(couponId),
-        db.prepare("DELETE FROM subscriptions WHERE user_id='manual-member'"),
-      ]);
+      const subscription = await call('admin', '/platform/access-admin', { operation:'grant',userId:'manual-member',requestId:randomUUID(),duration:1,unit:'month',label:'Date fixture',paid:5000 });
+      assert.equal(subscription.status,200,JSON.stringify(subscription));
+      assert.equal(new Date(subscription.data.expiresAt).toISOString(),subscription.data.expiresAt);
+      await db.prepare('DELETE FROM discount_codes WHERE id=?').bind(couponId).run();
+      await db.prepare("DELETE FROM access_grants WHERE user_id='manual-member'").run();
+
     },
   );
 
@@ -951,43 +812,19 @@ print(json.dumps(out))`,
       assert.equal(blocked.status, 201);
     },
   );
-  await t.test('Free redemption is atomic and idempotent', async () => {
-    codeId = randomUUID();
-    assert.equal(
-      (
-        await call('admin', '/platform/discounts', {
-          id: codeId,
-          code: 'FREE',
-          kind: 'percent',
-          amount: 100,
-          enabled: true,
-          max_uses: 1,
-          per_user: 1,
-        })
-      ).status,
-      200,
-    );
-    const quote = await call('trial', '/platform/quote', { code: 'FREE' });
-    assert.equal(quote.data.final, 0);
-    const requestId = randomUUID();
-    const first = await call('trial', '/platform/checkout', {
-      code: 'FREE',
-      requestId,
-    });
-    assert.equal(first.data.upgraded, true, JSON.stringify(first));
-    assert.equal(
-      (await call('trial', '/platform/checkout', { code: 'FREE', requestId }))
-        .data.upgraded,
-      true,
-    );
-    assert.equal(
-      (await call('other', '/platform/quote', { code: 'FREE' })).status,
-      400,
-    );
-    assert.equal((await call('trial', '/auth/session')).data.user.tier, 'full_monthly');
+  await t.test('Fully discounted requests remain manual, and only confirmed activation consumes the coupon', async () => {
+    codeId=randomUUID();
+    assert.equal((await call('admin','/platform/discounts',{id:codeId,code:'FREE',kind:'percent',amount:100,enabled:true,max_uses:1,per_user:1})).status,200);
+    assert.equal((await call('trial','/platform/quote',{code:'FREE'})).data.final,0);
+    const requestId=randomUUID(), request=await call('trial','/platform/checkout',{code:'FREE',requestId,acceptedTerms:true}); assert.equal(request.status,200); assert.match(request.data.url,/wa.me/);
+    assert.equal((await call('trial','/auth/session')).data.user.tier,'free');
+    const activation=await call('admin','/platform/access-admin',{operation:'grant',userId:'trial',requestId,duration:1,unit:'month',label:'Manual promotion',paid:0,discountCode:'FREE'}); assert.equal(activation.status,200,JSON.stringify(activation));
+    assert.equal((await call('admin','/platform/access-admin',{operation:'grant',userId:'trial',requestId,duration:1,unit:'month',label:'Manual promotion',paid:0,discountCode:'FREE'})).data.duplicate,true);
+    assert.equal((await call('other','/platform/quote',{code:'FREE'})).status,400);
+    assert.equal((await call('trial','/auth/session')).data.user.tier,'full_monthly');
   });
   await t.test(
-    'Credit rewards are atomic, activate separately, and fall back to the paid plan',
+    'Credit rewards are atomic, activate separately, and extend the paid period',
     async () => {
       const adjustment = await call('admin', '/platform/economy-admin', {
         operation: 'adjust-credits',
@@ -1024,26 +861,12 @@ print(json.dumps(out))`,
         passId: redemption.data.pass.id,
       });
       assert.equal(activation.status, 200, JSON.stringify(activation));
-      assert.equal(activation.data.effectivePlan, 'full_quarterly');
-      const paid = await db
-        .prepare('SELECT plan,status FROM subscriptions WHERE user_id=?')
-        .bind('trial')
-        .first();
-      assert.deepEqual(paid, { plan: 'full_monthly', status: 'active' });
-      await db
-        .prepare(
-          "UPDATE reward_passes SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
-        )
-        .bind(redemption.data.pass.id)
-        .run();
-      assert.equal((await call('trial', '/auth/session')).data.user.tier, 'full_monthly');
-      assert.deepEqual(
-        await db
-          .prepare('SELECT plan,status FROM subscriptions WHERE user_id=?')
-          .bind('trial')
-          .first(),
-        paid,
-      );
+      assert.equal(activation.data.effectivePlan, 'full_monthly');
+      const paid=await db.prepare("SELECT id,expires_at FROM access_grants WHERE user_id='trial' AND source='manual'").first();
+      const reward=await db.prepare("SELECT starts_at FROM access_grants WHERE source='reward' AND source_id=?").bind(redemption.data.pass.id).first(); assert.equal(reward.starts_at,paid.expires_at);
+      await db.prepare("UPDATE access_grants SET expires_at='2000-01-01T00:00:00.000Z' WHERE source='reward' AND source_id=?").bind(redemption.data.pass.id).run();
+      assert.equal((await call('trial','/auth/session')).data.user.tier,'full_monthly');
+
     },
   );
   await t.test(
@@ -3389,7 +3212,7 @@ print(json.dumps(out))`,
   await t.test('Expired Full Access returns to Free trial and expiry is audited', async () => {
     await db
       .prepare(
-        "UPDATE subscriptions SET starts_at='2019-01-01T00:00:00.000Z', expires_at='2020-01-01T00:00:00.000Z' WHERE user_id='trial'",
+        "UPDATE access_grants SET starts_at='2019-01-01T00:00:00.000Z', expires_at='2020-01-01T00:00:00.000Z' WHERE user_id='trial'",
       )
       .run();
     assert.equal((await call('trial', '/auth/session')).data.user.tier, 'free');
@@ -3397,7 +3220,7 @@ print(json.dumps(out))`,
       (
         await db
           .prepare(
-            "SELECT count(*) AS n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='subscription_expired'",
+            "SELECT count(*) AS n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='access_expired'",
           )
           .first()
       ).n,
@@ -3413,11 +3236,11 @@ print(json.dumps(out))`,
       (
         await db
           .prepare(
-            "SELECT count(*) AS n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='subscription_expired'",
+            "SELECT count(*) AS n FROM records WHERE type='auditLog' AND json_extract(payload,'$.action')='access_expired'",
           )
           .first()
       ).n,
-      1,
+      2,
     );
   });
   await t.test('refund policy defaults, Superadmin updates and legacy saves preserve the configured link', async () => {

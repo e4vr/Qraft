@@ -72,6 +72,7 @@ function mutationTags(path: string, body: BodyInit | null | undefined) {
   if (path === '/platform/deleted-registration') { tags.add('collaboration'); tags.add('audit'); }
   if (path === '/platform/registration-policy') { tags.add('registration-policy'); tags.add('audit'); }
   if (path.startsWith('/platform/subscriptions') || path.startsWith('/platform/checkout')) { tags.add('subscriptions'); tags.add('account'); }
+  if (['/platform/access-admin', '/platform/activation-codes', '/platform/activation-code'].includes(path)) { tags.add('subscriptions'); tags.add('account'); tags.add('contributions'); tags.add('economy'); }
   if (path.startsWith('/platform/rewards')) {
     tags.add('contributions');
     tags.add('economy');

@@ -865,7 +865,7 @@ export async function saveState(request: Request) {
       updated_at: string;
     }>();
   const storedState = storedStateRow
-    ? (JSON.parse(storedStateRow.payload) as AppState)
+    ? await cleanDeletedState(JSON.parse(storedStateRow.payload) as AppState)
     : undefined;
   const currentRevision = storedStateRow?.revision ?? 0;
   const alreadyApplied = await env.DB.prepare(
@@ -1035,6 +1035,14 @@ export async function saveState(request: Request) {
       { error: 'Duplicate imported flashcards are not allowed.' },
       409,
     );
+  if (!planLimits.canUseFlashcards && storedState && (
+    !sameJson(flashcardDecks, storedState.flashcardDecks ?? []) ||
+    !sameJson(flashcards, storedState.flashcards ?? []) ||
+    !sameJson(flashcardSchedules, storedState.flashcardSchedules ?? {}) ||
+    !sameJson(flashcardReviewLog, storedState.flashcardReviewLog ?? [])))
+    return json({ error: 'Flashcards require active Full Access.', code: 'ACCESS_EXPIRED' }, 403);
+  if (!planLimits.canUseFlashcards && !storedState && (flashcardDecks.length || flashcards.length))
+    return json({ error: 'Flashcards require active Full Access.', code: 'ACCESS_EXPIRED' }, 403);
   const oldDeckCount = storedState?.flashcardDecks?.length ?? 0;
   const oldCardCount = storedState?.flashcards?.length ?? 0;
   if (
@@ -1087,14 +1095,37 @@ export async function saveState(request: Request) {
       { 'x-qraft-unchanged': '1' },
     );
   const oldTests = await env.DB.prepare(
-    'SELECT test_id,question_count,started_at FROM test_registry WHERE user_id=?',
+    `SELECT test_id,question_count,started_at,plan_at_start,
+      CASE WHEN question_ids_json IS NULL THEN NULL ELSE
+       (SELECT json_group_array(q.value) FROM json_each(question_ids_json) q
+        WHERE NOT EXISTS(SELECT 1 FROM retired_questions r WHERE r.id=q.value)) END AS question_ids_json
+      FROM test_registry WHERE user_id=?`,
   )
     .bind(user.uid)
     .all<{
       test_id: string;
       question_count: number;
       started_at: string | null;
+      plan_at_start: string;
+      question_ids_json: string | null;
     }>();
+  if (effectivePlan === 'free') {
+    const paidIds = new Set(oldTests.results.filter(test => test.plan_at_start !== 'free').map(test => test.test_id));
+    const previousTests = new Map(storedState?.tests.map(test => [test.id, test]) ?? []);
+    if (input.state.tests.some(test => paidIds.has(test.id) && !sameJson(test, previousTests.get(test.id))))
+      return json({ error: 'This test requires active Full Access.', code: 'ACCESS_EXPIRED' }, 403);
+    if (input.state.tests.some(test => test.questionIds.length > planLimits.maxQuestionsPerExam && !sameJson(test, previousTests.get(test.id))))
+      return json({ error: 'This test requires active Full Access.', code: 'ACCESS_EXPIRED' }, 403);
+    const paidQuestions = new Set(storedState?.tests.filter(test => paidIds.has(test.id) || test.questionIds.length > planLimits.maxQuestionsPerExam).flatMap(test => test.questionIds));
+    const trialQuestions = new Set(input.state.tests.filter(test => !paidIds.has(test.id) && test.questionIds.length <= planLimits.maxQuestionsPerExam).flatMap(test => test.questionIds));
+    if (Object.entries(input.state.progress).some(([id, progress]) => paidQuestions.has(id) && !trialQuestions.has(id) && (
+      (progress.attempts ?? 0) !== (storedState?.progress[id]?.attempts ?? 0) || (progress.correctAttempts ?? 0) !== (storedState?.progress[id]?.correctAttempts ?? 0) || progress.lastAnswer !== storedState?.progress[id]?.lastAnswer)))
+      return json({ error: 'Studying this test requires active Full Access.', code: 'ACCESS_EXPIRED' }, 403);
+  }
+  const previousQuestions = new Map(oldTests.results.filter(test => test.question_ids_json !== null).map(test => [test.test_id, JSON.parse(test.question_ids_json!) as string[]]));
+  for (const test of storedState?.tests ?? []) if (!previousQuestions.has(test.id)) previousQuestions.set(test.id, test.questionIds);
+  if (input.state.tests.some(test => previousQuestions.has(test.id) && !sameJson(test.questionIds, previousQuestions.get(test.id))))
+    return json({ error: 'The questions of an existing test cannot be replaced. Create a new test.', code: 'EXAM_CONTENT_CHANGED' }, 409);
   const known = new Map(
     oldTests.results.map((t) => [t.test_id, t.question_count]),
   );
@@ -1134,8 +1165,9 @@ export async function saveState(request: Request) {
   try {
     await env.DB.batch([
       env.DB.prepare(
-        "INSERT OR IGNORE INTO test_registry(user_id,test_id,question_count,started_at) SELECT ?,json_extract(value,'$.id'),json_array_length(value,'$.questionIds'),coalesce(json_extract(value,'$.startedAt'),?) FROM json_each(?)",
-      ).bind(user.uid, now, JSON.stringify(input.state.tests)),
+        "INSERT OR IGNORE INTO test_registry(user_id,test_id,question_count,started_at,plan_at_start,question_ids_json) SELECT ?,json_extract(value,'$.id'),json_array_length(value,'$.questionIds'),coalesce(json_extract(value,'$.startedAt'),?),?,json_extract(value,'$.questionIds') FROM json_each(?)",
+      ).bind(user.uid, now, effectivePlan, JSON.stringify(input.state.tests)),
+      env.DB.prepare("UPDATE test_registry SET question_ids_json=(SELECT json_extract(value,'$.questionIds') FROM json_each(?) WHERE json_extract(value,'$.id')=test_id) WHERE user_id=? AND question_ids_json IS NULL").bind(JSON.stringify(input.state.tests), user.uid),
       env.DB.prepare(
         'INSERT INTO app_states (user_id,payload,updated_at,revision,last_operation_id) VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at,revision=excluded.revision,last_operation_id=excluded.last_operation_id',
       ).bind(

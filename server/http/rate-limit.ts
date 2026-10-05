@@ -41,6 +41,8 @@ export async function enforceRequestLimits(
       ipKey,
       'Too many authentication attempts. Try again in one minute.',
     );
+  if (scope === 'platform' && action === 'activation-code' && request.method === 'POST')
+    await consume(bindings.AUTH_RATE_LIMITER, `activation:${ipKey}`, 'Too many activation attempts. Try again in one minute.');
   // The identity comes only from a verified server session. Cookie values and
   // client-supplied user IDs must never create arbitrary rate-limit buckets.
   const user =

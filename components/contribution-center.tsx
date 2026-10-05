@@ -209,7 +209,7 @@ export function ContributionCenter({
         setApiCache(contributionPath, next, { cacheScope: userId });
         return next;
       });
-      setMessage('Reward Pass activated. Your effective plan has been refreshed.');
+      setMessage(result.pass.status === 'scheduled' ? 'Reward activated. Its duration is added after your current access.' : result.pass.status === 'active' ? 'Reward Pass activated. Your access has been refreshed.' : 'This reward was already activated. Its current status is shown in your wallet.');
       onEntitlementChange(result.user);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to activate this reward.');
@@ -309,7 +309,7 @@ export function ContributionCenter({
                     <div className="flex items-center gap-3">
                       <div className="min-w-0 flex-1">
                         <strong>{rewardLabel(pass)}</strong>
-                        <p className="mt-1 text-xs uppercase text-muted-foreground">{pass.status}{pass.expires_at ? ` · until ${new Date(pass.expires_at).toLocaleDateString()}` : ''}</p>
+                        <p className="mt-1 text-xs uppercase text-muted-foreground">{pass.status}{pass.status === 'scheduled' && pass.starts_at ? ` · starts ${new Date(pass.starts_at).toLocaleDateString()}` : ''}{pass.expires_at ? ` · until ${new Date(pass.expires_at).toLocaleDateString()}` : ''}</p>
                       </div>
                       {pass.status === 'available' && (
                         <button className="q-button border" disabled={busy !== ''} onClick={() => void activate(pass.id)}><Play className="size-4" />Activate Now</button>

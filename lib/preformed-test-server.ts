@@ -484,6 +484,7 @@ export async function preformedTestApi(request: Request, action: string) {
     }
 
     if (action === 'save' && request.method === 'PUT') {
+      if (approved(user) && !canCreate(user)) return json({ error: 'Editing Ready Tests requires active Full Access.', code: 'ACCESS_EXPIRED' }, 403);
       if (!approved(user))
         return json({ error: 'Sign in to edit tests.' }, 401);
       const input = await readJson<{
@@ -587,6 +588,7 @@ export async function preformedTestApi(request: Request, action: string) {
     }
 
     if (action === 'rotate-code' && request.method === 'POST') {
+      if (approved(user) && !canCreate(user)) return json({ error: 'Editing Ready Tests requires active Full Access.', code: 'ACCESS_EXPIRED' }, 403);
       if (!approved(user)) return json({ error: 'Sign in required.' }, 401);
       const input = await readJson<{ id?: string }>(request);
       const row = await rowById(input.id ?? '');

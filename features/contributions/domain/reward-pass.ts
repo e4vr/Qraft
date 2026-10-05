@@ -10,9 +10,10 @@ export type RewardPass = {
   duration: number;
   duration_unit: 'month' | 'year';
   duration_days?: number | null;
-  status: 'available' | 'active' | 'used' | 'expired' | 'cancelled';
+  status: 'available' | 'active' | 'scheduled' | 'used' | 'expired' | 'cancelled';
   created_at: string;
   activated_at: string | null;
+  starts_at?: string | null;
   expires_at: string | null;
   source: string;
 };

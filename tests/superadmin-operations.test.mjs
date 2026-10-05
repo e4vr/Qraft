@@ -203,7 +203,7 @@ void test('superadmin operations enforce authorization, money, maintenance and b
     },
   );
   await t.test(
-    'fractional plan prices feed quote and the atomic discount trigger',
+    'fractional plan prices feed quotes and manual discount confirmation',
     async () => {
       const prices = {
         plans: [
@@ -241,14 +241,9 @@ void test('superadmin operations enforce authorization, money, maintenance and b
         )
         .bind(now)
         .run();
-      const checkout = await call('member', '/platform/checkout', {
-        plan: 'full_quarterly',
-        code: 'TESTFREE',
-        requestId: randomUUID(),
-      });
-      assert.equal(checkout.status, 200);
-      assert.equal(checkout.data.upgraded, true);
-      const paid = await db.prepare("SELECT starts_at,expires_at FROM subscriptions WHERE user_id='member'").first();
+      const checkout = await call('admin','/platform/access-admin',{operation:'grant',userId:'member',duration:3,unit:'month',paid:0,label:'Manual coupon',discountCode:'TESTFREE',requestId:randomUUID()});
+      assert.equal(checkout.status,200,JSON.stringify(checkout));
+      const paid=await db.prepare("SELECT starts_at,expires_at FROM access_grants WHERE user_id='member'").first();
       const calendarEnd = new Date(paid.starts_at);
       const day = calendarEnd.getUTCDate();
       calendarEnd.setUTCDate(1);
@@ -401,7 +396,7 @@ void test('superadmin operations enforce authorization, money, maintenance and b
       assert.equal(activation.status, 200);
       assert.equal(
         Date.parse(activation.data.pass.expires_at) -
-          Date.parse(activation.data.pass.activated_at),
+          Date.parse(activation.data.startsAt),
         9 * 86400000,
       );
     },

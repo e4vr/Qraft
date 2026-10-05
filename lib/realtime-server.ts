@@ -163,8 +163,9 @@ export async function notifyMutation(request: Request, response?: Response) {
     topics.add('review-history');
   } else if (path[0] === 'platform' && ['discounts','plan-pricing'].includes(path[1])) {
     topics.add('pricing'); topics.add('discounts'); channels.add('catalog');
-  } else if (path[0] === 'platform' && path[1] === 'subscriptions') {
+  } else if (path[0] === 'platform' && ['subscriptions', 'access-admin', 'activation-codes', 'activation-code'].includes(path[1])) {
     topics.add('account'); topics.add('subscriptions'); channels.add('access');
+    topics.add('contributions'); topics.add('economy');
   } else if (path[0] === 'platform' && path[1] === 'announcement') {
     topics.add('announcement'); channels.add('catalog');
   } else if (path[0] === 'platform' && path[1] === 'community-links') {

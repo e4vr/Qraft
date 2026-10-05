@@ -1,21 +1,20 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { SubscriptionManager } from '@/components/subscription-manager';
+import { SubscriptionAccess } from '@/components/subscription-access';
 import { SubscriptionLegalConsent } from '@/components/subscription-legal-consent';
-import { addCalendarDuration } from '@/features/subscriptions/domain/calendar-duration';
 import { subscribeLive } from '@/lib/realtime-client';
-import { Check, Crown, Eye, X, Search, Ticket, Users, ShieldCheck, Pencil, Plus, ChevronLeft, ChevronRight, History, SlidersHorizontal } from 'lucide-react';
-import { api, setApiCache } from '@/lib/api-client';
+import { Check, Crown, Eye, X } from 'lucide-react';
+import { api } from '@/lib/api-client';
 import { DEFAULT_LEGAL_LINKS, type LegalLinks } from '@/lib/legal-links';
 import { setAuthenticatedUserCache } from '@/lib/application-services';
 import type { AppUser } from '@/lib/medguard-types';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import { useConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import {
   PLAN_LIMITS,
   PLAN_ORDER,
   PAID_PLAN_IDS,
-  PLAN_DURATION_MONTHS,
   planDurationLabel,
   type PlanId,
 } from '@/features/subscriptions/domain/plan-config';
@@ -41,13 +40,6 @@ type Quote = {
   code: string;
   percent: number | null;
   plan: PlanId;
-};
-const localDateTime = (value: string | null) => {
-  if (!value) return '';
-  const date = new Date(value);
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-    .toISOString()
-    .slice(0, 16);
 };
 const sar = (cents: number) =>
   `${(cents / 100).toLocaleString('en', { maximumFractionDigits: 2 })} SAR`;
@@ -203,6 +195,7 @@ export function Subscribe({
   }
   return (
     <section className="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-7">
+      <SubscriptionAccess key={user.uid} user={user} onUser={onUser} />
       <div>
         <Crown className="mb-3 size-9 text-amber-500" />
         <h1 className="text-2xl font-bold sm:text-3xl">
@@ -398,9 +391,7 @@ export function Subscribe({
               : 'Subscribe now'}
         </button>
         <p className="q-subscription-payment-note mt-3 text-xs text-muted-foreground">
-          {currentPrice?.final === 0
-            ? `${catalogLimits(selectedPlan).name} activates immediately after you confirm the subscription.`
-            : 'Subscription requests open EduStack WhatsApp. Paid activation is confirmed by the administrator.'}
+          Subscription requests open EduStack WhatsApp. Activation is confirmed by the administrator, including fully discounted requests.
         </p>
       </div>
     </section>
@@ -429,443 +420,6 @@ export function UpgradeDialog({
   );
 }
 
-type Code = {
-  id: string;
-  code: string;
-  kind: string;
-  amount: number;
-  enabled: number;
-  starts_at: string | null;
-  expires_at: string | null;
-  max_uses: number | null;
-  per_user: number | null;
-  uses: number;
-  allowed_plans: string;
-};
-type Subscription = {
-  uid: string;
-  email: string;
-  name: string;
-  tier: PlanId;
-  override_plan: PlanId | null;
-  override_expires_at: string | null;
-  override_reason: string | null;
-  access_revision?: number;
-  access_revoked_at?: string | null;
-  effective_expires_at?: string | null;
-  reward_plan: PlanId | null;
-  status: string | null;
-  starts_at: string | null;
-  expires_at: string | null;
-  method: string | null;
-  discount_code: string | null;
-  paid: number | null;
-  plan: PlanId | null;
-};
-type Usage = {
-  id: string;
-  user_id: string;
-  email: string;
-  name: string;
-  code: string;
-  original: number;
-  discount: number;
-  final: number;
-  status: string;
-  created_at: string;
-  starts_at: string;
-  expires_at: string;
-  detail: string;
-};
-const emptyCode: Code = {
-  id: '',
-  code: '',
-  kind: 'percent',
-  amount: 100,
-  enabled: 1,
-  starts_at: null,
-  expires_at: null,
-  max_uses: null,
-  per_user: 1,
-  uses: 0,
-  allowed_plans: '["full_monthly","full_quarterly"]',
-};
-const codeSignature = (code: Code) => JSON.stringify({
-  id: code.id,
-  code: code.code.trim().toUpperCase(),
-  kind: code.kind,
-  amount: code.amount,
-  enabled: Boolean(code.enabled),
-  starts_at: code.starts_at,
-  expires_at: code.expires_at,
-  max_uses: code.max_uses,
-  per_user: code.per_user,
-  allowedPlans: [...(JSON.parse(code.allowed_plans || '[]') as string[])].sort(),
-});
-export function SubscriptionAdmin({
-  section,
-}: {
-  section: 'discounts' | 'subscriptions';
-}) {
-  const [today] = useState(() => Date.now());
-  const [extensionDays, setExtensionDays] = useState('30');
-  const [confirmAction, confirmationDialog] = useConfirmationDialog();
-  const [codes, setCodes] = useState<Code[]>([]),
-    [subscriptions, setSubscriptions] = useState<Subscription[]>([]),
-    [events, setEvents] = useState<Usage[]>([]),
-    [draft, setDraft] = useState<Code>(emptyCode),
-    [originalCode, setOriginalCode] = useState<Code | null>(null),
-    [editing, setEditing] = useState(false),
-    [selected, setSelected] = useState<Subscription>(),
-    [end, setEnd] = useState(''),
-    [paid, setPaid] = useState('0'),
-    [manualCode, setManualCode] = useState(''),
-    [manualPlan, setManualPlan] = useState<PlanId>('full_monthly'),
-    [noExpiration, setNoExpiration] = useState(true),
-    [reason, setReason] = useState(''),
-    [planDrafts, setPlanDrafts] = useState<Record<string, PlanId>>({}),
-    [saving, setSaving] = useState(false),
-    [summary, setSummary] = useState<Record<string, number>>({}),
-    [usageOffset, setUsageOffset] = useState(0),
-    [search, setSearch] = useState(''),
-    [status, setStatus] = useState(''),
-    [sort, setSort] = useState('expiration'),
-    [offset, setOffset] = useState(0),
-    [usageCode, setUsageCode] = useState(''),
-    [error, setError] = useState(''),
-    [message, setMessage] = useState(''),
-    [busy, setBusy] = useState(false),
-    [revision, setRevision] = useState(0);
-  const queryPath = section === 'discounts'
-    ? `/platform/discounts?search=${encodeURIComponent(search.trim())}&status=${status}&offset=${offset}&id=${encodeURIComponent(usageCode)}&usageOffset=${usageOffset}`
-    : `/platform/subscriptions?search=${encodeURIComponent(search.trim())}&status=${status}&sort=${sort}&offset=${offset}`;
-  useEffect(
-    () =>
-      subscribeLive(
-        () => setRevision((revision) => revision + 1),
-        [section === 'discounts' ? 'pricing' : 'account'],
-      ),
-    [section],
-  );
-  useEffect(() => {
-    let live = true;
-    const timer = setTimeout(() => {
-      setBusy(true);
-      api<{
-        codes?: Code[];
-        subscriptions?: Subscription[];
-        events?: Usage[];
-        price?: number;
-        summary?: Record<string, number>;
-      }>(queryPath)
-        .then((r) => {
-          if (!live) return;
-          setSummary(r.summary ?? {});
-          setCodes(r.codes ?? []);
-          setSubscriptions(r.subscriptions ?? []);
-          setEvents(r.events ?? []);
-          setError('');
-        })
-        .catch((e) => {
-          if (live) setError(e.message);
-        })
-        .finally(() => {
-          if (live) setBusy(false);
-        });
-    }, 250);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [queryPath, revision]);
-  async function save(body: unknown, method = 'POST') {
-    setSaving(true);
-    setError('');
-    setMessage('');
-    try {
-      const accessAssignment = body && typeof body === 'object' && 'operation' in body && body.operation === 'override';
-      const revocation = accessAssignment && 'plan' in body && body.plan === 'free';
-      const requestBody = revocation ? { ...body, requestId: crypto.randomUUID(), expires_at: null } : body;
-      const result = await api<{
-        effectivePlan?: PlanId;
-        code?: Code;
-        deletedId?: string;
-        price?: number;
-        subscription?: Partial<Subscription>;
-        override?: { plan: PlanId; expires_at: string | null; reason: string } | null;
-        adminOverridePlan?: PlanId | null;
-        effectivePlanExpiresAt?: string | null;
-        accessRevision?: number;
-        accessRevokedAt?: string | null;
-        revoked?: boolean;
-        unchanged?: boolean;
-      }>(`/platform/${section}`, { method, body: JSON.stringify(requestBody) });
-      const override = body && typeof body === 'object' && 'operation' in body && body.operation === 'override';
-      setMessage(result.revoked ? 'Current access revoked. Stored gifts can still be activated.' : override ? `${PLAN_LIMITS[result.effectivePlan!].name} access is active now.` : 'Changes saved successfully.');
-      setEditing(false);
-      setOriginalCode(null);
-      setSelected(undefined);
-      let nextCodes = codes;
-      let nextSubscriptions = subscriptions;
-      if (section === 'discounts') {
-        if (result.deletedId) nextCodes = codes.filter(code => code.id !== result.deletedId);
-        else if (result.code) nextCodes = [result.code, ...codes.filter(code => code.id !== result.code!.id)];
-        setCodes(nextCodes);
-      }
-      if (section === 'subscriptions' && body && typeof body === 'object' && 'userId' in body) {
-        const userId = String(body.userId);
-        setPlanDrafts(current => { const next = { ...current }; delete next[userId]; return next; });
-        if (result.effectivePlan) {
-          nextSubscriptions = subscriptions.map(row => row.uid === userId ? {
-            ...row,
-            ...result.subscription,
-            tier: result.effectivePlan!,
-            override_plan: result.adminOverridePlan ?? null,
-            override_expires_at: result.adminOverridePlan ? result.override?.expires_at ?? row.override_expires_at : null,
-            override_reason: result.adminOverridePlan ? result.override?.reason ?? row.override_reason : null,
-            access_revision: result.accessRevision,
-            access_revoked_at: result.accessRevokedAt,
-            effective_expires_at: result.effectivePlanExpiresAt,
-          } : row);
-          setSubscriptions(nextSubscriptions);
-        }
-        // Consumers re-fetch the authoritative session; never guess access from a billing action.
-        window.dispatchEvent(new CustomEvent('qraft-account-updated', { detail: { userId, ...(result.effectivePlan ? { tier: result.effectivePlan } : {}) } }));
-      }
-      if (!search && !status && offset === 0 && !usageCode && usageOffset === 0)
-        setApiCache(queryPath, section === 'discounts'
-          ? { codes: nextCodes, events, summary }
-          : { subscriptions: nextSubscriptions, summary });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unable to save.');
-    } finally {
-      setSaving(false);
-    }
-  }
-  function openSubscription(row: Subscription) {
-    setSelected(row); setManualPlan(row.tier); setReason(row.override_reason ?? '');
-    setNoExpiration(!row.override_expires_at);
-    setEnd((row.override_expires_at || row.expires_at || addCalendarDuration(new Date().toISOString(), PLAN_DURATION_MONTHS[row.tier] || 1, 'month')).slice(0, 10));
-    setPaid(String((row.paid ?? 0) / 100)); setManualCode(''); setError(''); setMessage('');
-  }
-  const date = (value: string | null) => value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
-  const codeStatus = (c: Code) => !c.enabled ? 'Disabled' : c.expires_at && Date.parse(c.expires_at) <= today ? 'Expired' : c.max_uses !== null && c.uses >= c.max_uses ? 'Exhausted' : c.starts_at && Date.parse(c.starts_at) > today ? 'Scheduled' : 'Active';
-  const pageRows = section === 'discounts' ? codes : subscriptions;
-  const field = 'w-full min-w-0 rounded-xl border bg-background px-3 py-2.5';
-  return (
-    <section className="q-control-workspace">
-      {error && <p role="alert" className="q-control-feedback q-control-error">{error}</p>}
-      {message && !error && <output className="q-control-feedback">{message}</output>}
-      <div className="q-control-summary">
-        {(section === 'discounts' ? [{ label: 'Matching codes', value: summary.total, icon: Ticket }, { label: 'Enabled codes', value: summary.enabled, icon: Check }, { label: 'Total redemptions', value: summary.uses, icon: History }] : [{ label: 'Matching accounts', value: summary.total, icon: Users }, { label: 'Paid-plan access', value: summary.paid, icon: Crown }, { label: 'Admin assignments', value: summary.overrides, icon: ShieldCheck }]).map(item => <div key={item.label}><item.icon className="size-5" /><span>{item.label}</span><strong>{busy ? '…' : (item.value ?? 0).toLocaleString()}</strong></div>)}
-      </div>
-      <div className="q-control-table-panel">
-        <div className="q-control-panel-heading"><div><h2>{section === 'discounts' ? 'Discount codes' : 'Subscribers'}</h2><p>{section === 'discounts' ? 'Promotion rules, availability and usage in one place.' : 'Review effective access and assign any plan immediately.'}</p></div>{section === 'discounts' && <button className="q-button q-button-primary" onClick={() => { setDraft(emptyCode); setOriginalCode(null); setEditing(true); setError(''); }}><Plus className="size-4" />New code</button>}</div>
-        <div className="q-control-toolbar">
-          <label className="q-control-search"><Search className="size-4" /><input aria-label={section === 'discounts' ? 'Search discount codes' : 'Search subscribers'} placeholder={section === 'discounts' ? 'Search by code…' : 'Search name, email or user ID…'} value={search} onChange={e => { setSearch(e.target.value); setOffset(0); }} /></label>
-          <select aria-label={section === 'discounts' ? 'Discount status' : 'Subscription filter'} value={status} onChange={e => { setStatus(e.target.value); setOffset(0); }}>
-            {(section === 'discounts' ? [['','All statuses'],['active','Active'],['disabled','Disabled'],['scheduled','Scheduled'],['expired','Expired'],['exhausted','Usage limit reached']] : [['','All accounts'], ...PLAN_ORDER.map(plan => [plan, PLAN_LIMITS[plan].name]),['override','Admin assigned'],['active','Active billing'],['expired','Expired billing'],['cancelled','Cancelled billing'],['manually_activated','Manual billing'],['none','No billing record']]).map(([value,label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-          {section === 'subscriptions' && <select aria-label="Sort subscriptions" value={sort} onChange={e => { setSort(e.target.value); setOffset(0); }}><option value="expiration">Expiration date</option><option value="name">Email A–Z</option></select>}
-          <span className="q-control-result-count">{summary.total ?? 0} results</span>
-        </div>
-        <div className="q-control-table-scroll" aria-busy={busy || saving}>
-          <table className="q-control-table"><thead><tr>{(section === 'discounts' ? ['Code','Discount & plans','Status','Usage','Validity','Actions'] : ['Member','Effective access','Assign plan','Access / billing dates','Payment record','Actions']).map(label => <th key={label} scope="col">{label}</th>)}</tr></thead>
-          <tbody>
-            {section === 'discounts' ? codes.slice(0,50).map(c => <tr key={c.id}>
-              <td data-label="Code"><strong className="q-control-code">{c.code}</strong><small>{c.per_user ?? 'Unlimited'} per member</small></td>
-              <td data-label="Discount & plans"><strong>{c.kind === 'percent' ? `${c.amount}% off` : `${sar(c.amount)} off`}</strong><small>{(JSON.parse(c.allowed_plans || '[]') as PlanId[]).map(plan => PLAN_LIMITS[plan]?.name ?? plan).join(' · ') || 'All plans'}</small></td>
-              <td data-label="Status"><span className="q-control-badge" data-tone={codeStatus(c) === 'Active' ? 'success' : 'neutral'}>{codeStatus(c)}</span></td>
-              <td data-label="Usage"><strong>{c.uses.toLocaleString()} <span className="text-muted-foreground">/ {c.max_uses ?? '∞'}</span></strong><small>redemptions</small></td>
-              <td data-label="Validity"><span>{c.starts_at ? date(c.starts_at) : 'Starts immediately'}</span><small>{c.expires_at ? `Until ${date(c.expires_at)}` : 'No expiration'}</small></td>
-              <td data-label="Actions"><div className="q-control-row-actions"><button aria-label={`Edit ${c.code}`} onClick={() => { setDraft(c); setOriginalCode(c); setEditing(true); setError(''); }}><Pencil className="size-4" />Edit</button><button aria-label={`Usage history for ${c.code}`} onClick={() => { setUsageCode(c.id); setUsageOffset(0); }}><History className="size-4" />History</button><details><summary aria-label={`More actions for ${c.code}`}><SlidersHorizontal className="size-4" /></summary><div><button disabled={saving} onClick={() => void save({ ...c, enabled: !c.enabled })}>{c.enabled ? 'Disable code' : 'Enable code'}</button><button disabled={saving} className="text-destructive" onClick={async () => { if(await confirmAction({title:`Delete code ${c.code}?`,description:'The discount code will be removed, while its usage history remains available for auditing.',confirmLabel:'Delete code',tone:'destructive'})) void save({id:c.id},'DELETE'); }}>Delete code</button></div></details></div></td>
-            </tr>) : subscriptions.slice(0,50).map(row => <tr key={row.uid}>
-              <td data-label="Member"><strong>{row.name}</strong><span className="q-control-email">{row.email}</span><small className="q-control-uid" title={row.uid}>{row.uid}</small></td>
-              <td data-label="Effective access"><span className="q-control-badge" data-plan={row.tier}>{PLAN_LIMITS[row.tier]?.name ?? row.tier}</span><small>{row.override_plan ? 'Admin assigned' : row.tier === 'free' && (row.access_revision ?? 0)>0 ? 'Current access revoked' : row.reward_plan === row.tier ? 'Reward access' : 'Standard access'}</small></td>
-              <td data-label="Assign plan"><div className="q-control-plan-editor"><select aria-label={`Plan for ${row.email}`} disabled={saving} value={planDrafts[row.uid] ?? row.tier} onChange={e => setPlanDrafts(current => ({...current,[row.uid]:e.target.value as PlanId}))}>{PLAN_ORDER.map(plan => <option key={plan} value={plan}>{plan === 'free' ? 'Revoke current access' : `${PLAN_LIMITS[plan].name} · ${planDurationLabel(plan)}`}</option>)}</select><button disabled={saving || !planDrafts[row.uid]} onClick={() => void save({operation:'override',userId:row.uid,plan:planDrafts[row.uid],expires_at:null,reason:'Assigned from subscribers dashboard'})}>Apply</button></div><small>{(planDrafts[row.uid] ?? row.tier) === 'free' ? 'Revokes current access · new gifts allowed' : 'Immediate · no expiration'}</small></td>
-              <td data-label="Access / billing dates"><span>{row.tier === 'free' ? 'Free access' : row.effective_expires_at ? `Access until ${date(row.effective_expires_at)}` : 'Access has no expiration'}</span><small>{row.expires_at ? `Billing until ${date(row.expires_at)}` : 'No billing expiration'}</small><small>{row.starts_at ? `Billing since ${date(row.starts_at)}` : 'No billing start date'}</small>{row.expires_at && <small>{Math.max(0,Math.ceil((Date.parse(row.expires_at)-today)/86400000))} billing days left</small>}</td>
-              <td data-label="Payment record"><strong>{sar(row.paid ?? 0)}</strong><small>{row.method || 'No payment method'} · {row.status?.replaceAll('_',' ') || 'No billing record'}</small><small>Code: {row.discount_code || '—'}</small></td>
-              <td data-label="Actions"><button className="q-control-manage" onClick={() => openSubscription(row)}><SlidersHorizontal className="size-4" />Manage</button></td>
-            </tr>)}
-            {!busy && !pageRows.length && <tr><td colSpan={6} className="q-control-empty"><Search className="size-6" /><strong>No matching {section === 'discounts' ? 'codes' : 'accounts'}</strong><p>Try another search or clear the filters.</p></td></tr>}
-          </tbody></table>
-        </div>
-        <div className="q-control-pagination"><span>{busy ? 'Updating…' : `Page ${Math.floor(offset/50)+1} · ${summary.total ?? 0} results`}</span><div><button aria-label="Previous page" disabled={busy || saving || offset===0} onClick={() => setOffset(Math.max(0,offset-50))}><ChevronLeft className="size-4" />Previous</button><button aria-label="Next page" disabled={busy || saving || pageRows.length<=50} onClick={() => setOffset(offset+50)}>Next<ChevronRight className="size-4" /></button></div></div>
-      </div>
-      <Dialog open={Boolean(usageCode)} onOpenChange={open => { if(!open) setUsageCode(''); }}><DialogContent className="sm:max-w-4xl"><DialogTitle>Discount usage · {codes.find(c => c.id === usageCode)?.code ?? 'History'}</DialogTitle><div className="q-control-table-scroll"><table className="q-control-table"><thead><tr>{['Member','Transaction','Amount','Validity'].map(title => <th key={title}>{title}</th>)}</tr></thead><tbody>{events.slice(0,50).map(event => <tr key={event.id}><td data-label="Member"><strong>{event.name}</strong><span>{event.email}</span><small>{event.user_id}</small></td><td data-label="Transaction"><strong>{event.code}</strong><small>{event.status} · {date(event.created_at)}</small><small>{event.detail}</small></td><td data-label="Amount"><strong>{sar(event.final)}</strong><small>Original: {sar(event.original)}</small><small>Discount: {sar(event.discount)}</small></td><td data-label="Validity">{date(event.starts_at)}<small>Until {date(event.expires_at)}</small></td></tr>)}</tbody></table>{!events.length && <p className="q-control-empty">{busy ? 'Loading history…' : 'No redemptions recorded.'}</p>}</div><div className="q-control-pagination"><span>Page {Math.floor(usageOffset/50)+1}</span><div><button disabled={busy || usageOffset===0} onClick={() => setUsageOffset(Math.max(0,usageOffset-50))}>Previous</button><button disabled={busy || events.length<=50} onClick={() => setUsageOffset(usageOffset+50)}>Next</button></div></div></DialogContent></Dialog>
-      <Dialog open={editing} onOpenChange={setEditing}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogTitle>
-            {draft.id ? 'Edit' : 'Create'} discount code
-          </DialogTitle>
-          <form
-            className="grid gap-3 sm:grid-cols-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (originalCode && codeSignature(draft) === codeSignature(originalCode)) {
-                setEditing(false);
-                setMessage('No changes to save.');
-                return;
-              }
-              void save({
-                ...draft,
-                allowedPlans: JSON.parse(draft.allowed_plans || '[]'),
-              });
-            }}
-          >
-            <label>
-              Code
-              <input
-                required
-                className={field}
-                value={draft.code}
-                onChange={(e) => setDraft({ ...draft, code: e.target.value })}
-              />
-            </label>
-            <label>
-              Type
-              <select
-                className={field}
-                value={draft.kind}
-                onChange={(e) =>
-                  setDraft({ ...draft, kind: e.target.value, amount: 0 })
-                }
-              >
-                <option value="percent">Percentage</option>
-                <option value="fixed">Fixed SAR</option>
-              </select>
-            </label>
-            <label>
-              {draft.kind === 'percent' ? 'Percentage' : 'Amount (SAR)'}
-              <input
-                required
-                type="number"
-                min="0"
-                max={draft.kind === 'percent' ? 100 : 100000}
-                step={draft.kind === 'percent' ? 1 : 0.01}
-                className={field}
-                value={
-                  draft.kind === 'fixed' ? draft.amount / 100 : draft.amount
-                }
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    amount: Math.round(
-                      Number(e.target.value) *
-                        (draft.kind === 'fixed' ? 100 : 1),
-                    ),
-                  })
-                }
-              />
-            </label>
-            {(['starts_at', 'expires_at'] as const).map((k) => (
-              <label key={k}>
-                {k === 'starts_at' ? 'Start date' : 'Expiration date'}
-                <input
-                  type="datetime-local"
-                  className={field}
-                  value={localDateTime(draft[k])}
-                  onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      [k]: e.target.value
-                        ? new Date(e.target.value).toISOString()
-                        : null,
-                    })
-                  }
-                />
-              </label>
-            ))}
-            {(['max_uses', 'per_user'] as const).map((k) => (
-              <label key={k}>
-                {k === 'max_uses' ? 'Total uses' : 'Uses per user'}
-                <input
-                  type="number"
-                  min="1"
-                  placeholder="Unlimited"
-                  className={field}
-                  value={draft[k] ?? ''}
-                  onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      [k]: e.target.value ? Number(e.target.value) : null,
-                    })
-                  }
-                />
-              </label>
-            ))}
-            <fieldset className="sm:col-span-2">
-              <legend className="text-sm font-semibold">Allowed paid plans</legend>
-              <div className="mt-2 flex flex-wrap gap-3">
-                {PAID_PLAN_IDS.map((plan) => {
-                  const selected = (JSON.parse(draft.allowed_plans || '[]') as string[]).includes(plan);
-                  return (
-                    <label key={plan} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm capitalize">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={(event) => {
-                          const current = new Set(JSON.parse(draft.allowed_plans || '[]') as string[]);
-                          if (event.target.checked) current.add(plan);
-                          else current.delete(plan);
-                          setDraft({ ...draft, allowed_plans: JSON.stringify([...current]) });
-                        }}
-                      />
-                      {plan}
-                    </label>
-                  );
-                })}
-              </div>
-            </fieldset>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={Boolean(draft.enabled)}
-                onChange={(e) =>
-                  setDraft({ ...draft, enabled: e.target.checked ? 1 : 0 })
-                }
-              />
-              Enabled
-            </label>
-            {error && (
-              <p role="alert" className="text-destructive">
-                {error}
-              </p>
-            )}
-            <button
-              disabled={busy || saving}
-              className="q-button bg-primary text-primary-foreground"
-            >
-              Save
-            </button>
-          </form>
-        </DialogContent>
-      </Dialog>
-      <Dialog
-        open={Boolean(selected)}
-        onOpenChange={(o) => {
-          if (!o) setSelected(undefined);
-        }}
-      >
-        <DialogContent className="sm:max-w-xl">
-          <DialogTitle>Manage access</DialogTitle>
-          <div className="q-control-member-heading"><strong>{selected?.name}</strong><span>{selected?.email}</span></div>
-          <form className="q-control-access-form" onSubmit={event => { event.preventDefault(); void save({operation:'override',userId:selected?.uid,plan:manualPlan,expires_at:noExpiration ? null : `${end}T23:59:59.999Z`,reason}); }}>
-            <p className="q-control-assignment-note"><ShieldCheck className="size-5" />{manualPlan === 'free' ? 'Revoke existing access immediately. Stored gifts and new subscriptions can still be activated later.' : 'Grant Full access. Previously revoked access stays revoked when this grant expires.'}</p>
-            <fieldset disabled={saving}><legend>Access action</legend><div className="q-control-plan-options">{PLAN_ORDER.map(plan => <label key={plan} data-selected={manualPlan===plan}><input type="radio" name="override-plan" value={plan} checked={manualPlan===plan} onChange={() => setManualPlan(plan)} /><span>{plan === 'free' ? 'Revoke current access' : `${PLAN_LIMITS[plan].name} · ${planDurationLabel(plan)}`}</span></label>)}</div></fieldset>
-            {manualPlan !== 'free' && <>
-              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={noExpiration} onChange={event => setNoExpiration(event.target.checked)} />No expiration · keep until changed</label>
-              {!noExpiration && <label>Access expiration<input required type="date" className={field} value={end} min={new Date().toISOString().slice(0,10)} onChange={e => setEnd(e.target.value)} /><small>Access remains until 23:59:59 UTC on this date, then returns to the other eligible grants.</small></label>}
-              <div className="q-ops-form-grid"><label>Extend by days<input className={field} type="number" min="1" max="730" value={extensionDays} onChange={event=>setExtensionDays(event.target.value)} /></label><button type="button" className="q-ops-button" disabled={saving || !Number.isInteger(Number(extensionDays)) || Number(extensionDays)<1 || Number(extensionDays)>730} onClick={()=>{setNoExpiration(false);setEnd(new Date(Math.max(Date.now(),Number.isFinite(Date.parse(end))?Date.parse(end):Date.now())+Number(extensionDays)*86_400_000).toISOString().slice(0,10));}}>Preview new date</button></div>
-            </>}
-            <label>Reason <span className="text-muted-foreground">(optional)</span><textarea maxLength={500} rows={2} className={field} value={reason} onChange={e => setReason(e.target.value)} placeholder="Add a note to the audit log…" /></label>
-            {error && <p role="alert" className="text-destructive text-sm">{error}</p>}
-            <button disabled={saving} className="q-button q-button-primary w-full" type="submit">{saving ? 'Applying…' : manualPlan === 'free' ? 'Revoke current access now' : `Apply ${PLAN_LIMITS[manualPlan].name} now`}</button>
-          </form>
-          <details className="q-control-billing-details"><summary>Payment & renewal records</summary><p>Payment history stays separate. A new activation can grant access after revocation.</p><label>Billing expiration<input type="date" className={field} value={end} onChange={e => setEnd(e.target.value)} /></label><button className="q-button border" onClick={() => setEnd(addCalendarDuration(new Date(Math.max(Date.now(), Number.isFinite(Date.parse(end)) ? Date.parse(end) : Date.now())).toISOString(), PLAN_DURATION_MONTHS[manualPlan] || 1, 'month').slice(0,10))}>Extend selected period</button><label>Final amount paid (SAR)<input type="number" min="0" step="0.01" className={field} value={paid} onChange={e => setPaid(e.target.value)} /></label><label>Discount code<input className={field} value={manualCode} onChange={e => setManualCode(e.target.value)} /></label><button disabled={saving || manualPlan==='free' || !end} className="q-button border" onClick={() => void save({userId:selected?.uid,plan:manualPlan,expires_at:`${end}T23:59:59.999Z`,paid:Math.round(Number(paid)*100),code:manualCode})}>Save {PLAN_LIMITS[manualPlan].name} billing record</button><button disabled={saving} className="q-button text-destructive" onClick={() => void save({userId:selected?.uid,operation:'cancel'})}>Cancel paid subscription</button></details>
-        </DialogContent>
-      </Dialog>
-      {confirmationDialog}
-    </section>
-  );
+export function SubscriptionAdmin({ section }: { section: 'discounts' | 'subscriptions' }) {
+  return <SubscriptionManager initialTab={section === 'discounts' ? 'discounts' : 'members'} />;
 }

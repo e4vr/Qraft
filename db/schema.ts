@@ -9,6 +9,36 @@ import {
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
+export const accessAccounts = sqliteTable('access_accounts', {
+  userId: text('user_id').primaryKey().references(() => profiles.uid, { onDelete: 'cascade' }),
+  version: integer('version').notNull().default(0), updatedAt: text('updated_at').notNull(),
+});
+export const accessGrants = sqliteTable('access_grants', {
+  id: text('id').primaryKey(), userId: text('user_id').notNull().references(() => profiles.uid, { onDelete: 'cascade' }),
+  source: text('source').notNull(), sourceId: text('source_id').notNull(), label: text('label').notNull(),
+  plan: text('plan').notNull(), duration: integer('duration').notNull(), durationUnit: text('duration_unit').notNull(),
+  startsAt: text('starts_at').notNull(), expiresAt: text('expires_at').notNull(), createdAt: text('created_at').notNull(),
+  createdBy: text('created_by').notNull(), revokedAt: text('revoked_at'), revokedBy: text('revoked_by'), revokeReason: text('revoke_reason'),
+}, table => [uniqueIndex('access_grants_source_unique').on(table.source, table.sourceId), index('idx_access_grants_user_end').on(table.userId, table.expiresAt)]);
+export const activationCodes = sqliteTable('activation_codes', {
+  id: text('id').primaryKey(), codeHash: text('code_hash').notNull().unique(), hint: text('hint').notNull(), name: text('name').notNull(),
+  duration: integer('duration').notNull(), durationUnit: text('duration_unit').notNull(), plan: text('plan').notNull(),
+  boundUserId: text('bound_user_id'), redeemBefore: text('redeem_before'), createdAt: text('created_at').notNull(),
+  createdBy: text('created_by').notNull(), disabledAt: text('disabled_at'), redeemedAt: text('redeemed_at'), redeemedBy: text('redeemed_by'),
+  grantId: text('grant_id'), operationId: text('operation_id').notNull().unique(),
+}, table => [index('idx_activation_codes_created').on(table.createdAt)]);
+export const accessOperations = sqliteTable('access_operations', {
+  id: text('id').primaryKey(), userId: text('user_id').notNull(), actorId: text('actor_id').notNull(), action: text('action').notNull(),
+  createdAt: text('created_at').notNull(), resultJson: text('result_json').notNull(),
+}, table => [index('idx_access_operations_user_created').on(table.userId, table.createdAt)]);
+export const accessPayments = sqliteTable('access_payments', {
+  id: text('id').primaryKey(), userId: text('user_id').notNull(), grantId: text('grant_id'), codeId: text('code_id'), amount: integer('amount').notNull(),
+  reference: text('reference').notNull(), confirmedBy: text('confirmed_by').notNull(), confirmedAt: text('confirmed_at').notNull(),
+}, table => [index('idx_access_payments_user_time').on(table.userId, table.confirmedAt)]);
+export const accessOperationGuards = sqliteTable('access_operation_guards', {
+  id: text('id').primaryKey(), valid: integer('valid').notNull(),
+}, table => [check('access_operation_guard_valid', sql`${table.valid}=1`)]);
+
 export const profiles = sqliteTable(
   'profiles',
   {
@@ -285,6 +315,8 @@ export const subscriptionEvents = sqliteTable(
 export const testRegistry = sqliteTable(
   'test_registry',
   {
+    planAtStart: text('plan_at_start').notNull().default('free'),
+    questionIdsJson: text('question_ids_json'),
     userId: text('user_id')
       .notNull()
       .references(() => profiles.uid),

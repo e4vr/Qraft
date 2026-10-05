@@ -111,6 +111,7 @@ export interface QuestionProgress {
 
 export interface TestSession {
   id: string;
+  accessPlan?: AccountTier;
   title: string;
   mode: TestMode;
   questionIds: string[];
@@ -280,6 +281,7 @@ export interface AppUser {
   accessRevision?: number;
   accessRevokedAt?: string | null;
   effectivePlanExpiresAt?: string | null;
+  nextEntitlementChangeAt?: string | null;
   subscriptionPlan?: AccountTier | null;
   rewardPlan?: AccountTier | null;
   adminPlan?: AccountTier | null;

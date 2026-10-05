@@ -1,3 +1,4 @@
+import { seedFullAccess } from './access-fixtures.mjs';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -45,6 +46,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
         now,
       )
       .run();
+    await seedFullAccess(db, uid);
     await db
       .prepare(
         'INSERT INTO sessions(token_hash,user_id,expires_at,verified,created_at) VALUES(?,?,?,1,?)',
@@ -1252,7 +1254,7 @@ export async function improvementsApiTests(t, db, call, runtime) {
         .bind(uid, JSON.stringify(personal), now)
         .run();
       await db
-        .prepare('INSERT INTO test_registry VALUES(?,?,?,?)')
+        .prepare('INSERT INTO test_registry(user_id,test_id,question_count,started_at) VALUES(?,?,?,?)')
         .bind(uid, 'personal-test', 10, now)
         .run();
       await db

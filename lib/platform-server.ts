@@ -1,3 +1,5 @@
+import { quote, type Discount } from '@/features/subscriptions/server/discount-quote';
+import { AccessError, subscriptionApi } from '@/features/subscriptions/server/subscription-service';
 import { detectImportDuplication, ImportDuplicateIndex, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
 import { importKeyStatement, importSearchRevision, importSearchGuard, releaseImportSearchGuard } from '@/features/imports/server/import-search';
 import { env } from 'cloudflare:workers';
@@ -54,9 +56,8 @@ import {
   utcMonthStart,
   type PlanId,
 } from '@/features/subscriptions/domain/plan-config';
-import { addCalendarDuration } from '@/features/subscriptions/domain/calendar-duration';
-import { accessGenerationSql, rewardWalletFields } from '@/features/subscriptions/server/access-sources';
-import { activateRewardAccess, revokeCurrentAccess } from '@/features/subscriptions/server/access-grants';
+import { rewardWalletFields } from '@/features/subscriptions/server/access-sources';
+import { activateRewardAccess } from '@/features/subscriptions/server/access-grants';
 import {
   compareDuplicateContent,
   detectDuplicateReview,
@@ -201,102 +202,20 @@ export function auditStatement(
 
 export async function expireSubscriptions() {
   const now = new Date().toISOString();
-  const expiring = await env.DB.prepare(
-    "SELECT user_id FROM subscriptions WHERE status IN ('active','manually_activated') AND expires_at<=?",
-  ).bind(now).all<{ user_id: string }>();
+  const expiring = await env.DB.prepare(`SELECT g.id,g.user_id FROM access_grants g WHERE g.revoked_at IS NULL AND g.expires_at<=?
+    AND NOT EXISTS(SELECT 1 FROM records r WHERE r.type='auditLog' AND r.id='expired-ledger-'||g.id) ORDER BY g.expires_at LIMIT 1000`).bind(now).all<{id:string;user_id:string}>();
   if (!expiring.results.length) return [];
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO records(type,id,owner_id,payload,updated_at) SELECT 'auditLog','expired-'||user_id||'-'||expires_at,user_id,json_object('id','expired-'||user_id||'-'||expires_at,'action','subscription_expired','entityType','account','entityId',user_id,'actorId','system','actorName','Qraft','createdAt',?,'detail','Subscription expired; effective access returned to the remaining entitlement.'),? FROM subscriptions WHERE status IN ('active','manually_activated') AND expires_at<=? ON CONFLICT(type,id) DO NOTHING`,
-    ).bind(now, now, now),
-    env.DB.prepare(
-      `UPDATE subscriptions SET status='expired',updated_at=? WHERE status IN ('active','manually_activated') AND expires_at<=?`,
-    ).bind(now, now),
-  ]);
-  return expiring.results.map(row => row.user_id);
+  await env.DB.prepare(`INSERT INTO records(type,id,owner_id,payload,updated_at)
+    SELECT 'auditLog','expired-ledger-'||id,user_id,json_object('id','expired-ledger-'||id,'action','access_expired','entityType','account','entityId',user_id,'actorId','system','actorName','Qraft','createdAt',?,'detail','Access grant expired'),?
+    FROM access_grants WHERE id IN (SELECT value FROM json_each(?)) AND revoked_at IS NULL AND expires_at<=?
+    ON CONFLICT(type,id) DO NOTHING`).bind(now,now,JSON.stringify(expiring.results.map(grant => grant.id)),now).run();
+  return [...new Set(expiring.results.map(grant => grant.user_id))];
 }
 
-type Discount = {
-  id: string;
-  code: string;
-  kind: 'percent' | 'fixed';
-  amount: number;
-  enabled: number;
-  starts_at: string | null;
-  expires_at: string | null;
-  max_uses: number | null;
-  per_user: number | null;
-  uses: number;
-  allowed_plans: string;
-};
 function paidPlan(value: string): Exclude<PlanId, 'free'> {
   if (!value) return 'full_monthly';
   if (!isPlanId(value) || value === 'free') throw new ValidationError('Choose a Full Access subscription period.');
   return value;
-}
-async function quote(user: AppUser, code: string, requestedPlan: PlanId = 'full_monthly') {
-  if (requestedPlan === 'free') throw new ValidationError('Choose a paid plan.');
-  const configured = await env.DB.prepare(
-    'SELECT coalesce(price_halalas,price_sar_period*100) AS price,policy_json FROM plan_prices WHERE plan=?',
-  )
-    .bind(requestedPlan)
-    .first<{ price: number; policy_json: string | null }>();
-  let planName = getPlanLimits(requestedPlan).name;
-  try {
-    const policy = JSON.parse(configured?.policy_json || '{}') as { name?: unknown };
-    if (typeof policy.name === 'string' && policy.name.trim()) planName = policy.name;
-  } catch { /* Legacy catalog rows use the default plan name. */ }
-  const original = configured?.price ?? getPlanLimits(requestedPlan).priceSarPeriod * 100;
-  const discount = code
-    ? await env.DB.prepare(
-        'SELECT * FROM discount_codes WHERE code=? COLLATE NOCASE',
-      )
-        .bind(code)
-        .first<Discount>()
-    : null;
-  if (code && !discount)
-    throw new ValidationError('Invalid discount code.');
-  if (discount) {
-    const now = new Date().toISOString();
-    if (!discount.enabled)
-      throw new ValidationError('This discount code is disabled.');
-    if (discount.starts_at && Date.parse(discount.starts_at) > Date.parse(now))
-      throw new ValidationError('This discount code is not active yet.');
-    if (discount.expires_at && Date.parse(discount.expires_at) <= Date.parse(now))
-      throw new ValidationError('This discount code has expired.');
-    if (discount.max_uses !== null && discount.uses >= discount.max_uses)
-      throw new ValidationError(
-        'This discount code has reached its usage limit.',
-      );
-    const allowedPlans = JSON.parse(discount.allowed_plans || '[]') as unknown[];
-    if (!allowedPlans.includes(requestedPlan))
-      throw new ValidationError('This code is not valid for the selected plan.');
-    const used = await env.DB.prepare(
-      "SELECT count(*) AS n FROM subscription_events WHERE user_id=? AND code_id=? AND status='success' AND action='discount_redeemed'",
-    )
-      .bind(user.uid, discount.id)
-      .first<{ n: number }>();
-    if (discount.per_user !== null && (used?.n ?? 0) >= discount.per_user)
-      throw new ValidationError('You have reached the usage limit for this discount code.');
-  }
-  const saved = Math.min(
-    original,
-    discount
-      ? discount.kind === 'percent'
-        ? Math.round((original * discount.amount) / 100)
-        : discount.amount
-      : 0,
-  );
-  return {
-    original,
-    discount: saved,
-    final: original - saved,
-    code: discount?.code ?? '',
-    codeId: discount?.id ?? null,
-    percent: discount?.kind === 'percent' ? discount.amount : null,
-    plan: requestedPlan,
-    planName,
-  };
 }
 
 function normalizeClassificationName(value: string) {
@@ -544,6 +463,7 @@ export async function platformApi(request: Request, action: string) {
     user.role === 'super_admin' && user.mfaEnrolled && user.mfaVerified;
   let activeImportContext: ImportMonitorContext | undefined;
   try {
+    if (['access-account','access-admin','activation-code','activation-codes'].includes(action)) return subscriptionApi(request, action, user, input);
     if (action === 'gift-notification') return giftNotificationApi(request, user.uid, input);
     if (action === 'announcement-dismiss') {
       if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
@@ -1323,8 +1243,8 @@ export async function platformApi(request: Request, action: string) {
       const now = new Date().toISOString();
       const lifetimeLimit = limits.lifetimeExamLimit ?? -1;
       const monthlyLimit = limits.monthlyExamLimit ?? -1;
-      const inserted = await env.DB.prepare(`INSERT INTO test_registry(user_id,test_id,question_count,started_at)
-        SELECT ?,?,?,?
+      const inserted = await env.DB.prepare(`INSERT INTO test_registry(user_id,test_id,question_count,started_at,plan_at_start)
+        SELECT ?,?,?,?,?
         WHERE (?<0 OR (SELECT count(*) FROM test_registry WHERE user_id=?)<?)
           AND (?<0 OR (SELECT count(*) FROM test_registry WHERE user_id=? AND started_at>=?)<?)`)
         .bind(
@@ -1332,6 +1252,7 @@ export async function platformApi(request: Request, action: string) {
           testId,
           questionCount,
           now,
+          plan,
           lifetimeLimit,
           user.uid,
           lifetimeLimit,
@@ -1436,22 +1357,20 @@ export async function platformApi(request: Request, action: string) {
         const passId = text('passId');
         const pass = await env.DB.prepare(
           "SELECT id,plan,duration,duration_unit,duration_days,status FROM reward_passes WHERE id=? AND user_id=?",
-        ).bind(passId, user.uid).first<{ id: string; plan: PlanId; duration: number; duration_unit: 'month' | 'year'; duration_days: number | null; status: string }>();
+        ).bind(passId, user.uid).first<{ id: string; plan: Exclude<PlanId, 'free'>; duration: number; duration_unit: 'month' | 'year'; duration_days: number | null; status: string }>();
         if (!pass) return json({ error: 'Reward pass not found.' }, 404);
-        if (pass.status !== 'available')
-          return json({ error: 'This reward pass is no longer available.' }, 409);
-        const now = new Date().toISOString();
-        const expiresAt = pass.duration_days ? new Date(Date.parse(now) + pass.duration_days*86_400_000).toISOString() : addCalendarDuration(now, pass.duration, pass.duration_unit);
-        const activated = await activateRewardAccess(user, pass, now, expiresAt);
-        if (!activated)
-          return json({ error: 'This reward pass was already activated.' }, 409);
+
+        const activated = await activateRewardAccess(user, pass);
+        const walletPass = await env.DB.prepare(`SELECT ${rewardWalletFields()} FROM reward_passes r WHERE r.id=? AND r.user_id=?`).bind(passId, user.uid).first();
         const entitlement = await getEffectiveEntitlement(user);
         return json({
           activated: true,
-          expiresAt,
+          duplicate: Boolean(activated.duplicate),
+          expiresAt: activated.expiresAt,
+          startsAt: activated.startsAt,
           effectivePlan: entitlement.effectivePlan,
           user: await applyEffectiveEntitlement(user),
-          pass: { ...pass, status: 'active', activated_at: now, expires_at: expiresAt },
+          pass: walletPass,
         });
       }
       return json({ error: 'Invalid reward operation.' }, 400);
@@ -2218,82 +2137,6 @@ export async function platformApi(request: Request, action: string) {
       const requestedPlan = text('plan');
       const plan = paidPlan(requestedPlan);
       const price = await quote(user, text('code'), plan);
-      const now = new Date().toISOString();
-      const existing = await getEffectiveEntitlement(user);
-      const startsAt = existing.effectivePlanExpiresAt && existing.effectivePlanExpiresAt > now ? existing.effectivePlanExpiresAt : now;
-      const end = addCalendarDuration(startsAt, PLAN_DURATION_MONTHS[plan], 'month');
-      if (price.final === 0 && price.codeId) {
-        try {
-          await env.DB.batch([
-            env.DB.prepare(
-              'INSERT INTO subscription_events(id,user_id,email,name,code_id,code,action,original,discount,final,status,starts_at,expires_at,created_at,detail,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            ).bind(
-              id,
-              user.uid,
-              user.email,
-              user.displayName,
-              price.codeId,
-              price.code,
-              'discount_redeemed',
-              price.original,
-              price.discount,
-              0,
-              'success',
-              now,
-              end,
-              now,
-              `${PLAN_DURATION_MONTHS[plan]} month(s) ${price.planName}`,
-              plan,
-            ),
-            auditStatement(
-              user,
-              'discount_redeemed',
-              user.uid,
-              { tier: user.effectivePlan ?? user.tier },
-              {
-                tier: plan,
-                ...price,
-                startsAt: now,
-                expiresAt: end,
-              },
-            ),
-          ]);
-        } catch {
-          await env.DB.prepare(
-            'INSERT OR IGNORE INTO subscription_events(id,user_id,email,name,code_id,code,action,original,discount,final,status,created_at,detail,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-          )
-            .bind(
-              id,
-              user.uid,
-              user.email,
-              user.displayName,
-              price.codeId,
-              price.code,
-              'discount_redeemed',
-              price.original,
-              price.discount,
-              price.final,
-              'failed',
-              now,
-              'Redemption rejected; code changed, exhausted, or account already upgraded.',
-              plan,
-            )
-            .run();
-          return json(
-            {
-              error:
-                'Reapply the discount code to verify it, then try again.',
-            },
-            409,
-          );
-        }
-        return json({ upgraded: true, user: await applyEffectiveEntitlement(user) });
-      }
-      if (price.final === 0)
-        return json(
-          { error: 'A valid discount code is required for a free activation.' },
-          400,
-        );
       if (input.acceptedTerms !== true)
         return json({ error: 'Please read and agree to all terms and policies before continuing to WhatsApp.' }, 400);
       const message = `I would like a ${PLAN_DURATION_MONTHS[plan]}-month ${price.planName} subscription.\nName: ${user.displayName}\nEmail: ${user.email}\nUser ID: ${user.uid}\nOriginal: ${price.original / 100} SAR\nCode: ${price.code || 'None'}\nDiscount: ${price.discount / 100} SAR\nFinal: ${price.final / 100} SAR`;
@@ -2428,164 +2271,7 @@ export async function platformApi(request: Request, action: string) {
     if (action === 'subscriptions') {
       if (!root) return json({ error: 'Superadmin MFA required.' }, 403);
       if (request.method === 'GET') return json(await listAdminSubscribers(url));
-      if (!['POST', 'PUT'].includes(request.method)) return json({ error: 'Method not allowed.' }, 405);
-      const member = await profileById(text('userId'));
-      if (!member) throw new ValidationError('User not found.');
-      const old = await env.DB.prepare(
-        'SELECT s.*,coalesce(a.generation,0) AS current_generation FROM subscriptions s LEFT JOIN account_access_revisions a ON a.user_id=s.user_id WHERE s.user_id=?',
-      )
-        .bind(member.uid)
-        .first();
-      const profile = JSON.parse(member.profile_json) as MemberProfile;
-      if (text('operation') === 'override') {
-        const plan = text('plan');
-        if (!isPlanId(plan)) throw new ValidationError('Choose Free trial or a Full Access subscription period.');
-        if (plan === 'free') {
-          const requestId = text('requestId') || crypto.randomUUID();
-          if (!/^[a-zA-Z0-9-]{20,80}$/.test(requestId)) throw new ValidationError('Invalid access request ID.');
-          const result = await revokeCurrentAccess(user, member.uid, text('reason').slice(0, 500), requestId);
-          return json({ ok: true, revoked: true, ...result, ...(await getEffectiveEntitlement(profile)), override: null }, 200,
-            result.unchanged ? { 'x-qraft-unchanged': '1' } : {});
-        }
-        const now = new Date().toISOString();
-        const requestedEnd = text('expires_at');
-        if (requestedEnd && (!Number.isFinite(Date.parse(requestedEnd)) || Date.parse(requestedEnd) <= Date.parse(now)))
-          throw new ValidationError('Select a future expiration date or no expiration.');
-        const expiresAt = requestedEnd ? new Date(requestedEnd).toISOString() : null;
-        const reason = text('reason').slice(0, 500);
-        const previous = await env.DB.prepare('SELECT o.*,coalesce(a.generation,0) AS current_generation FROM account_plan_overrides o LEFT JOIN account_access_revisions a ON a.user_id=o.user_id WHERE o.user_id=?').bind(member.uid).first();
-        const priorOverride = previous as { plan?: string; expires_at?: string | null; reason?: string; access_generation?: number; current_generation?: number } | null;
-        if (priorOverride?.plan === plan && priorOverride.expires_at === expiresAt && (priorOverride.reason ?? '') === reason && priorOverride.access_generation === priorOverride.current_generation)
-          return json({ ok: true, unchanged: true, ...(await getEffectiveEntitlement(profile)), override: { plan, expires_at: expiresAt, reason } }, 200, { 'x-qraft-unchanged': '1' });
-        await env.DB.batch([
-          env.DB.prepare(`INSERT INTO account_plan_overrides(user_id,plan,expires_at,reason,updated_by,updated_at,access_generation) VALUES(?,?,?,?,?,?,${accessGenerationSql('?')})
-            ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan,expires_at=excluded.expires_at,reason=excluded.reason,updated_by=excluded.updated_by,updated_at=excluded.updated_at,access_generation=excluded.access_generation`)
-            .bind(member.uid, plan, expiresAt, reason, user.uid, now, member.uid),
-          auditStatement(user, 'subscription_plan_overridden', member.uid, previous, { plan, expires_at: expiresAt, reason, previousSubscription: old }),
-        ]);
-        return json({ ok: true, ...(await getEffectiveEntitlement(profile)), override: { plan, expires_at: expiresAt, reason } });
-      }
-      const cancel = text('operation') === 'cancel';
-      const requestedPlan = text('plan');
-      const subscriptionPlan = paidPlan(requestedPlan);
-      const now = new Date().toISOString(),
-        requestedEnd = text('expires_at'),
-        end = requestedEnd && Number.isFinite(Date.parse(requestedEnd))
-          ? new Date(requestedEnd).toISOString()
-          : requestedEnd;
-      if (!cancel && (!Number.isFinite(Date.parse(end)) || Date.parse(end) <= Date.parse(now)))
-        throw new ValidationError('Select a future expiration date.');
-      const paid = Number(input.paid ?? 0);
-      if (!Number.isInteger(paid) || paid < 0)
-        throw new ValidationError('Invalid paid amount.');
-      const status = cancel ? 'cancelled' : 'manually_activated';
-      const previousSubscription = old as { status?: string; expires_at?: string | null; paid?: number; discount_code?: string | null; plan?: string; access_generation?: number; current_generation?: number } | null;
-      if (cancel && previousSubscription?.status === 'cancelled')
-        return json({ ok: true, unchanged: true, ...(await getEffectiveEntitlement(profile)), subscription: previousSubscription }, 200, { 'x-qraft-unchanged': '1' });
-      if (!cancel && previousSubscription?.status === status && previousSubscription.expires_at === end &&
-        previousSubscription.paid === paid && previousSubscription.plan === subscriptionPlan &&
-        (previousSubscription.discount_code ?? '') === text('code') && previousSubscription.access_generation === previousSubscription.current_generation)
-        return json({ ok: true, unchanged: true, ...(await getEffectiveEntitlement(profile)), subscription: previousSubscription }, 200, { 'x-qraft-unchanged': '1' });
-      const discounted =
-        !cancel && text('code')
-          ? await quote(
-              {
-                ...user,
-                uid: profile.uid,
-                email: profile.email,
-                displayName: profile.displayName,
-              },
-              text('code'),
-              subscriptionPlan,
-            )
-          : null;
-      if (discounted && paid !== discounted.final)
-        throw new ValidationError(
-          `Final amount must equal ${discounted.final / 100} SAR for this code.`,
-        );
-      await env.DB.batch([
-        ...(discounted
-          ? [
-              env.DB.prepare(
-                'INSERT INTO subscription_events(id,user_id,email,name,admin_id,code_id,code,action,original,discount,final,status,starts_at,expires_at,created_at,detail,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-              ).bind(
-                crypto.randomUUID(),
-                member.uid,
-                profile.email,
-                profile.displayName,
-                user.uid,
-                discounted.codeId,
-                discounted.code,
-                'discount_redeemed',
-                discounted.original,
-                discounted.discount,
-                discounted.final,
-                'success',
-                now,
-                end,
-                now,
-                'Administrator confirmed payment',
-                subscriptionPlan,
-              ),
-            ]
-          : []),
-        env.DB.prepare(
-          `INSERT INTO subscriptions(user_id,status,starts_at,expires_at,method,discount_code,paid,updated_at,plan,access_generation) VALUES(?,?,?,?,?,?,?,?,?,${accessGenerationSql('?')}) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status,starts_at=CASE WHEN subscriptions.status IN ('active','manually_activated') THEN coalesce(subscriptions.starts_at,excluded.starts_at) ELSE excluded.starts_at END,expires_at=excluded.expires_at,method=excluded.method,discount_code=excluded.discount_code,paid=excluded.paid,updated_at=excluded.updated_at,plan=excluded.plan,access_generation=excluded.access_generation`,
-        ).bind(
-          member.uid,
-          status,
-          now,
-          cancel ? now : end,
-          'manual',
-          text('code') || (old?.discount_code as string | null) || null,
-          paid,
-          now,
-          subscriptionPlan,
-          member.uid,
-        ),
-        env.DB.prepare(
-          'INSERT INTO subscription_events(id,user_id,email,name,admin_id,code,action,original,discount,final,status,starts_at,expires_at,created_at,detail,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-        ).bind(
-          crypto.randomUUID(),
-          member.uid,
-          profile.email,
-          profile.displayName,
-          user.uid,
-          text('code') || null,
-          cancel ? 'subscription_cancelled' : 'subscription_manually_activated',
-          paid,
-          0,
-          paid,
-          'success',
-          now,
-          cancel ? now : end,
-          now,
-          JSON.stringify({ previous: old }),
-          subscriptionPlan,
-        ),
-        auditStatement(
-          user,
-          cancel ? 'subscription_cancelled' : 'subscription_manually_activated',
-          member.uid,
-          old,
-          { status, expires_at: end, paid, plan: subscriptionPlan },
-        ),
-      ]);
-      return json({
-        ok: true,
-        ...(await getEffectiveEntitlement(profile)),
-        subscription: {
-          status,
-          starts_at: previousSubscription?.status === 'active' || previousSubscription?.status === 'manually_activated'
-            ? (old?.starts_at as string | null) ?? now
-            : now,
-          expires_at: cancel ? now : end,
-          method: 'manual',
-          discount_code: text('code') || previousSubscription?.discount_code || null,
-          paid,
-          plan: subscriptionPlan,
-        },
-      });
+      return json({ error: 'Use the unified subscription manager.', code: 'SUBSCRIPTION_MANAGER_MOVED' }, 410);
     }
     if (action === 'question') {
       const number = (url.searchParams.get('id') || text('id'))
@@ -3138,6 +2824,7 @@ export async function platformApi(request: Request, action: string) {
         );
       }
     }
+    if (error instanceof AccessError) return json({ error: error.message }, error.status);
     if (error instanceof ValidationError) return json({ error: error.message }, 400);
     throw error;
   }

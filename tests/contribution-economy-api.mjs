@@ -38,9 +38,9 @@ export async function contributionEconomyApiTests(t, { db, call }) {
     const active = await call(uid, '/platform/rewards', { operation: 'activate', passId: redeemed.data.pass.id });
     assert.equal(active.status, 200, JSON.stringify(active));
     assert.equal(active.data.effectivePlan, 'full_monthly');
-    assert.equal(Date.parse(active.data.expiresAt) - Date.parse(active.data.pass.activated_at), 7 * 86_400_000);
-    assert.equal((await call(uid, '/platform/rewards', { operation: 'activate', passId: redeemed.data.pass.id })).status, 409);
-    await db.prepare("UPDATE reward_passes SET expires_at='2000-01-01T00:00:00Z' WHERE id=?").bind(redeemed.data.pass.id).run();
+    assert.equal(Date.parse(active.data.expiresAt) - Date.parse(active.data.startsAt), 7 * 86_400_000);
+    assert.equal((await call(uid, '/platform/rewards', { operation: 'activate', passId: redeemed.data.pass.id })).status, 200);
+    await db.prepare("UPDATE access_grants SET expires_at='2000-01-01T00:00:00Z' WHERE source='reward' AND source_id=?").bind(redeemed.data.pass.id).run();
     assert.equal((await call(uid, '/auth/session')).data.user.effectivePlan, 'free');
     assert.equal((await grant(uid, 399)).status, 200);
     const monthRequest = { operation: 'redeem', rewardId: 'full-access-month', requestId: randomUUID() };

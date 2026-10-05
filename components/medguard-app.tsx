@@ -37,7 +37,7 @@ import {
 } from '@/components/flashcards-workspace';
 import { openLiveChannels, subscribeLive } from '@/lib/realtime-client';
 import { createRefreshQueue } from '@/features/collaboration/client/refresh-queue';
-import { ApiError, api, setApiCache } from '@/lib/api-client';
+import { ApiError, api, setApiCache, invalidateApiResources } from '@/lib/api-client';
 import { DEFAULT_LEGAL_LINKS, type LegalLinks } from '@/lib/legal-links';
 import { DEFAULT_COMMUNITY_LINKS } from '@/features/announcements/domain/announcement';
 import { SiteAnnouncement } from '@/components/site-announcement';
@@ -2797,6 +2797,7 @@ function TestView({
   }
 
   function updatePrivateNote(note: string) {
+    if (!hasFeature(user.effectivePlan ?? user.tier, 'privateNotes', user.planLimits)) { openUpgrade(); return; }
     setState((current) => {
       const old = getQuestionProgress(current, question.id);
       return {
@@ -3075,14 +3076,14 @@ function TestView({
 
   return (
     <main className="q-test-screen flex flex-col bg-[#f5f7fa] dark:bg-background">
-      <QuestionFlashcardDialog
+      {hasFeature(user.effectivePlan ?? user.tier, 'flashcards', user.planLimits) && <QuestionFlashcardDialog
         question={question}
         qbankId={qbankId}
         state={state}
         setState={setState}
         open={flashcardOpen}
         onOpenChange={setFlashcardOpen}
-      />
+      />}
       <AdaptiveOverlay
         open={explanationOpen}
         onOpenChange={setExplanationOpen}
@@ -3148,6 +3149,7 @@ function TestView({
         <textarea
           dir="auto"
           value={progress.note}
+          disabled={!hasFeature(user.effectivePlan ?? user.tier, 'privateNotes', user.planLimits)}
           onChange={(event) => updatePrivateNote(event.target.value)}
           placeholder="Write a private note for this question…"
           className="min-h-52 w-full resize-y rounded-xl border bg-muted/20 p-4 text-sm leading-7 outline-none focus:border-primary focus:ring-3 focus:ring-primary/10"
@@ -3189,7 +3191,7 @@ function TestView({
             type="button"
             onClick={() => {
               setToolsOpen(false);
-              setPrivateNotesOpen(true);
+              if (hasFeature(user.effectivePlan ?? user.tier, 'privateNotes', user.planLimits)) setPrivateNotesOpen(true); else openUpgrade();
             }}
           >
             <StickyNote className="size-5" />
@@ -3219,7 +3221,7 @@ function TestView({
             type="button"
             onClick={() => {
               setToolsOpen(false);
-              setFlashcardOpen(true);
+              if (hasFeature(user.effectivePlan ?? user.tier, 'flashcards', user.planLimits)) setFlashcardOpen(true); else openUpgrade();
             }}
           >
             <Layers3 className="size-5" />
@@ -3397,13 +3399,13 @@ function TestView({
                       <IconButton
                         label="Open private note"
                         active={Boolean(progress.note.trim())}
-                        onClick={() => setPrivateNotesOpen(true)}
+                        onClick={() => hasFeature(user.effectivePlan ?? user.tier, 'privateNotes', user.planLimits) ? setPrivateNotesOpen(true) : openUpgrade()}
                       >
                         <StickyNote className="size-4" />
                       </IconButton>
                       <IconButton
                         label="Create flashcard from this question"
-                        onClick={() => setFlashcardOpen(true)}
+                        onClick={() => hasFeature(user.effectivePlan ?? user.tier, 'flashcards', user.planLimits) ? setFlashcardOpen(true) : openUpgrade()}
                       >
                         <Layers3 className="size-4" />
                       </IconButton>
@@ -6604,6 +6606,29 @@ export default function MedGuardApp({
   }, [flashcardCrudVersion, flushCloudState, hydrated, user]);
 
   useEffect(() => {
+    if (!user) return;
+    const uid = user.uid, session = personalStateSession.current;
+    const deadline = user.nextEntitlementChangeAt ?? user.effectivePlanExpiresAt;
+    let cancelled = false;
+    const refresh = async () => {
+      if (cancelled) return;
+      if (user.role !== 'super_admin' && (user.effectivePlan ?? user.tier) !== 'free' && user.effectivePlanExpiresAt && Date.parse(user.effectivePlanExpiresAt) <= Date.now() && personalStateSession.current === session) {
+        setUser(current => current?.uid === uid ? { ...current, tier: 'free', effectivePlan: 'free', planLimits: getPlanLimits('free') } : current);
+      }
+      if (!navigator.onLine || document.visibilityState === 'hidden') return;
+      invalidateApiResources(['account', 'subscriptions'], 'access-boundary');
+      await observeCloudflareUser(account => { if (!cancelled && personalStateSession.current === session) setUser(account ?? null); }).catch(() => undefined);
+    };
+    const visible = () => { if (document.visibilityState === 'visible' && deadline && Date.parse(deadline) <= Date.now()) void refresh(); };
+    const delay = deadline ? Math.max(0, Math.min(2147483647, Date.parse(deadline) - Date.now() + 100)) : undefined;
+    const timer = delay !== undefined && Number.isFinite(delay) ? window.setTimeout(() => void refresh(), delay) : undefined;
+    const checkpoint = deadline && Date.parse(deadline) > Date.now() + 2000
+      ? window.setTimeout(() => { if (personalStateSession.current.uid === uid) void flushCloudState(); }, Math.min(2147483647, Date.parse(deadline) - Date.now() - 2000)) : undefined;
+    document.addEventListener('visibilitychange', visible); window.addEventListener('online', visible);
+    return () => { cancelled = true; window.clearTimeout(timer); window.clearTimeout(checkpoint); document.removeEventListener('visibilitychange', visible); window.removeEventListener('online', visible); };
+  }, [user, setUser, flushCloudState]);
+
+  useEffect(() => {
     if (!user || !hydrated) return;
     const onlineHandler = () => {
       void flushPendingCloudState(user.uid).catch(() => setSyncStatus('local'));
@@ -7017,6 +7042,7 @@ export default function MedGuardApp({
   const createTest = useCallback(
     async (config: TestBuilderConfig) => {
       if (!user || creatingTest.current) return;
+      const creationSession = personalStateSession.current;
       setTestError('');
       setExamUpgradeRequest(null);
       const limits = (user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier));
@@ -7040,6 +7066,7 @@ export default function MedGuardApp({
         // Persist personal questions/overrides before using the same server pool
         // as the counter. Plan rules remain in the existing exam registration.
         const remote = await saveCloudState(user.uid, state);
+        if (personalStateSession.current !== creationSession) return;
         if (remote) {
           testBaseState = mergeAppStates(state, remote);
           stateSnapshot.current = testBaseState;
@@ -7058,6 +7085,7 @@ export default function MedGuardApp({
             }),
           },
         );
+        if (personalStateSession.current !== creationSession) return;
         selected = result.questions;
         setExamPool(selected);
       } catch (error) {
@@ -7089,6 +7117,7 @@ export default function MedGuardApp({
       }
       const test: TestSession = {
         id: crypto.randomUUID(),
+        accessPlan: user.effectivePlan ?? user.tier,
         title,
         mode: config.mode,
         questionIds: selected.map((question) => question.id),
@@ -7106,7 +7135,8 @@ export default function MedGuardApp({
       };
       creatingTest.current = true;
       try {
-        const registration = await registerStartedExam(test.id, test.questionIds.length);
+        const registration = await registerStartedExam(test.id, test.questionIds.length, user.uid);
+        if (personalStateSession.current !== creationSession) return;
         if (!registration.duplicate) window.dispatchEvent(new CustomEvent('qraft-exam-started', { detail: { uid: user.uid } }));
         setState((current) => ({
           ...current,
@@ -7330,6 +7360,8 @@ export default function MedGuardApp({
       </main>
     );
   }
+  if (view === 'test' && activeTest && (user.effectivePlan ?? user.tier) === 'free' && ((activeTest.accessPlan && activeTest.accessPlan !== 'free') || activeTest.questionIds.length > (user.planLimits ?? getPlanLimits('free')).maxQuestionsPerExam))
+    return <main className="grid min-h-screen place-items-center bg-background p-6"><div className="max-w-md rounded-2xl border bg-card p-6 text-center"><h1 className="text-xl font-bold">Full Access has ended</h1><p className="mt-3 text-sm text-muted-foreground">This test requires active Full Access. Your saved history remains available when you renew.</p><button className="q-button q-button-primary mt-5" onClick={() => setView('subscribe')}>Activate access</button><button className="q-button border ml-2 mt-5" onClick={() => setView('history')}>History</button></div></main>;
   if (view === 'test' && activeTest)
     return withGiftNotification(
       <TestView
@@ -7579,17 +7611,23 @@ export default function MedGuardApp({
               })
             }
             onStartBookmarks={(bankId, questionIds, title) => {
-              if (!accessibleQBanks.some(bank => bank.id === bankId)) return;
-              const test = createBookmarkStudySession({
-                bankId, questionIds, title, questionsById: allQuestionsById, progress: state.progress,
-              });
+              if (!accessibleQBanks.some(bank => bank.id === bankId) || creatingTest.current) return;
+              const test = createBookmarkStudySession({ bankId, questionIds, title, questionsById: allQuestionsById, progress: state.progress });
               if (!test) return;
-              setState((current) => ({
-                ...current,
-                tests: [test, ...current.tests],
-              }));
-              setActiveTestId(test.id);
-              setView('test');
+              if (test.questionIds.length > (user.planLimits ?? getPlanLimits(user.effectivePlan ?? user.tier)).maxQuestionsPerExam) { requestExamUpgrade('questions'); return; }
+              if (!navigator.onLine) { setTestError('Connect to register this study session.'); return; }
+              const session = personalStateSession.current; creatingTest.current = true;
+              void (async () => {
+                try {
+                  await registerStartedExam(test.id, test.questionIds.length, user.uid);
+                  if (personalStateSession.current !== session) return;
+                  test.accessPlan = user.effectivePlan ?? user.tier;
+                  setState(current => ({ ...current, tests: [test, ...current.tests] }));
+                  setActiveTestId(test.id); setView('test');
+                  window.dispatchEvent(new CustomEvent('qraft-exam-started', { detail: { uid: user.uid } }));
+                } catch (error) { if (personalStateSession.current === session) handleTestFailure(error, 'Unable to start bookmark study.'); }
+                finally { creatingTest.current = false; }
+              })();
             }}
             updateOrganization={(organization) =>
               setState((current) => ({
@@ -7692,7 +7730,8 @@ export default function MedGuardApp({
             onStudy={createTest}
           />
         )}
-        {view === 'flashcards' && (
+        {view === 'flashcards' && !hasFeature(user.effectivePlan ?? user.tier, 'flashcards', user.planLimits) && <div className="p-8"><h2 className="text-xl font-bold">Flashcards require Full Access</h2><p className="mt-2 text-sm text-muted-foreground">Activate access to create and study your cards.</p><button className="q-button q-button-primary mt-4" onClick={() => setView('subscribe')}>Activate access</button></div>}
+        {view === 'flashcards' && hasFeature(user.effectivePlan ?? user.tier, 'flashcards', user.planLimits) && (
           <FlashcardsWorkspace
             key={activeQBankId}
             state={state}

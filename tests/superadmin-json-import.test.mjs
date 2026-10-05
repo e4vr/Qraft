@@ -1,3 +1,4 @@
+import { seedFullAccess } from './access-fixtures.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -56,6 +57,7 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
     await db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,verified,created_at) VALUES(?,?,?,1,?)')
       .bind(createHash('sha256').update(`fixture-${uid}`).digest('hex'), uid, Math.floor(Date.now() / 1000) + 3600, now).run();
   }
+  for (const uid of ['monthly','quarterly']) await seedFullAccess(db, uid, uid === 'quarterly' ? 'full_quarterly' : 'full_monthly');
   const call = async (uid, path, body, method = body ? 'POST' : 'GET') => {
     const response = await mf.dispatchFetch(`https://qraft.test/api/cloudflare${path}`, {
       method,

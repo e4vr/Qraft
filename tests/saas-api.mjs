@@ -1,3 +1,4 @@
+import { seedFullAccess } from './access-fixtures.mjs';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -126,6 +127,7 @@ export async function saasApiTests(t, { db, call, mf, emptyState }) {
             ),
         ]),
       );
+      for (const uid of users) await seedFullAccess(db, uid);
       const measurements = [];
       const sockets = [];
       const firstMessages = [];
