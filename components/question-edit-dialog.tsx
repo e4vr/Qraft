@@ -51,7 +51,7 @@ export function QuestionEditDialog({ open, onClose, questionNumber, immediate, d
 
   return (
     <Dialog open={open} onOpenChange={next => { if (!next && !blocked) onClose(); }}>
-      <DialogContent showCloseButton={false} className="q-question-edit-dialog flex h-[min(920px,calc(100dvh-2rem))] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-6xl">
+      <DialogContent showCloseButton={false} className="q-question-edit-dialog flex h-[min(920px,calc(100dvh-2rem))] w-[calc(100vw-2rem)] flex-col gap-0 overflow-clip rounded-2xl p-0 sm:max-w-6xl">
         <form onSubmit={event => { event.preventDefault(); if (valid && !blocked) void onSubmit(); }} className="flex min-h-0 flex-1 flex-col">
           <header className="q-edit-dialog-header flex shrink-0 items-start justify-between gap-4 px-4 py-4 sm:px-6">
             <div className="min-w-0">

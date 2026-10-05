@@ -775,7 +775,7 @@ export function QBankManagement({
 
       {editing && (
         <Dialog open onOpenChange={open => { if (!open && !busy && !explanationImagesBusy) setEditing(undefined); }}>
-          <DialogContent showCloseButton={false} className="q-question-editor flex h-[min(860px,calc(100dvh-2rem))] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-2xl bg-card p-0 sm:max-w-4xl">
+          <DialogContent showCloseButton={false} className="q-question-editor flex h-[min(860px,calc(100dvh-2rem))] w-[calc(100vw-2rem)] flex-col gap-0 overflow-clip rounded-2xl bg-card p-0 sm:max-w-4xl">
             <form onSubmit={event => void saveQuestion(event)} className="flex min-h-0 flex-1 flex-col">
               <header className="flex shrink-0 items-start justify-between gap-4 border-b px-4 py-4 sm:px-6">
                 <div className="min-w-0">
@@ -864,7 +864,7 @@ export function QBankManagement({
                         <h3 className="text-sm font-bold">Question images</h3>
                         <span className="q-question-field-note">Optional</span>
                       </div>
-                      <label className="flex min-h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/30 p-4 text-center transition-colors hover:border-primary hover:bg-primary/5 focus-within:outline-2 focus-within:outline-primary">
+                      <label className="relative flex min-h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/30 p-4 text-center transition-colors hover:border-primary hover:bg-primary/5 focus-within:outline-2 focus-within:outline-primary">
                         <ImagePlus className="size-5 text-primary" />
                         <span className="text-sm font-semibold">Add images</span>
                         <span className="text-xs text-muted-foreground">Up to 5 new images · 10 MB each</span>

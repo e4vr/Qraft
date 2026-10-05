@@ -63,7 +63,7 @@ export function ExplanationImageEditor({ uid, qbankId, questionId, images, onCha
       onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); void attach(Array.from(event.dataTransfer.files)); } }}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <strong className="text-sm">{label}</strong>
-        <label className={`flex min-h-11 items-center gap-2 rounded-xl border px-3 text-sm font-semibold ${disabled || busy ? 'opacity-50' : 'cursor-pointer text-primary hover:bg-primary/5'}`}>
+        <label className={`relative flex min-h-11 items-center gap-2 rounded-xl border px-3 text-sm font-semibold ${disabled || busy ? 'opacity-50' : 'cursor-pointer text-primary hover:bg-primary/5'}`}>
           <ImagePlus className="size-4" />Add {label.toLowerCase()}
           <input aria-label={`Add ${label.toLowerCase()}`} className="sr-only" type="file" accept={NOTE_IMAGE_ACCEPT} multiple disabled={disabled || busy || images.length >= maximum} onChange={event => { void attach(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
         </label>
