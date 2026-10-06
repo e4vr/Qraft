@@ -4,6 +4,7 @@ import { ExplanationImages } from '@/components/explanation-images';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 import { collaborationBaseHash } from '@/features/collaboration/domain/collaboration-values';
 import { ReviewFilters } from '@/components/review-filters';
+import { canReviewProposalAuthorship } from '@/features/contributions/domain/proposal-review-policy';
 import {
   matchesProposalFilters,
   proposalEditKindLabel,
@@ -353,11 +354,11 @@ export function ReviewWorkspace({
         .filter(
           (proposal) =>
             proposal.status === 'pending' &&
-            proposal.proposedById !== user.uid &&
+            canReviewProposalAuthorship(user, proposal) &&
             bankIds.has(proposal.qbankId),
         )
         .sort((a, b) => b.proposedAt.localeCompare(a.proposedAt)),
-    [bankIds, collaboration.proposals, user.uid],
+    [bankIds, collaboration.proposals, user],
   );
   const bulkEligible = useMemo(
     () => pending.filter((proposal) => !isFlaggedDuplicate(proposal)),

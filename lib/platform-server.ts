@@ -1,5 +1,6 @@
 import { quote, type Discount } from '@/features/subscriptions/server/discount-quote';
 import { authorProposalView } from '@/features/contributions/domain/author-proposal-view';
+import { canReviewProposalAuthorship } from '@/features/contributions/domain/proposal-review-policy';
 import { importSubmissionFingerprint } from '@/features/imports/server/submission-fingerprint';
 import { proposalReviewHashes } from '@/features/contributions/server/review-version';
 import { collaborationWriteGuard } from '@/server/db/collaboration-write-guard';
@@ -1668,7 +1669,7 @@ export async function platformApi(request: Request, action: string) {
       const bank = state.qbanks.find((item) => item.id === proposal.qbankId);
       if (!bank || !canReviewBank(user, bank, state.memberships))
         return json({ error: 'Reviewer access is required for this QBank.' }, 403);
-      if (proposal.status !== 'pending' || proposal.proposedById === user.uid)
+      if (proposal.status !== 'pending' || !canReviewProposalAuthorship(user, proposal))
         return json({ error: 'This case was resolved or was submitted by you. Refresh and try again.' }, 409);
       const previousReview = await env.DB.prepare(
         'SELECT 1 AS value FROM contribution_reviews WHERE proposal_id=? AND reviewer_id=? LIMIT 1',
@@ -1902,7 +1903,7 @@ export async function platformApi(request: Request, action: string) {
         if (!bank || !canReviewBank(user, bank, state.memberships)) return json({ error: 'Reviewer access is required for every selected QBank.' }, 403);
         bankStates.set(bankId, state);
       }
-      if (proposals.some(proposal => proposal.status !== 'pending' || proposal.proposedById === user.uid))
+      if (proposals.some(proposal => proposal.status !== 'pending' || !canReviewProposalAuthorship(user, proposal)))
         return json({ error: 'Some selected questions were already reviewed or were submitted by you. Refresh and try again.' }, 409);
 
       const reviewRows = await env.DB.prepare(

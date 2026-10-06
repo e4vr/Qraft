@@ -189,6 +189,7 @@ import {
   hasModeratorRole,
   isPlatformRole,
 } from '@/features/access/domain/access-policy';
+import { canReviewProposalAuthorship } from '@/features/contributions/domain/proposal-review-policy';
 import {
   emptyProgress,
   initialCollaborationState,
@@ -6146,7 +6147,7 @@ export default function MedGuardApp({
           (proposal) =>
             proposal.qbankId === activeQBankId &&
             proposal.status === 'pending' &&
-            proposal.proposedById !== user.uid,
+            canReviewProposalAuthorship(user, proposal),
         ).length
       : 0;
   const dueFlashcardCount = state.flashcards.filter((card) => {

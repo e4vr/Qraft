@@ -228,10 +228,16 @@ print(json.dumps(out))`,
         assert.equal(saved.payload.explanation, 'Revised explanation');
         assert.equal(saved.proposedAt, previous.proposedAt);
         assert.equal(saved.status, 'pending');
-        assert.ok(
-          [403, 409].includes((await review(uid, saved)).status),
-          'Independent review still required',
-        );
+        const decision = await review(uid, saved);
+        if (uid === 'admin') {
+          assert.equal(decision.status, 200, JSON.stringify(decision));
+          assert.equal((await read(previous.id)).status, 'approved');
+          assert.equal(decision.data.updatedQuestions[0].writtenById, uid);
+          assert.equal(decision.data.updatedQuestions[0].reviewedById, uid);
+        } else {
+          assert.ok([403, 409].includes(decision.status), 'Ordinary authors still require independent review');
+          assert.equal((await read(previous.id)).status, 'pending');
+        }
       }
     },
   );

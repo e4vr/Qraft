@@ -354,4 +354,50 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
     assert.equal(Object.hasOwn(question, 'sourcePage'), false);
     assert.equal(question.sourceReference, 'Unified source.pdf');
   });
+  await t.test('Superadmin reviews their own imports individually and in bulk with durable attribution', async () => {
+    const result = await call('admin', '/platform/import', {
+      ...forPlan('self-review', 3),
+      questions: [0, 1, 2].map(index => ({ ...reusableQuestion, stem: `Administrative self review ${marker} ${index}` })),
+    });
+    assert.equal(result.status, 200, JSON.stringify(result.data));
+    const [single, ...bulk] = result.data.proposals;
+    const rejected = await call('admin', '/platform/bulk-review', { proposalIds: [single.id], status: 'rejected' });
+    assert.equal(rejected.status, 200, JSON.stringify(rejected.data));
+    assert.equal(rejected.data.updatedQuestions.length, 0);
+    assert.equal(rejected.data.updatedProposals[0].reviewedById, 'admin');
+    const approved = await call('admin', '/platform/bulk-review', { proposalIds: bulk.map(proposal => proposal.id), status: 'approved' });
+    assert.equal(approved.status, 200, JSON.stringify(approved.data));
+    assert.equal(approved.data.reviewed, 2);
+    assert.equal(approved.data.queueDelta, -2);
+    assert.ok(approved.data.updatedQuestions.every(question => question.writtenById === 'admin' && question.reviewedById === 'admin'));
+    assert.equal((await db.prepare('SELECT count(*) n FROM contribution_reviews WHERE author_id=? AND reviewer_id=? AND proposal_id IN (SELECT value FROM json_each(?))').bind('admin', 'admin', JSON.stringify(result.data.proposals.map(proposal => proposal.id))).first()).n, 3);
+    assert.equal((await call('admin', '/platform/bulk-review', { proposalIds: [bulk[0].id], status: 'approved' })).status, 409);
+
+    // Imported duplicate cases must retain the normal explicit-resolution gate.
+    const duplicate = await call('admin', '/platform/import', { ...forPlan('self-duplicate', 1), questions: [bulk[0].payload] });
+    assert.equal(duplicate.status, 200, JSON.stringify(duplicate.data));
+    await (await import('./reviewed-import-fixtures.mjs')).seedLegacyFlaggedImport(db, duplicate);
+    const ownDuplicate = duplicate.data.proposals[0];
+    assert.equal((await call('admin', '/platform/bulk-review', { proposalIds: [ownDuplicate.id], status: 'approved' })).status, 409);
+    const candidate = ownDuplicate.duplicateReview.candidates[0];
+    const resolved = await call('admin', '/platform/duplicate-resolve', { proposalId: ownDuplicate.id, candidateEntityId: candidate.entityId, decision: 'kept_both' });
+    assert.equal(resolved.status, 200, JSON.stringify(resolved.data));
+    assert.equal((await call('admin', '/platform/bulk-review', { proposalIds: [ownDuplicate.id], status: 'approved' })).status, 200);
+
+    const unsafeEdit = { ...single, id: randomUUID(), type: 'question_edit', status: 'pending', questionId: approved.data.updatedQuestions[0].id, currentSnapshot: approved.data.updatedQuestions[0], editKinds: ['correct_answer'], payload: { ...single.payload, answer: 1 }, reviewedById: undefined, reviewedAt: undefined };
+    await db.prepare("INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES('questionProposals',?,?,?,?,?)").bind(unsafeEdit.id, unsafeEdit.qbankId, 'admin', JSON.stringify(unsafeEdit), new Date().toISOString()).run();
+    assert.equal((await call('admin', '/platform/bulk-review', { proposalIds: [unsafeEdit.id], status: 'approved' })).status, 409);
+  });
+  await t.test('ordinary reviewers cannot approve their own imports through the Superadmin exception', async () => {
+    const original = await db.prepare('SELECT profile_json FROM profiles WHERE uid=?').bind('monthly').first();
+    await db.prepare('UPDATE profiles SET profile_json=? WHERE uid=?').bind(JSON.stringify({ ...JSON.parse(original.profile_json), platformRoles: ['reviewer'] }), 'monthly').run();
+    try {
+      const imported = await call('monthly', '/platform/import', { ...forPlan('ordinary-self-review', 1), questions: [{ ...reusableQuestion, stem: `Ordinary reviewer own upload ${marker}` }] });
+      assert.equal(imported.status, 200, JSON.stringify(imported.data));
+      const proposal = imported.data.proposals[0];
+      const review = await call('monthly', '/platform/bulk-review', { proposalIds: [proposal.id], status: 'approved' });
+      assert.equal(review.status, 409, JSON.stringify(review.data));
+      assert.equal(JSON.parse((await db.prepare("SELECT payload FROM records WHERE type='questionProposals' AND id=?").bind(proposal.id).first()).payload).status, 'pending');
+    } finally { await db.prepare('UPDATE profiles SET profile_json=? WHERE uid=?').bind(original.profile_json, 'monthly').run(); }
+  });
 });
