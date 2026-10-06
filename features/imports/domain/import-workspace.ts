@@ -13,10 +13,12 @@ export interface ImportRow {
   raw?: unknown;
   pendingRaw?: string;
   repairError?: string;
+  unresolvedMedia?: Array<'images' | 'explanationImages'>;
   excluded: boolean;
   reviewed: boolean;
   notes: string;
   submitted?: boolean;
+  frozen?: boolean;
 }
 export type ImportCheck = { fingerprint: string; matches: ImportMatch[] };
 export type ImportDecision = { fingerprint: string; candidates: string[] };
@@ -28,6 +30,9 @@ export interface ImportSubmission {
 }
 export interface ImportDraft {
   version: 1;
+  storageRevision?: string;
+  accountId?: string;
+  safetyVersion?: 2;
   bankId: string;
   fileName: string;
   fileHash: string;
@@ -39,7 +44,7 @@ export interface ImportDraft {
   decisions: Record<string, ImportDecision>;
   media: Record<string, Blob>;
   submission?: ImportSubmission;
-  resume?: Pick<ImportSubmission, 'sessionId' | 'successful'> & { savedBatches: ImportSubmission['batches'] };
+  resume?: Pick<ImportSubmission, 'sessionId' | 'successful'> & { savedBatches: ImportSubmission['batches']; confirmedCount?: number };
   questionLimit?: number;
 }
 
@@ -63,19 +68,47 @@ function editableQuestion(value: unknown, sourceFile: string): QuestionProposalP
   if (item.sourcePage !== undefined) q.sourcePage = Number(item.sourcePage);
   try {
     // Recover independently valid choices, answer and media without manufacturing a saved stem/source.
-    const recovered = normalizeImportedQuestion({ ...item, stem: q.stem || 'Temporary validation text', sourceFile: q.sourceFile || 'Temporary validation source', sourcePage: undefined }, 0);
+    const recovered = normalizeImportedQuestion({ ...item, images: undefined, explanationImages: undefined, stem: q.stem || 'Temporary validation text', sourceFile: q.sourceFile || 'Temporary validation source', sourcePage: undefined }, 0);
     q.options = recovered.options; q.answer = recovered.answer; q.images = recovered.images; q.explanationImages = recovered.explanationImages;
   } catch { /* Ambiguous answers remain unselected for explicit correction. */ }
-  try {
-    const media = normalizeImportedQuestion({ ...item, stem: 'Temporary validation text', sourceFile: 'Temporary validation source', sourcePage: undefined, options: ['Temporary first', 'Temporary second'], correctAnswer: 'A', correct_answer: undefined, answer: undefined, specialty: 'General', topic: 'General', explanation: '' }, 0);
-    q.images = media.images; q.explanationImages = media.explanationImages;
-  } catch { /* Malformed image entries remain available in Original JSON. */ }
+  for (const section of ['images', 'explanationImages'] as const) {
+    try { q[section] = recoverMedia(item, section); } catch { /* The unresolved field remains an explicit blocker. */ }
+  }
   return q;
+}
+
+function recoverMedia(item: Record<string, unknown>, section: 'images' | 'explanationImages') {
+  return normalizeImportedQuestion({ stem: 'Temporary validation text', sourceFile: 'Temporary validation source', options: ['First', 'Second'], correctAnswer: 'A', [section]: item[section] }, 0)[section] ?? [];
+}
+export function unresolvedImportMedia(row: ImportRow) {
+  if (row.unresolvedMedia) return row.unresolvedMedia;
+  const raw = row.raw && typeof row.raw === 'object' ? row.raw as Record<string, unknown> : {};
+  return (['images', 'explanationImages'] as const).filter(section => { try { recoverMedia(raw, section); return false; } catch { return true; } });
+}
+export function localImportBlob(media: Record<string, Blob>, id: string): Blob | undefined {
+  return Object.hasOwn(media, id) && media[id] instanceof Blob ? media[id] : undefined;
+}
+export const MAX_LOCAL_MEDIA_BYTES = 100 * 1024 * 1024;
+export function boundedImportHistory(history: ImportDraft[], current: ImportDraft): ImportDraft[] {
+  const blobs = new Set<Blob>(), files = new Set<string>(); let bytes = 0;
+  const cost = (draft: ImportDraft) => {
+    for (const blob of Object.values(draft.media)) if (blob instanceof Blob && !blobs.has(blob)) { blobs.add(blob); bytes += blob.size; }
+    if (!files.has(draft.rawFile)) { files.add(draft.rawFile); bytes += draft.rawFile.length * 2; }
+  };
+  cost(current); const retained: ImportDraft[] = [];
+  for (const previous of history.slice(-20).reverse()) { cost(previous); if (bytes > 160 * 1024 * 1024) break; retained.unshift(previous); }
+  return retained;
+}
+export function pruneImportMedia(draft: ImportDraft): ImportDraft {
+  const ids = new Set(draft.rows.flatMap(row => [...row.question.images, ...(row.question.explanationImages ?? [])].filter(image => image.url.startsWith('local-import:')).map(image => image.id)));
+  for (const batch of draft.submission?.batches ?? draft.resume?.savedBatches ?? []) for (const question of batch.questions) for (const image of [...question.images, ...(question.explanationImages ?? [])]) if (image.url.startsWith('local-import:')) ids.add(image.id);
+  const media = Object.fromEntries([...ids].flatMap(id => { const blob = localImportBlob(draft.media, id); return blob ? [[id, blob] as const] : []; }));
+  return Object.keys(media).length === Object.keys(draft.media).length ? draft : { ...draft, media };
 }
 
 export function draftFromReport(report: QuestionImportReport, bankId: string, fileName: string, fileHash: string, rawFile: string): ImportDraft {
   const entries = report.entries ?? report.questions.map((question, index) => ({ inputIndex: index + 1, value: question, question, error: undefined }));
-  return { version: 1, bankId, fileName, fileHash, rawFile, repaired: report.repaired,
+  return { version: 1, safetyVersion: 2, bankId, fileName, fileHash, rawFile, repaired: report.repaired,
     rows: entries.map(entry => ({ id: crypto.randomUUID(), position: entry.inputIndex, question: entry.question ?? editableQuestion(entry.value, report.sourceFile), original: entry.question, raw: entry.value, repairError: entry.error, excluded: false, reviewed: false, notes: '' })),
     // Invalid rows remain editable; only extraction-declared skipped items stay here.
     skipped: report.skipped.filter(item => item.inputIndex === undefined), checks: {}, decisions: {}, media: {} };
@@ -84,6 +117,8 @@ export function draftFromReport(report: QuestionImportReport, bankId: string, fi
 export function validateImportRow(row: ImportRow): { question?: QuestionProposalPayload; error?: string } {
   if (row.pendingRaw !== undefined) return { error: 'Apply or discard the pending Original JSON edits before checking this question.' };
   if (row.repairError) return { error: row.repairError };
+  const missing = unresolvedImportMedia(row);
+  if (missing.length) return { error: `${missing.join(', ')}: original attachments need repair or explicit removal.` };
   try {
     const q = row.question;
     if (q.images.length > 10 || (q.explanationImages?.length ?? 0) > 10) return { error: 'images (maximum 10 per section)' };
@@ -110,14 +145,20 @@ export function decisionIsCurrent(row: ImportRow, matches: ImportMatch[], decisi
   return !!decision && decision.fingerprint === importRowFingerprint(row) && decision.candidates.length === matches.length && matches.every(match => decision.candidates.includes(match.candidateFingerprint));
 }
 
-export function workspaceReadiness(draft: ImportDraft) {
+export function workspaceReadiness(draft: ImportDraft, localMatches?: Record<string, ImportMatch[]>, cached?: { fingerprint: (row: ImportRow) => string; validation: (row: ImportRow) => ReturnType<typeof validateImportRow> }) {
   const active = draft.rows.filter(row => !row.excluded);
-  const matches = workspaceMatches(draft);
-  const invalid = active.filter(row => validateImportRow(row).error);
-  const unchecked = active.filter(row => draft.checks[row.id]?.fingerprint !== importRowFingerprint(row));
-  const unresolved = active.filter(row => matches[row.id]?.length && !decisionIsCurrent(row, matches[row.id], draft.decisions[row.id]));
-  const limitExceeded = draft.questionLimit !== undefined && active.length + (draft.resume?.successful ?? 0) > draft.questionLimit;
-  return { active, invalid, unchecked, unresolved, matches, limitExceeded, ready: active.length > 0 && !invalid.length && !unchecked.length && !unresolved.length && !limitExceeded };
+  const fingerprint = cached?.fingerprint ?? importRowFingerprint;
+  const matches = localMatches ? Object.fromEntries(active.map(row => [row.id, [...(draft.checks[row.id]?.fingerprint === fingerprint(row) ? draft.checks[row.id].matches.filter(match => match.draftIndex === undefined) : []), ...(localMatches[row.id] ?? [])]])) : workspaceMatches(draft);
+  const invalid = active.filter(row => (cached?.validation ?? validateImportRow)(row).error);
+  const unchecked = active.filter(row => draft.checks[row.id]?.fingerprint !== fingerprint(row));
+  const unresolved = active.filter(row => {
+    const found = matches[row.id] ?? [], decision = draft.decisions[row.id];
+    return found.length && !(decision && decision.fingerprint === fingerprint(row) && decision.candidates.length === found.length && found.every(match => decision.candidates.includes(match.candidateFingerprint)));
+  });
+  const reserved = draft.resume?.savedBatches.reduce((total, batch) => total + batch.questions.length, 0) ?? 0;
+  const recoveredPending = !!draft.resume && (draft.resume.confirmedCount ?? draft.resume.savedBatches.length) < draft.resume.savedBatches.length;
+  const limitExceeded = draft.questionLimit !== undefined && active.length + reserved > draft.questionLimit;
+  return { active, invalid, unchecked, unresolved, matches, limitExceeded, ready: (active.length > 0 || recoveredPending) && !invalid.length && !unchecked.length && !unresolved.length && !limitExceeded };
 }
 
 export function moveImportOption(q: QuestionProposalPayload, index: number, target: number) {
@@ -131,14 +172,13 @@ export function moveImportOption(q: QuestionProposalPayload, index: number, targ
   return { ...q, options, answer };
 }
 
-export function skipWorkspaceExact(draft: ImportDraft): ImportDraft {
-  const matches = workspaceMatches(draft);
+export function skipWorkspaceExact(draft: ImportDraft, matches = workspaceMatches(draft)): ImportDraft {
   const kept = new Set<string>();
   return { ...draft, rows: draft.rows.map(row => {
     if (row.excluded || validateImportRow(row).error) return row;
     const identity = exactImportIdentity(row.question);
     if (!identity) return row;
-    const bankMatch = (matches[row.id] ?? []).some(match => match.draftIndex === undefined && exactImportIdentity(match.payload) === identity);
+    const bankMatch = (matches[row.id] ?? []).some(match => match.draftIndex === undefined && match.payload && exactImportIdentity(match.payload) === identity);
     if (bankMatch || kept.has(identity)) return { ...row, excluded: true };
     kept.add(identity); return row;
   }) };
@@ -152,11 +192,10 @@ export function exportImportDraft(draft: ImportDraft) {
 export function repairImportRow(row: ImportRow, raw: string, fallback = ''): ImportRow {
   const report = parseQuestionImportReport(raw, fallback);
   if (report.questions.length !== 1 || report.skipped.length) throw new Error(report.skipped[0]?.reason ?? 'Provide exactly one complete question.');
-  return { ...row, question: report.questions[0], raw: report.entries?.[0].value, pendingRaw: undefined, repairError: undefined, reviewed: false };
+  return { ...row, question: report.questions[0], raw: report.entries?.[0].value, pendingRaw: undefined, repairError: undefined, unresolvedMedia: [], reviewed: false };
 }
 
-export function makeImportSubmission(draft: ImportDraft): ImportSubmission {
-  const readiness = workspaceReadiness(draft);
+export function makeImportSubmission(draft: ImportDraft, readiness = workspaceReadiness(draft)): ImportSubmission {
   if (readiness.limitExceeded) throw new Error(`Select at most ${draft.questionLimit} questions for this import, including any confirmed batches.`);
   if (!readiness.ready) throw new Error('Correct errors, finish Check duplication, and resolve every match before submitting.');
   const batches: ImportSubmission['batches'] = [];
@@ -171,5 +210,27 @@ export function makeImportSubmission(draft: ImportDraft): ImportSubmission {
     const matches = readiness.matches[row.id] ?? [];
     batch.choices.push(matches.length ? { sourceFingerprint: duplicateFingerprint(question), candidateFingerprints: matches.map(match => match.candidateFingerprint) } : null);
   }
-  return { sessionId: draft.resume?.sessionId ?? crypto.randomUUID(), batches: [...(draft.resume?.savedBatches ?? []), ...batches], completed: draft.resume?.savedBatches.length ?? 0, successful: draft.resume?.successful ?? 0 };
+  return { sessionId: draft.resume?.sessionId ?? crypto.randomUUID(), batches: [...(draft.resume?.savedBatches ?? []), ...batches], completed: draft.resume?.confirmedCount ?? draft.resume?.savedBatches.length ?? 0, successful: draft.resume?.successful ?? 0 };
+}
+
+// Only immutable editor objects use this cache. The standalone validators stay
+// uncached for API callers and mutable test fixtures.
+export function createImportAnalysisCache() {
+  const fingerprints = new WeakMap<QuestionProposalPayload, string>();
+  const comparisons = new WeakMap<QuestionProposalPayload, string>();
+  const validations = new WeakMap<ImportRow, ReturnType<typeof validateImportRow>>();
+  return {
+    comparisonKey(row: ImportRow) { let value = comparisons.get(row.question); if (value === undefined) { const q = row.question; value = JSON.stringify([q.stem, q.options, q.answer, q.specialty, q.topic]); comparisons.set(q, value); } return value; },
+    fingerprint(row: ImportRow) { let value = fingerprints.get(row.question); if (value === undefined) { value = importRowFingerprint(row); fingerprints.set(row.question, value); } return value; },
+    validation(row: ImportRow) { let value = validations.get(row); if (!value) { value = validateImportRow(row); validations.set(row, value); } return value; },
+  };
+}
+
+export function unlockImportSubmission(draft: ImportDraft): ImportDraft {
+  if (!draft.submission) return draft;
+  const savedBatches = draft.submission.batches.slice(0, draft.submission.completed);
+  const ids = new Set(savedBatches.flatMap(batch => batch.rowIds));
+  const snapshots = new Map(draft.submission.batches.flatMap(batch => batch.rowIds.map((id, i) => [id, batch.questions[i]] as const)));
+  return { ...draft, rows: draft.rows.map(row => ({ ...row, question: snapshots.get(row.id) ?? row.question, frozen: undefined, ...(ids.has(row.id) ? { submitted: true, excluded: true } : { submitted: false, ...(row.frozen ? { excluded: false } : {}) }) })), submission: undefined,
+    resume: { sessionId: draft.submission.sessionId, successful: draft.submission.successful, savedBatches }, checks: {}, decisions: {} };
 }

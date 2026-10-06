@@ -54,7 +54,7 @@ export function planExactImportSkip(
       (matches[index] ?? []).some(
         (match) =>
           match.draftIndex === undefined &&
-          exactImportIdentity(match.payload) === identity,
+          !!match.payload && exactImportIdentity(match.payload) === identity,
       );
     if (inBank || first.has(identity)) {
       indexes.push(index);

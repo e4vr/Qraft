@@ -9,6 +9,7 @@ const m = await import(`data:text/javascript;base64,${Buffer.from(compiled.outpu
 const input = { stem: 'Which choice applies?', options: ['First', 'Second'], correctAnswer: 'B', sourceFile: 'Original.pdf', explanation: 'Reason', specialty: 'General', topic: 'Topic' };
 const draft = (questions = [input], bank = 'bank') => m.draftFromReport(m.parseQuestionImportReport({ questions }), bank, 'file.json', 'a'.repeat(64), JSON.stringify({ questions }));
 const checked = d => ({ ...d, checks: Object.fromEntries(d.rows.map(row => [row.id, { fingerprint: m.importRowFingerprint(row), matches: [] }])) });
+const resolved = d => { const state = m.workspaceReadiness(d); for (const row of state.unresolved) d.decisions[row.id] = { fingerprint: m.importRowFingerprint(row), candidates: state.matches[row.id].map(match => match.candidateFingerprint) }; return d; };
 
 await test('invalid entries remain editable with original positions and raw data', () => {
   const d = draft([input, { ...input, correctAnswer: 'Z' }, { ...input, sourceFile: '' }]);
@@ -126,7 +127,7 @@ await test('local images survive device persistence without blocking structural 
 });
 
 await test('stable batch identifiers and acknowledgement count survive reloads', async () => {
-  const d = checked(draft(Array.from({ length: 60 }, (_, i) => ({ ...input, stem: `Unique question ${i}` }))));
+  const d = resolved(checked(draft(Array.from({ length: 60 }, (_, i) => ({ ...input, stem: `Unique question ${i}` })))));
   d.submission = m.makeImportSubmission(d);
   assert.deepEqual(d.submission.batches.map(batch => batch.questions.length), [25, 25, 10]);
   d.submission.completed = 1; d.submission.successful = 25;
@@ -138,12 +139,12 @@ await test('stable batch identifiers and acknowledgement count survive reloads',
 });
 
 await test('a conflict after partial submission resumes the same logical import without resending saved questions', () => {
-  const d = checked(draft(Array.from({ length: 30 }, (_, i) => ({ ...input, stem: `Resume question ${i}` }))));
+  const d = resolved(checked(draft(Array.from({ length: 30 }, (_, i) => ({ ...input, stem: `Resume question ${i}` })))));
   const original = m.makeImportSubmission(d);
   d.resume = { sessionId: original.sessionId, successful: 25, savedBatches: original.batches.slice(0, 1) };
   const saved = new Set(original.batches[0].rowIds);
   d.rows = d.rows.map(row => saved.has(row.id) ? { ...row, excluded: true, submitted: true } : row);
-  const resumed = m.makeImportSubmission(d);
+  const resumed = m.makeImportSubmission(resolved(d));
   assert.equal(resumed.sessionId, original.sessionId);
   assert.equal(resumed.completed, 1);
   assert.equal(resumed.successful, 25);

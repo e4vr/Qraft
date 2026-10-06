@@ -7,15 +7,17 @@ import { WorkspaceHeader } from './workspace-header';
 import { useConfirmationDialog } from './ui/confirmation-dialog';
 import { readImportFile } from '@/features/imports/client/read-import-file';
 import { importRequest } from '@/features/imports/client/import-request';
-import { importWorkspaceContext } from '@/features/imports/client/open-import-workspace';
-import { loadImportDraft, saveImportDraft } from '@/features/imports/client/import-draft-store';
-import { draftFromReport, emptyImportQuestion, exportImportDraft, importRowFingerprint, makeImportSubmission, moveImportOption, repairImportRow, skipWorkspaceExact, validateImportRow, workspaceReadiness, decisionIsCurrent, type ImportDraft, type ImportRow } from '@/features/imports/domain/import-workspace';
+import { importWorkspaceContext, bindImportWorkspace, unboundImportScope } from '@/features/imports/client/open-import-workspace';
+import { loadImportDraft, saveImportDraft, bindImportDraftScope, ImportDraftConflict } from '@/features/imports/client/import-draft-store';
+import { localImportTask } from '@/features/imports/client/local-import-task';
+import { boundedImportHistory } from '@/features/imports/domain/import-workspace';
+import { draftFromReport, emptyImportQuestion, exportImportDraft, importRowFingerprint, makeImportSubmission, moveImportOption, repairImportRow, skipWorkspaceExact, validateImportRow, workspaceReadiness, decisionIsCurrent, localImportBlob, pruneImportMedia, MAX_LOCAL_MEDIA_BYTES, unresolvedImportMedia, createImportAnalysisCache, unlockImportSubmission, type ImportDraft, type ImportRow } from '@/features/imports/domain/import-workspace';
 import { exactImportIdentity } from '@/features/imports/domain/exact-import-duplicates';
 import type { ImportMatch } from '@/features/imports/domain/local-import-duplicates';
 import { ApiError } from '@/lib/api-client';
-import { buildQuestionPrompt, importedSourceReference, parseQuestionImportReport, type QuestionPromptSettings } from '@/lib/question-import';
+import { buildQuestionPrompt, importedSourceReference, type QuestionPromptSettings } from '@/lib/question-import';
 import { optionLabel, type NoteImage, type QuestionProposalPayload } from '@/lib/medguard-types';
-import { uploadQuestionImage, uploadSharedNoteImage } from '@/features/qbanks/client/qbank-client';
+import { uploadImportImage } from '@/features/qbanks/client/qbank-client';
 import './import-workspace.css';
 
 type Step = 'edit' | 'duplicates' | 'submit';
@@ -27,7 +29,10 @@ function comparisonDifferences(left: QuestionProposalPayload, right: QuestionPro
 }
 
 function download(name: string, contents: string) {
-  const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
+  downloadBlob(name, new Blob([contents], { type: 'application/json' }));
+}
+function downloadBlob(name: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a'); link.href = url; link.download = name; link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -48,7 +53,7 @@ function QuestionPreview({ question, media = {} }: { question: QuestionProposalP
     <p className="iw-prose"><FormattedQuestionText text={question.stem || 'Question text will appear here.'} /></p>
     <ol className="iw-preview-options">{question.options.map((option, i) => <li key={i} className={question.answer === i ? 'is-answer' : ''}><b>{optionLabel(i)}</b><span><FormattedQuestionText text={option || 'Empty choice'} /></span>{question.answer === i && <Check size={16} aria-label="Correct answer" />}</li>)}</ol>
     {question.explanation && <div className="iw-prose iw-preview-explanation"><span className="iw-eyebrow">Explanation</span><FormattedQuestionText text={question.explanation} /></div>}
-    <div className="iw-image-grid">{[...question.images, ...(question.explanationImages ?? [])].map(image => <figure key={image.id}><LocalImage image={image} blob={media[image.id]} /><figcaption>{image.caption || image.name}</figcaption></figure>)}</div>
+    <div className="iw-image-grid">{[...question.images.map(image => ({ image, section: 'question' })), ...(question.explanationImages ?? []).map(image => ({ image, section: 'explanation' }))].map(({ image, section }) => <figure key={`${section}:${image.id}`}><LocalImage image={image} blob={localImportBlob(media, image.id)} /><figcaption>{image.caption || image.name}</figcaption></figure>)}</div>
     <p className="iw-muted">{importedSourceReference(question.sourceFile || '', question.sourcePage, question.originalQuestionNumber)}</p>
   </article>;
 }
@@ -56,14 +61,14 @@ function QuestionPreview({ question, media = {} }: { question: QuestionProposalP
 function LocalImage({ image, blob }: { image: NoteImage; blob?: Blob }) {
   const [url, setUrl] = useState('');
   useEffect(() => {
-    if (!blob) return;
+    if (!(blob instanceof Blob)) return;
     const next = URL.createObjectURL(blob);
     // Blob URLs synchronize external browser resources with this preview.
     queueMicrotask(() => setUrl(next));
     return () => URL.revokeObjectURL(next);
   }, [blob]);
   // Remote/protected images are opened explicitly rather than fetched during editing.
-  return blob && url ? <img src={url} alt={image.caption || image.name} /> : <a href={image.url} target="_blank" rel="noopener noreferrer">Open existing image</a>;
+  return blob instanceof Blob && url ? <img src={url} alt={image.caption || image.name} /> : image.url.startsWith('local-import:') ? <span role="alert">Local image missing. Restore it before submitting.</span> : <a href={image.url} target="_blank" rel="noopener noreferrer">Open existing image</a>;
 }
 
 function PromptBuilder() {
@@ -85,6 +90,11 @@ function PromptBuilder() {
 
 export function ImportWorkspace({ bankId }: { bankId: string }) {
   const [context, setContext] = useState({ uid: '', bankName: bankId });
+  const contextRef = useRef(context);
+  const storageScope = useRef('');
+  const storageRevision = useRef<string | null>(null);
+  const [storageConflict, setStorageConflict] = useState(false);
+  const [accountChanged, setAccountChanged] = useState(false);
   const [draft, setDraft] = useState<ImportDraft>();
   const draftRef = useRef<ImportDraft | undefined>(undefined);
   const [hydrated, setHydrated] = useState(false);
@@ -95,6 +105,7 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState('');
   const operation = useRef(false);
+  const operationController = useRef<AbortController | undefined>(undefined);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -103,6 +114,7 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [preview, setPreview] = useState(false);
   const [wholeFile, setWholeFile] = useState('');
+  const [fullBackup, setFullBackup] = useState<{ url: string; draft: ImportDraft }>();
   const [dragging, setDragging] = useState(false);
   const [rights, setRights] = useState(false);
   const [bulk, setBulk] = useState({ source: '', specialty: '', topic: '' });
@@ -110,8 +122,27 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
   const [future, setFuture] = useState<ImportDraft[]>([]);
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [confirmAction, confirmationDialog] = useConfirmationDialog();
-  const locked = !!busy || !!draft?.submission;
-  const readiness = useMemo(() => draft ? workspaceReadiness(draft) : undefined, [draft]);
+  const locked = !!busy || !!draft?.submission || storageConflict || accountChanged;
+  const analysisCache = useMemo(() => createImportAnalysisCache(), []);
+  const activeRows = useMemo(() => draft?.rows.filter(item => !item.excluded) ?? [], [draft?.rows]);
+  const [localAnalysis, setLocalAnalysis] = useState<{ ids: string[]; keys: string[]; matches: ImportMatch[][] }>({ ids: [], keys: [], matches: [] });
+  const [analysisError, setAnalysisError] = useState('');
+  const localPending = activeRows.length !== localAnalysis.keys.length || activeRows.some((item, i) => item.id !== localAnalysis.ids[i] || analysisCache.comparisonKey(item) !== localAnalysis.keys[i]);
+  const localMatches = useMemo(() => localPending ? {} : Object.fromEntries(activeRows.map((item, i) => [item.id, (localAnalysis.matches[i] ?? []).map(match => ({ ...match, payload: activeRows[match.draftIndex!]?.question }))])), [activeRows, localAnalysis, localPending]);
+  useEffect(() => {
+    if (!localPending) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      setAnalysisError('');
+      const questions = activeRows.map(item => item.question);
+      void localImportTask<{ matches: ImportMatch[][] }>({ action: 'duplicates', questions }, controller.signal).then(result => {
+        setLocalAnalysis({ ids: activeRows.map(item => item.id), keys: activeRows.map(item => analysisCache.comparisonKey(item)), matches: result.matches });
+      }).catch(caught => { if (!controller.signal.aborted) setAnalysisError(caught instanceof Error ? caught.message : 'Local duplicate analysis failed. Edit a question to retry.'); });
+    }, 300);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [activeRows, localPending, analysisCache]);
+  const readiness = useMemo(() => draft ? workspaceReadiness(draft, localMatches, analysisCache) : undefined, [draft, localMatches, analysisCache]);
+  const analyze = (value: ImportDraft) => workspaceReadiness(value, localMatches, analysisCache);
   const row = draft?.rows.find(item => item.id === selected);
   const rowError = row && !row.excluded ? validateImportRow(row).error : undefined;
   const rawText = row?.pendingRaw ?? (row?.raw === undefined ? '' : JSON.stringify(row.raw, null, 2));
@@ -127,14 +158,27 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
   useEffect(() => {
     let active = true;
     const info = importWorkspaceContext(bankId);
-    void loadImportDraft(info.uid, bankId).then(saved => {
+    storageScope.current = info.uid || unboundImportScope(bankId); contextRef.current = info;
+    void loadImportDraft(storageScope.current, bankId).then(saved => {
       if (!active) return;
       setContext(info);
-      if (saved) { draftRef.current = saved; setDraft(saved); setSelected(saved.rows[0]?.id || ''); setWholeFile(saved.rawFile); setNotice('Your local draft was restored. No file needs to be reopened.'); }
+      storageRevision.current = saved?.storageRevision ?? null;
+      if (saved) { const restored = { ...saved, accountId: saved.accountId || info.uid || undefined, safetyVersion: 2 as const, ...(saved.safetyVersion !== 2 ? { checks: {}, decisions: {} } : {}) }; draftRef.current = restored; setDraft(restored); setSelected(restored.rows[0]?.id || ''); setWholeFile(restored.rawFile); setNotice('Your local draft was restored. No file needs to be reopened.'); }
       setHydrated(true);
     }).catch(() => { if (active) { setContext(info); setHydrated(true); setLocalSave('Local saving is unavailable. Download your work before leaving.'); } });
     return () => { active = false; };
   }, [bankId]);
+  useEffect(() => {
+    const check = () => {
+      try { const uid = localStorage.getItem('qraft-current-account'); const owner = contextRef.current.uid || draftRef.current?.accountId;
+        const changed = !!owner && uid !== null && uid !== owner; setAccountChanged(changed); if (changed) operationController.current?.abort(new DOMException('The account changed. Sign in with the draft’s original account.', 'AbortError'));
+      } catch { /* The server verifies the bound identity on every request. */ }
+    };
+    window.addEventListener('storage', check); window.addEventListener('qraft-account-changed', check);
+    return () => { window.removeEventListener('storage', check); window.removeEventListener('qraft-account-changed', check); };
+  }, []);
+  useEffect(() => () => { operationController.current?.abort(); if (saveTimer.current) clearTimeout(saveTimer.current); }, []);
+  useEffect(() => () => { if (fullBackup) URL.revokeObjectURL(fullBackup.url); }, [fullBackup]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (operation.current || (draftRef.current && localSave !== 'Saved on this device')) event.preventDefault(); };
     window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
@@ -143,11 +187,12 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
   function persist(next: ImportDraft, immediate = false) {
     setLocalSave('Saving on this device…');
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    const scope = storageScope.current;
     const save = () => {
       // Serialize writes and debounce typing; submission acknowledgements save immediately.
-      const task = saveQueue.current.catch(() => {}).then(() => saveImportDraft(context.uid, next));
+      const task = saveQueue.current.catch(() => {}).then(async () => { const revision = await saveImportDraft(scope, next, storageRevision.current); storageRevision.current = revision; });
       saveQueue.current = task;
-      void task.then(() => { if (draftRef.current === next) setLocalSave('Saved on this device'); }).catch(() => setLocalSave('Local save failed. Download your work before leaving.'));
+      void task.then(() => { if (draftRef.current === next) setLocalSave('Saved on this device'); }).catch(caught => { if (caught instanceof ImportDraftConflict) { setStorageConflict(true); setError(caught.message); } setLocalSave('Local save failed. Download a full backup before leaving.'); });
       return task;
     };
     if (immediate) return save();
@@ -155,12 +200,28 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
     return Promise.resolve();
   }
   function commit(next: ImportDraft, undoable = true) {
-    if (undoable && draftRef.current) { setHistory(old => [...old.slice(-19), draftRef.current!]); setFuture([]); }
-    draftRef.current = next; setDraft(next); void persist(next, !undoable); return next;
+    setFullBackup(undefined);
+    const pruned = pruneImportMedia(next);
+    if (undoable && draftRef.current) { const previous = draftRef.current; setHistory(old => boundedImportHistory([...old, previous], pruned)); setFuture([]); }
+    draftRef.current = pruned; setDraft(pruned); void persist(pruned, !undoable); return pruned;
+  }
+
+  async function bindAccount(uid: string, bankName: string) {
+    const current = draftRef.current!;
+    if (!uid || current.accountId && current.accountId !== uid || contextRef.current.uid && contextRef.current.uid !== uid) throw new Error('The active account changed. Sign in with the account that owns this draft.');
+    if (!contextRef.current.uid) {
+      await persist(current, true);
+      const existing = await loadImportDraft(uid, bankId);
+      if (existing && !(await confirmAction({ title: 'Replace this account’s saved draft?', description: 'This account already has a local draft for this QBank. Keep a full backup before replacing it with the file you are checking.', confirmLabel: 'Use current draft', tone: 'warning' }))) throw new Error('Account binding stopped. Your current draft is preserved.');
+      const revision = await bindImportDraftScope(storageScope.current, uid, current, storageRevision.current, existing?.storageRevision ?? null);
+      storageScope.current = uid; storageRevision.current = revision;
+    }
+    const info = { uid, bankName }; contextRef.current = info; setContext(info); bindImportWorkspace(bankId, uid, bankName);
+    return { ...current, accountId: uid };
   }
   function updateRow(id: string, update: (current: ImportRow) => ImportRow) {
     const current = draftRef.current; if (!current || locked) return;
-    commit({ ...current, rows: current.rows.map(item => item.id === id && !item.submitted ? update(item) : item) }); setError('');
+    commit({ ...current, rows: current.rows.map(item => item.id === id && !item.submitted && !item.frozen ? update(item) : item) }); setError('');
   }
   function editQuestion(patch: Partial<QuestionProposalPayload>) {
     if (!row) return;
@@ -176,23 +237,25 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
   }
 
   async function openFile(file?: File) {
-    if (!file || operation.current) return;
+    if (!file || operation.current || storageConflict || accountChanged) return;
     if (draft && !(await confirmAction({ title: 'Open a different file?', description: 'The current local draft will be replaced. Download it first if you want to keep a copy.', confirmLabel: 'Open file', tone: 'warning' }))) return;
-    operation.current = true; setBusy('Reading your file locally'); setError('');
+    operation.current = true; operationController.current = new AbortController(); setBusy('Reading your file locally'); setError('');
     try {
       if (!/\.(json|txt|text)$/i.test(file.name)) throw new Error('Choose a .json or .txt file containing JSON questions.');
       if (file.size > 50_000_000) throw new Error('Choose a file up to 50 MB for local review.');
       let next: ImportDraft;
       try {
-        const { report, hash, content } = await readImportFile(file);
+        const { report, hash, content } = await readImportFile(file, operationController.current.signal);
         next = draftFromReport(report, bankId, file.name, hash, content);
       } catch (caught) {
+        if (operationController.current.signal.aborted || caught instanceof DOMException && caught.name === 'AbortError') throw caught;
         const content = await file.text();
         const bytes = await file.arrayBuffer();
         const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(value => value.toString(16).padStart(2, '0')).join('');
         next = draftFromReport({ questions: [], skipped: [], sourceFile: '', repaired: false, entries: [] }, bankId, file.name, hash, content);
         setError(`${caught instanceof Error ? caught.message : 'The JSON could not be read.'} Edit the file contents below and try again; no reupload is required.`);
       }
+      next.accountId = contextRef.current.uid || undefined;
       commit(next, false); setHistory([]); setFuture([]); setSelected(next.rows[0]?.id || ''); setWholeFile(next.rawFile); setStep('edit'); setFilter('all'); setPage(0); setRights(false);
       setNotice(next.repaired ? 'JSON formatting was repaired locally. Review the questions against your source.' : 'File opened locally. Review and edit before Check duplication.');
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to read the file.'); }
@@ -201,11 +264,43 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
   async function repairFile() {
     if (!draft || locked) return;
     if (draft.rows.length && !(await confirmAction({ title: 'Reparse file contents?', description: 'Replaces the edited questions and duplication decisions with these JSON contents. You can undo this change.', confirmLabel: 'Reparse locally', tone: 'warning' }))) return;
+    operation.current = true; operationController.current = new AbortController(); setBusy('Reparsing locally');
     try {
-      const report = parseQuestionImportReport(wholeFile, '', Infinity);
-      const next = draftFromReport(report, bankId, draft.fileName, draft.fileHash, wholeFile);
+      if (new Blob([wholeFile]).size > 50_000_000) throw new Error('The edited JSON exceeds 50 MB.');
+      const parsed = await readImportFile(new File([wholeFile], draft.fileName), operationController.current.signal);
+      const next = { ...draftFromReport(parsed.report, bankId, draft.fileName, parsed.hash, wholeFile), accountId: draft.accountId };
       commit(next); setSelected(next.rows[0]?.id || ''); setError(''); setNotice('File contents parsed locally. Invalid questions remain available to correct.');
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Check the JSON syntax.'); }
+    finally { operation.current = false; setBusy(''); }
+  }
+
+  async function backupDraft() {
+    if (!draftRef.current || operation.current || accountChanged) return;
+    operation.current = true; operationController.current = new AbortController(); setBusy('Creating full local backup');
+    try {
+      const snapshot = draftRef.current;
+      const result = await localImportTask<{ backup: Uint8Array<ArrayBuffer> }>({ action: 'backup', draft: snapshot }, operationController.current.signal);
+      if (snapshot !== draftRef.current) throw new Error('The draft changed while preparing the backup. Prepare it again.');
+      setFullBackup({ url: URL.createObjectURL(new Blob([result.backup], { type: 'application/zip' })), draft: snapshot });
+      setNotice('Full backup is ready, including images, notes and submission recovery. Choose Save full backup to download it.');
+    }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to create the backup.'); }
+    finally { operation.current = false; setBusy(''); }
+  }
+  async function restoreBackup(file?: File) {
+    if (!file || locked || operation.current) return;
+    if (draft && !(await confirmAction({ title: 'Restore a full backup?', description: 'This replaces the current local draft. Download a full backup first to keep your current work.', confirmLabel: 'Restore backup', tone: 'warning' }))) return;
+    operation.current = true; operationController.current = new AbortController(); setBusy('Restoring locally');
+    try {
+      if (file.size > 160 * 1024 * 1024) throw new Error('Choose a backup up to 160 MB.');
+      const bytes = await file.arrayBuffer();
+      const result = await localImportTask<{ draft: ImportDraft }>({ action: 'restore', bytes }, operationController.current.signal, [bytes]);
+      if (result.draft.bankId !== bankId) throw new Error('This backup belongs to a different QBank. Open that QBank’s Import page to restore it.');
+      if (result.draft.accountId && contextRef.current.uid && result.draft.accountId !== contextRef.current.uid) throw new Error('This backup belongs to a different account. Sign in with its original account.');
+      const restored = { ...result.draft, accountId: result.draft.accountId || contextRef.current.uid || undefined };
+      commit(restored, false); await saveQueue.current; setHistory([]); setFuture([]); setSelected(restored.rows[0]?.id || ''); setWholeFile(restored.rawFile); setRights(false); setStep(restored.submission ? 'submit' : 'edit'); setNotice('Full backup restored locally. No questions were uploaded.');
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to restore the backup.'); }
+    finally { operation.current = false; setBusy(''); }
   }
   function addQuestion(copy = false) {
     if (!draft || locked) return;
@@ -223,31 +318,34 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
   }
 
   async function checkDuplication() {
-    const current = draftRef.current; if (!current || operation.current || current.submission) return;
-    const state = workspaceReadiness(current);
+    const current = draftRef.current; if (!current || operation.current || current.submission || storageConflict || accountChanged || localPending) return;
+    const state = analyze(current);
     if (!state.active.length) { setError('Restore or add at least one question before checking.'); return; }
     if (state.invalid.length) { setError(`${state.invalid.length} questions need correction or exclusion before Check duplication.`); setSelected(state.invalid[0].id); setFilter('errors'); setStep('edit'); return; }
-    operation.current = true; setBusy('Checking duplication in this QBank'); setError(''); setProgress({ done: 0, total: state.unchecked.length });
+    operation.current = true; operationController.current = new AbortController(); setBusy('Checking duplication in this QBank'); setError('');
+    const unchecked = contextRef.current.uid ? state.unchecked : state.active;
+    setProgress({ done: 0, total: unchecked.length });
     let next = current;
     try {
       let processed = 0;
-      for (let offset = 0; offset < state.unchecked.length;) {
+      for (let offset = 0; offset < unchecked.length;) {
         const rows: ImportRow[] = []; let bytes = 0;
-        while (offset < state.unchecked.length && rows.length < 25) {
-          const item = state.unchecked[offset]; const size = new TextEncoder().encode(JSON.stringify(item.question)).byteLength;
+        while (offset < unchecked.length && rows.length < 25) {
+          const item = unchecked[offset]; const size = new TextEncoder().encode(JSON.stringify(item.question)).byteLength;
           if (size > 850_000) throw new Error(`Question ${item.position} is too large to check. Shorten its text.`);
           if (rows.length && bytes + size > 850_000) break;
           rows.push(item); bytes += size; offset++;
         }
-        const result = await importRequest<{ matches: ImportMatch[][]; userId: string; bankName: string; limits?: { questionsPerImport: number }; isSuperadmin?: boolean }>('/platform/import-preview', { method: 'POST', expectedUserId: context.uid || undefined, body: JSON.stringify({ qbankId: bankId, includePolicy: processed === 0, questions: rows.map(item => { const q = validateImportRow(item).question!; return { ...q, images: q.images.filter(image => !image.url.startsWith('local-import:')), explanationImages: q.explanationImages?.filter(image => !image.url.startsWith('local-import:')) }; }) }) });
+        const result = await importRequest<{ matches: ImportMatch[][]; userId: string; bankName: string; limits?: { questionsPerImport: number }; isSuperadmin?: boolean }>('/platform/import-preview', { method: 'POST', signal: operationController.current.signal, expectedUserId: contextRef.current.uid || current.accountId, body: JSON.stringify({ qbankId: bankId, includePolicy: processed === 0, questions: rows.map(item => { const q = validateImportRow(item).question!; return { ...q, images: q.images.filter(image => !image.url.startsWith('local-import:')), explanationImages: q.explanationImages?.filter(image => !image.url.startsWith('local-import:')) }; }) }) });
         if (!Array.isArray(result.matches) || result.matches.length !== rows.length) throw new Error('The duplicate scan was not confirmed. Retry Check duplication; your edits are preserved.');
         if (result.limits && !result.isSuperadmin && state.active.length > result.limits.questionsPerImport) setNotice(`Your account allows ${result.limits.questionsPerImport} questions per import. Exclude extra questions before Submit.`);
-        setContext(info => ({ ...info, bankName: result.bankName || info.bankName }));
+        if (typeof result.userId !== 'string' || !result.userId.trim()) throw new Error('The scan did not confirm the account. Retry before submitting.');
+        if (!processed) next = await bindAccount(result.userId, result.bankName || contextRef.current.bankName);
         const checks = { ...next.checks }; rows.forEach((item, i) => { checks[item.id] = { fingerprint: importRowFingerprint(item), matches: result.matches[i] }; });
-        next = commit({ ...next, checks, ...(result.limits ? { questionLimit: result.isSuperadmin ? undefined : result.limits.questionsPerImport } : {}) }, false); await saveQueue.current; processed += rows.length; setProgress({ done: processed, total: state.unchecked.length });
-        if (workspaceReadiness(next).limitExceeded) break;
+        next = commit({ ...next, checks, ...(result.limits ? { questionLimit: result.isSuperadmin ? undefined : result.limits.questionsPerImport } : {}) }, false); await saveQueue.current; processed += rows.length; setProgress({ done: processed, total: unchecked.length });
+        if (analyze(next).limitExceeded) break;
       }
-      const checked = workspaceReadiness(next);
+      const checked = analyze(next);
       if (checked.limitExceeded) { setStep('edit'); setFilter('all'); setError(`Your account allows ${next.questionLimit} questions for this import. Exclude extra questions locally; no file needs to be reopened.`); return; }
       setStep(checked.unresolved.length ? 'duplicates' : 'submit');
       if (checked.unresolved.length) { setSelected(checked.unresolved[0].id); setFilter('duplicates'); }
@@ -257,17 +355,17 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
   }
 
   function keepBoth() {
-    if (!draft || !row || locked || !matches.length) return;
+    if (!draft || !row || locked || localPending || !matches.length) return;
     const next = commit({ ...draft, decisions: { ...draft.decisions, [row.id]: { fingerprint: importRowFingerprint(row), candidates: matches.map(match => match.candidateFingerprint) } } });
-    const pending = workspaceReadiness(next).unresolved;
+    const pending = analyze(next).unresolved;
     if (pending.length) setSelected(pending[0].id); else { setStep('submit'); setNotice('All duplication decisions are complete. Review the summary before Submit.'); }
   }
   async function skipExact() {
     if (!draft || locked || !readiness || readiness.unchecked.length) return;
     if (!(await confirmAction({ title: 'Exclude exact duplicates?', description: 'Matches require equal question text, choices and correct answer. Explanations and images may differ. Review those differences before excluding. You can restore excluded questions.', confirmLabel: 'Exclude exact matches', tone: 'warning' }))) return;
-    const next = commit(skipWorkspaceExact(draft)); const state = workspaceReadiness(next);
+    const next = commit(skipWorkspaceExact(draft, readiness.matches));
     setNotice(`${next.rows.filter(item => item.excluded).length - draft.rows.filter(item => item.excluded).length} exact matches excluded locally.`);
-    if (state.unresolved.length) setSelected(state.unresolved[0].id); else if (state.ready) setStep('submit');
+    setStep('edit'); setFilter('all');
   }
 
   async function addImages(files: FileList | null, section: 'images' | 'explanationImages') {
@@ -276,17 +374,23 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
     for (const file of Array.from(files)) {
       if (images.length >= 10) { errors.push('Each section allows at most 10 images.'); break; }
       if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type) || !file.size || file.size > 10 * 1024 * 1024) { errors.push(`${file.name}: choose a JPEG, PNG, WebP or GIF up to 10 MB.`); continue; }
+      if (Object.values(media).reduce((total, blob) => total + (blob instanceof Blob ? blob.size : 0), 0) + file.size > MAX_LOCAL_MEDIA_BYTES) { errors.push('This draft allows up to 100 MB of local images. Remove unused images or split the import.'); break; }
       const id = crypto.randomUUID(); media[id] = file; images.push({ id, url: `local-import:${id}`, name: file.name, caption: '' });
     }
     commit({ ...draft, media, rows: draft.rows.map(item => item.id === row.id ? { ...item, reviewed: false, repairError: undefined, question: { ...item.question, [section]: images } } : item) }); setError(errors.join(' '));
   }
 
   async function submit() {
-    let current = draftRef.current; if (!current || operation.current || !rights) return;
-    operation.current = true; setBusy('Preparing submission'); setError('');
+    let current = draftRef.current; if (!current || operation.current || !rights || storageConflict || accountChanged || localPending) return;
+    const expectedAccount = contextRef.current.uid || current.accountId;
+    if (!expectedAccount || current.accountId !== expectedAccount) { setError('Run Check duplication to bind this draft to the active account before Submit.'); return; }
+    operation.current = true; operationController.current = new AbortController(); setBusy('Preparing submission'); setError('');
+    let awaitingAcknowledgement = false;
     try {
-      const submission = current.submission ?? makeImportSubmission(current);
+      if (!contextRef.current.uid) { current = commit(await bindAccount(expectedAccount, contextRef.current.bankName), false); await saveQueue.current; }
+      const submission = current.submission ?? makeImportSubmission(current, analyze(current));
       current = commit({ ...current, submission }, false); await saveQueue.current;
+      setHistory([]); setFuture([]);
       setProgress({ done: submission.completed, total: submission.batches.length });
       for (let i = submission.completed; i < submission.batches.length; i++) {
         setBusy(`Submitting batch ${i + 1} of ${submission.batches.length}`);
@@ -295,19 +399,22 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
           for (const section of ['images', 'explanationImages'] as const) {
             for (const image of question[section] ?? []) {
               if (!image.url.startsWith('local-import:')) continue;
-              const blob = current.media[image.id]; if (!blob) throw new Error(`Local image ${image.name} is missing. Preserve this draft and restore the image before retrying.`);
-              const upload = section === 'images' ? uploadQuestionImage : uploadSharedNoteImage;
-              const url = await upload(context.uid, new File([blob], image.name, { type: blob.type }), bankId, `import-${submission.sessionId}`);
+              const blob = localImportBlob(current.media, image.id); if (!blob) throw new Error(`Local image ${image.name} is missing. Restore or replace it in the editor before retrying.`);
+              const url = await uploadImportImage(contextRef.current.uid, new File([blob], image.name, { type: blob.type }), bankId, `import-${submission.sessionId}`, operationController.current.signal);
               const updated = { ...current, submission: { ...current.submission!, batches: current.submission!.batches.map((savedBatch, batchIndex) => batchIndex !== i ? savedBatch : { ...savedBatch, questions: savedBatch.questions.map(savedQuestion => ({ ...savedQuestion, [section]: savedQuestion[section]?.map(savedImage => savedImage.id === image.id ? { ...savedImage, url } : savedImage) })) }) } };
               current = commit(updated, false); await saveQueue.current;
             }
           }
         }
-        const result = await importRequest<{ successful: number }>('/platform/import', { method: 'POST', expectedUserId: context.uid || undefined, body: JSON.stringify({ qbankId: bankId, questions: current.submission!.batches[i].questions, duplicateChoices: batch.choices, requireDuplicateResolution: true, rightsConfirmed: true,
+        if (operationController.current.signal.aborted) throw operationController.current.signal.reason;
+        awaitingAcknowledgement = true;
+        const result = await importRequest<{ successful: number }>('/platform/import', { method: 'POST', signal: operationController.current.signal, expectedUserId: contextRef.current.uid, body: JSON.stringify({ qbankId: bankId, questions: current.submission!.batches[i].questions, duplicateChoices: batch.choices, requireDuplicateResolution: true, rightsConfirmed: true,
           sourceFile: batch.questions[0]?.sourceFile || '', fileName: `${current.fileName.slice(0, 200)}-part-${i + 1}.json`, fileHash: current.fileHash, originalFileName: current.fileName, originalFileHash: current.fileHash, uploadSessionId: submission.sessionId, chunkIndex: i, chunkCount: submission.batches.length, requestId: batch.requestId, repaired: current.repaired }) });
         if (!Number.isInteger(result.successful) || result.successful !== batch.questions.length) throw new Error('The saved batch was not confirmed. Retry with the same draft; confirmed batches will not be duplicated.');
+        awaitingAcknowledgement = false;
         const saved = draftRef.current!;
-        current = commit({ ...saved, submission: { ...saved.submission!, completed: i + 1, successful: saved.submission!.successful + result.successful } }, false); await saveQueue.current;
+        const confirmed = new Map(saved.submission!.batches[i].rowIds.map((id, j) => [id, saved.submission!.batches[i].questions[j]] as const));
+        current = commit({ ...saved, rows: saved.rows.map(item => confirmed.has(item.id) ? { ...item, submitted: true, question: confirmed.get(item.id)! } : item), submission: { ...saved.submission!, completed: i + 1, successful: saved.submission!.successful + result.successful } }, false); await saveQueue.current;
         setProgress({ done: i + 1, total: submission.batches.length });
       }
       setNotice(`${current.submission!.successful} questions submitted for reviewer approval. They will appear in this QBank after approval.`); setStep('submit');
@@ -322,61 +429,62 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
           delete next.decisions[itemId]; commit(next, false); setSelected(itemId); setStep('duplicates'); setFilter('duplicates'); setHistory([]); setFuture([]);
         }
       }
-      if (caught instanceof ApiError && (caught.status === 400 || caught.status === 403 || caught.status === 404)) {
+      if (!awaitingAcknowledgement || caught instanceof ApiError && (caught.status === 400 || caught.status === 403 || caught.status === 404 || caught.status === 429)) {
         const saved = draftRef.current!;
         if (saved.submission) {
-          const completedIds = new Set(saved.submission.batches.slice(0, saved.submission.completed).flatMap(b => b.rowIds));
-          commit({ ...saved, rows: saved.rows.map(item => completedIds.has(item.id) ? { ...item, submitted: true, excluded: true } : item), resume: { sessionId: saved.submission.sessionId, successful: saved.submission.successful, savedBatches: saved.submission.batches.slice(0, saved.submission.completed) }, submission: undefined }, false);
+          commit(unlockImportSubmission(saved), false);
           setHistory([]); setFuture([]); setStep('edit');
         }
       }
-      setError(caught instanceof Error ? `${caught.message} Your local work is preserved; no file needs to be reopened.` : 'Submission failed. Retry the remaining batches without reopening the file.');
+      setError(caught instanceof Error ? `${caught.message} ${awaitingAcknowledgement && draftRef.current?.submission ? 'The last batch may have reached the server. Retry with this draft and the same request IDs to confirm it safely.' : 'Your local work is preserved; no file needs to be reopened.'}` : 'Submission failed. Retry the remaining batches without reopening the file.');
     } finally { operation.current = false; setBusy(''); }
   }
 
   const done = !!draft?.submission && draft.submission.completed === draft.submission.batches.length;
   const selectedPosition = draft?.rows.findIndex(item => item.id === selected) ?? -1;
   const reviewedCount = readiness?.active.filter(item => item.reviewed).length ?? 0;
+  if (accountChanged) return <main className="iw"><div className="iw-content"><section className="iw-card"><ShieldCheck size={36} /><h1>This draft belongs to another account</h1><p>Local editing has been paused and this draft is hidden. Sign in with its original account to continue. Your saved work is preserved.</p><a className="iw-button" href={`/qbanks/${encodeURIComponent(bankId)}`}>Return to QBank</a></section></div></main>;
   return <main className="iw" aria-busy={!!busy}>
     <WorkspaceHeader className="iw-header" title={<span dir="auto">{context.bankName}</span>} eyebrow="Qraft / Import questions" subtitle={<>Destination QBank{context.bankName !== bankId && <> · <span dir="auto">{bankId}</span></>}</>} showMenu={false} leading={<a className="iw-back" href={`/qbanks/${encodeURIComponent(bankId)}`} aria-label="Return to QBank"><ArrowLeft size={18} /></a>} actions={<div className="iw-local"><ShieldCheck size={16} /><span>{localSave || 'Local editing · no upload yet'}</span></div>} />
-    <nav className="iw-steps" aria-label="Import stages">{(['edit', 'duplicates', 'submit'] as const).map((value, i) => <button type="button" key={value} aria-current={step === value ? 'step' : undefined} disabled={!!busy || value === 'duplicates' && (!draft || !!readiness?.unchecked.length) || value === 'submit' && !readiness?.ready && !draft?.submission} onClick={() => setStep(value)}><span className="iw-step-number">{i + 1}</span><span className="iw-step-copy"><strong>{value === 'edit' ? 'Edit & review' : value === 'duplicates' ? 'Resolve duplications' : 'Submit for review'}</strong><small>{value === 'edit' ? 'Your local workspace' : value === 'duplicates' ? 'Compare in this QBank' : 'Send for approval'}</small></span><ChevronRight className="iw-step-chevron" size={16} /></button>)}</nav>
-    <div className="iw-content">
+    <nav className="iw-steps" aria-label="Import stages">{(['edit', 'duplicates', 'submit'] as const).map((value, i) => <button type="button" key={value} aria-current={step === value ? 'step' : undefined} disabled={!!busy || value === 'duplicates' && (!draft || !!readiness?.unchecked.length) || value === 'submit' && (localPending || !readiness?.ready && !draft?.submission)} onClick={() => setStep(value)}><span className="iw-step-number">{i + 1}</span><span className="iw-step-copy"><strong>{value === 'edit' ? 'Edit & review' : value === 'duplicates' ? 'Resolve duplications' : 'Submit for review'}</strong><small>{value === 'edit' ? 'Your local workspace' : value === 'duplicates' ? 'Compare in this QBank' : 'Send for approval'}</small></span><ChevronRight className="iw-step-chevron" size={16} /></button>)}</nav>
+    <div className="iw-content">{busy && <div className="iw-alert"><button type="button" className="iw-button" onClick={() => operationController.current?.abort(new DOMException('Operation cancelled.', 'AbortError'))}>Cancel operation</button></div>}{localPending && draft && <output className="iw-muted">Checking similarities inside this file locally. Editing remains available.</output>}{analysisError && <div className="iw-alert is-error" role="alert">{analysisError}<button type="button" className="iw-button" onClick={() => { if (draft) setDraft({ ...draft, rows: [...draft.rows] }); }}>Retry local analysis</button></div>}{storageConflict && <div className="iw-alert is-error" role="alert">Another tab has a newer saved draft. Export a full backup from this tab, then reload to open the saved version.<button type="button" className="iw-button" onClick={() => void backupDraft()}>Download this tab’s full backup</button><button type="button" className="iw-button" onClick={() => window.location.reload()}>Reload saved draft</button></div>}
       {error && <div className="iw-alert is-error" role="alert"><strong>Action needed</strong><p>{error}</p></div>}
       {notice && <output className="iw-alert iw-output">{notice}</output>}
       {busy && <output className="iw-alert iw-progress"><LoaderCircle size={18} className="animate-spin" /><span>{busy}</span>{progress.total > 0 && <><progress max={progress.total} value={progress.done} aria-label="Import progress" /><b>{progress.done} / {progress.total}</b></>}</output>}
+      {fullBackup && <div className="iw-alert"><span>Full backup ready · includes images and review notes</span><a className="iw-button iw-primary" href={fullBackup.url} download="qraft-import-backup.zip">Save full backup</a></div>}
       {!hydrated ? <div className="iw-empty"><LoaderCircle className="animate-spin" /><p>Opening your local workspace…</p></div> : <>
-        {(!draft || !draft.rows.length) && <section className="iw-welcome"><div><span className="iw-welcome-icon"><FileJson size={25} /></span><span className="iw-eyebrow">Import to {context.bankName}</span><h2>Review your questions before submitting.</h2><p>Open a JSON file to edit questions, correct errors, and compare duplications. Your work is saved on this device.</p><div className="iw-welcome-features"><span><CheckCircle2 size={16} />Edit without uploading</span><span><ShieldCheck size={16} />Check only your selected QBank</span></div></div><label /* oxlint-disable-line jsx-a11y/no-noninteractive-element-interactions -- The label is the file input drop target. */ className={`iw-drop ${dragging ? 'is-dragging' : ''}`} onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files.length !== 1) { setError('Open one file at a time.'); return; } void openFile(e.dataTransfer.files[0]); }}><span className="iw-drop-icon"><FolderOpen size={30} /></span><strong>Drop your JSON file here</strong><span>or click to browse your files</span><small>JSON / TXT · up to 50 MB locally</small><input type="file" accept=".json,.txt,.text" aria-label="Open JSON file" disabled={!!busy} onChange={e => { void openFile(e.target.files?.[0]); e.target.value = ''; }} /></label><PromptBuilder /></section>}
+        {(!draft || !draft.rows.length) && <section className="iw-welcome"><div><span className="iw-welcome-icon"><FileJson size={25} /></span><span className="iw-eyebrow">Import to {context.bankName}</span><h2>Review your questions before submitting.</h2><p>Open a JSON file to edit questions, correct errors, and compare duplications. Your work is saved on this device.</p><div className="iw-welcome-features"><span><CheckCircle2 size={16} />Edit without uploading</span><span><ShieldCheck size={16} />Check only your selected QBank</span></div></div><label /* oxlint-disable-line jsx-a11y/no-noninteractive-element-interactions -- The label is the file input drop target. */ className={`iw-drop ${dragging ? 'is-dragging' : ''}`} onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files.length !== 1) { setError('Open one file at a time.'); return; } void openFile(e.dataTransfer.files[0]); }}><span className="iw-drop-icon"><FolderOpen size={30} /></span><strong>Drop your JSON file here</strong><span>or click to browse your files</span><small>JSON / TXT · up to 50 MB locally</small><input type="file" accept=".json,.txt,.text" aria-label="Open JSON file" disabled={!!busy} onChange={e => { void openFile(e.target.files?.[0]); e.target.value = ''; }} /></label><label className={`iw-button ${locked ? 'is-disabled' : ''}`}><FolderOpen size={16} />Restore full backup<input type="file" className="iw-hidden-input" accept=".zip" disabled={locked} aria-label="Restore backup on this device" onChange={e => { void restoreBackup(e.target.files?.[0]); e.target.value = ''; }} /></label><PromptBuilder /></section>}
         {draft && !draft.rows.length && <section className="iw-card iw-file-repair"><h2>Correct the file without reopening it</h2><p className="iw-muted">Your original contents are kept here. Fix the JSON or add the missing questions array, then parse again.</p><textarea aria-label="File JSON contents" value={wholeFile} onChange={e => { setWholeFile(e.target.value); commit({ ...draft, rawFile: e.target.value }, false); }} rows={16} spellCheck={false} /><button type="button" className="iw-button iw-primary" disabled={locked} onClick={() => void repairFile()}>Parse corrected JSON</button></section>}
         {draft && draft.rows.length > 0 && <>
           <div className="iw-summary"><div><FileJson size={19} /><span><strong>{draft.rows.length}</strong><small>Questions</small></span></div><div><CheckCheck size={19} /><span><strong>{readiness?.active.length}</strong><small>Selected</small></span></div><button type="button" className={readiness?.invalid.length ? 'has-errors' : ''} onClick={() => { setFilter('errors'); setStep('edit'); setPage(0); if (readiness?.invalid[0]) selectRow(readiness.invalid[0].id); }}><AlertCircle size={19} /><span><strong>{readiness?.invalid.length}</strong><small>Need correction</small></span></button><button type="button" title="Show questions still awaiting your manual review" onClick={() => { setFilter('unreviewed'); setStep('edit'); setPage(0); }}><CheckCircle2 size={19} /><span><strong>{reviewedCount}</strong><small>Reviewed</small></span></button><div className={readiness?.unresolved.length ? 'has-matches' : ''}><Layers2 size={19} /><span><strong>{readiness?.unresolved.length}</strong><small>Decisions remaining</small></span></div></div>
-          <div className="iw-toolbar"><div className="iw-filename"><span className="iw-file-icon"><FileJson size={20} /></span><div><strong>{draft.fileName}</strong><small>{draft.rows.length} questions · Local draft</small></div></div><div className="iw-toolbar-actions"><button type="button" className="iw-button" disabled={locked || !history.length} onClick={() => undo()}><Undo2 size={16} />Undo</button><button type="button" className="iw-button" disabled={locked || !future.length} onClick={() => undo(true)}><Redo2 size={16} />Redo</button><button type="button" className="iw-button" onClick={() => { download('reviewed-questions.json', exportImportDraft(draft)); setNotice(Object.keys(draft.media).length ? 'JSON downloaded. New local images remain in this device draft and are uploaded only during Submit.' : 'Reviewed JSON downloaded.'); }}><Download size={16} />Download JSON</button><button type="button" className="iw-button" onClick={() => download('import-review-report.json', JSON.stringify({ fileName: draft.fileName, qbankId: bankId, skipped: draft.skipped, questions: draft.rows.map(item => ({ position: item.position, originalQuestionNumber: item.question.originalQuestionNumber, excluded: item.excluded, reviewed: item.reviewed, error: validateImportRow(item).error, originalEntry: item.repairError ? item.raw : undefined, pendingJSON: item.pendingRaw, notes: item.notes })) }, null, 2))}><ClipboardList size={16} />Review report</button><label className={`iw-button ${locked ? 'is-disabled' : ''}`}><FolderOpen size={16} />Open another file<input type="file" className="iw-hidden-input" accept=".json,.txt,.text" aria-label="Open another JSON file" disabled={locked} onChange={e => { void openFile(e.target.files?.[0]); e.target.value = ''; }} /></label></div></div>
+          <div className="iw-toolbar"><div className="iw-filename"><span className="iw-file-icon"><FileJson size={20} /></span><div><strong>{draft.fileName}</strong><small>{draft.rows.length} questions · Local draft</small></div></div><div className="iw-toolbar-actions"><button type="button" className="iw-button" disabled={!!busy} onClick={() => void backupDraft()}><Download size={16} />Full backup · includes images</button><label className={`iw-button ${locked ? 'is-disabled' : ''}`}><FolderOpen size={16} />Restore backup<input type="file" className="iw-hidden-input" accept=".zip" disabled={locked} aria-label="Restore full import backup" onChange={e => { void restoreBackup(e.target.files?.[0]); e.target.value = ''; }} /></label><button type="button" className="iw-button" disabled={locked || !history.length} onClick={() => undo()}><Undo2 size={16} />Undo</button><button type="button" className="iw-button" disabled={locked || !future.length} onClick={() => undo(true)}><Redo2 size={16} />Redo</button><button type="button" className="iw-button" onClick={() => { download('reviewed-questions.json', exportImportDraft(draft)); setNotice(Object.keys(draft.media).length ? 'JSON downloaded. New local images remain in this device draft and are uploaded only during Submit.' : 'Reviewed JSON downloaded.'); }}><Download size={16} />Download questions JSON</button><button type="button" className="iw-button" onClick={() => download('import-review-report.json', JSON.stringify({ fileName: draft.fileName, qbankId: bankId, skipped: draft.skipped, questions: draft.rows.map(item => ({ position: item.position, originalQuestionNumber: item.question.originalQuestionNumber, excluded: item.excluded, reviewed: item.reviewed, error: validateImportRow(item).error, originalEntry: item.repairError ? item.raw : undefined, pendingJSON: item.pendingRaw, notes: item.notes })) }, null, 2))}><ClipboardList size={16} />Review report</button><label className={`iw-button ${locked ? 'is-disabled' : ''}`}><FolderOpen size={16} />Open another file<input type="file" className="iw-hidden-input" accept=".json,.txt,.text" aria-label="Open another JSON file" disabled={locked} onChange={e => { void openFile(e.target.files?.[0]); e.target.value = ''; }} /></label></div></div>
           {step !== 'submit' && <div className="iw-workbench">
             <aside className="iw-library"><div className="iw-library-head"><h2>Questions <span className="iw-count">{filtered.length}</span></h2><button type="button" className="iw-icon-button" aria-label="Add a question" disabled={locked} onClick={() => addQuestion()}><Plus size={18} /></button></div><label className="iw-search"><Search size={16} /><input aria-label="Search imported questions" placeholder="Search text, source, number…" value={query} onChange={e => { setQuery(e.target.value); setPage(0); }} /></label><select aria-label="Filter imported questions" value={filter} onChange={e => { setFilter(e.target.value as Filter); setPage(0); }}><option value="all">All questions</option><option value="errors">Need correction</option><option value="unreviewed">Not reviewed</option><option value="duplicates">Possible duplications</option><option value="excluded">Excluded · restore here</option></select><div className="iw-question-list">{filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map(item => { const issue = !item.excluded && validateImportRow(item).error; return <button type="button" key={item.id} aria-pressed={selected === item.id} data-status={item.excluded ? undefined : issue ? 'error' : readiness?.matches[item.id]?.length && !decisionIsCurrent(item, readiness.matches[item.id], draft.decisions[item.id]) ? 'match' : item.reviewed ? 'reviewed' : undefined} className={`iw-question-item ${item.excluded ? 'is-excluded' : ''}`} onClick={() => selectRow(item.id)}><span className="iw-number">{item.position}</span><span><strong>{item.question.stem || 'Untitled question'}</strong><small>{item.submitted ? 'Already submitted' : item.excluded ? 'Excluded' : issue ? 'Needs correction' : readiness?.matches[item.id]?.length ? decisionIsCurrent(item, readiness.matches[item.id], draft.decisions[item.id]) ? 'Duplication decided' : 'Review duplication' : item.reviewed ? 'Reviewed' : 'Not reviewed'}</small></span>{item.reviewed && !issue && <Check size={15} />}</button>; })}{!filtered.length && <p className="iw-muted iw-no-results">No questions match this filter.</p>}</div><div className="iw-pagination"><button type="button" className="iw-icon-button" aria-label="Previous list page" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}><ChevronLeft size={16} /></button><span>{filtered.length ? `${currentPage + 1} / ${Math.ceil(filtered.length / PAGE_SIZE)}` : '0 results'}</span><button type="button" className="iw-icon-button" aria-label="Next list page" disabled={(currentPage + 1) * PAGE_SIZE >= filtered.length} onClick={() => setPage(currentPage + 1)}><ChevronRight size={16} /></button></div></aside>
             <section className="iw-editor">{row ? <>
               <div className="iw-editor-heading"><div><span className="iw-eyebrow">Question {row.position}{row.question.originalQuestionNumber ? ` · Source #${row.question.originalQuestionNumber}` : ''}</span><h2>{step === 'duplicates' ? 'Compare & decide' : 'Question editor'}</h2></div><div className="iw-editor-tools"><button type="button" className="iw-icon-button" aria-label="Previous question" disabled={selectedPosition <= 0} onClick={() => selectRow(draft.rows[selectedPosition - 1].id)}><ChevronLeft size={18} /></button><button type="button" className="iw-icon-button" aria-label="Next question" disabled={selectedPosition === draft.rows.length - 1} onClick={() => selectRow(draft.rows[selectedPosition + 1].id)}><ChevronRight size={18} /></button></div></div>
-              {row.excluded && <div className="iw-alert">{row.submitted ? 'This question was already submitted in a confirmed batch.' : 'This question is excluded from submission.'} <button type="button" className="iw-button" disabled={locked || row.submitted} onClick={() => updateRow(row.id, item => ({ ...item, excluded: false }))}><Undo2 size={16} />Restore question</button></div>}
-              {rowError && <div className="iw-alert is-error" role="alert"><strong>Question {row.position}: {rowError}</strong><p>{errorHelp(rowError)}</p></div>}
+              {row.excluded && <div className="iw-alert">{row.submitted ? 'This question was already submitted in a confirmed batch.' : row.frozen ? 'Recovered question held in its original batch. Submit will confirm it using the same request ID.' : 'This question is excluded from submission.'} <button type="button" className="iw-button" disabled={locked || row.submitted || row.frozen} onClick={() => updateRow(row.id, item => ({ ...item, excluded: false }))}><Undo2 size={16} />Restore question</button></div>}
+              {rowError && <div className="iw-alert is-error" role="alert"><strong>Question {row.position}: {rowError}</strong><p>{errorHelp(rowError)}</p>{unresolvedImportMedia(row).map(section => <button type="button" className="iw-button" key={section} disabled={locked} onClick={async () => { if (await confirmAction({ title: 'Remove unrecovered images?', description: 'The original attachments could not be recovered. Remove this section explicitly, or repair it in Original JSON to preserve it.', confirmLabel: 'Remove this image section', tone: 'warning' })) updateRow(row.id, item => ({ ...item, repairError: undefined, unresolvedMedia: unresolvedImportMedia(item).filter(value => value !== section), question: { ...item.question, [section]: [] } })); }}>Remove invalid {section === 'images' ? 'question images' : 'explanation images'}</button>)}</div>}
               {step === 'duplicates' ? <>
                 {!matches.length ? <div className="iw-empty"><ShieldCheck size={32} /><h3>No active matches for this question</h3><button type="button" className="iw-button" onClick={() => setStep('edit')}>Return to editing</button></div> : <>
-                  <div className="iw-match-banner"><span className="iw-badge">{candidate && exactImportIdentity(candidate.payload) === exactImportIdentity(row.question) ? 'Full-content match' : candidate?.signals.stem === 100 ? 'Same question text · content may differ' : `Possible match · ${candidate?.similarity}%`}</span><p className="iw-muted">{candidate?.draftIndex !== undefined ? 'Earlier question in this file' : candidate?.entityType === 'approved_question' ? 'Published question in this QBank' : 'Question awaiting review in this QBank'} · Up to 3 bank candidates are shown per question.</p>{matches.length > 1 && <label>Compare with<select value={candidateIndex} onChange={e => setCandidateIndex(Number(e.target.value))}>{matches.map((m, i) => <option key={`${m.entityId}-${i}`} value={i}>Match {i + 1} · {m.draftIndex !== undefined ? 'This file' : m.entityType === 'approved_question' ? 'Published' : 'Pending'}</option>)}</select></label>}</div>
-                  <p className="iw-differences">Differences: {candidate ? comparisonDifferences(candidate.payload, row.question).join(', ') || 'No visible content differences' : 'Select a match'}</p><div className="iw-comparison"><div><h3>Existing question</h3>{candidate && <QuestionPreview question={candidate.payload} />}</div><div><h3>Your new question</h3><QuestionPreview question={row.question} media={draft.media} /></div></div>
-                  <div className="iw-decision-actions"><button type="button" className="iw-button iw-primary" disabled={locked || row.excluded} onClick={keepBoth}><CheckCheck size={17} />Keep both</button><button type="button" className="iw-button iw-danger" disabled={locked || row.excluded} onClick={() => { updateRow(row.id, item => ({ ...item, excluded: true })); }}><Trash2 size={17} />Exclude new question</button><button type="button" className="iw-button" disabled={locked} onClick={() => setStep('edit')}>Edit new question</button></div>{decisionCurrent && <p className="iw-success-text">Your decision is saved locally.</p>}
+                  <div className="iw-match-banner"><span className="iw-badge">{candidate?.payload && exactImportIdentity(candidate.payload) === exactImportIdentity(row.question) ? 'Full-content match' : candidate?.signals.stem === 100 ? 'Same question text · content may differ' : `Possible match · ${candidate?.similarity}%`}</span><p className="iw-muted">{candidate?.draftIndex !== undefined ? 'Earlier question in this file' : candidate?.entityType === 'approved_question' ? 'Published question in this QBank' : 'Question awaiting review in this QBank'} · Up to 3 bank candidates are shown per question.</p>{matches.length > 1 && <label>Compare with<select value={candidateIndex} onChange={e => setCandidateIndex(Number(e.target.value))}>{matches.map((m, i) => <option key={`${m.entityId}-${i}`} value={i}>Match {i + 1} · {m.draftIndex !== undefined ? 'This file' : m.entityType === 'approved_question' ? 'Published' : 'Pending'}</option>)}</select></label>}</div>
+                  <p className="iw-differences">Differences: {candidate?.payload ? comparisonDifferences(candidate.payload, row.question).join(', ') || 'No visible content differences' : candidate?.restricted ? 'Pending content is private; compare your question against your source.' : 'Select a match'}</p><div className="iw-comparison"><div><h3>Existing question</h3>{candidate?.payload ? <QuestionPreview question={candidate.payload} /> : candidate?.restricted && <p className="iw-alert">A similar pending submission exists in this QBank. Its author and content are private. You can exclude your question or keep both for reviewer approval.</p>}</div><div><h3>Your new question</h3><QuestionPreview question={row.question} media={draft.media} /></div></div>
+                  <div className="iw-decision-actions"><button type="button" className="iw-button iw-primary" disabled={locked || localPending || row.excluded} onClick={keepBoth}><CheckCheck size={17} />Keep both</button><button type="button" className="iw-button iw-danger" disabled={locked || row.excluded} onClick={() => { updateRow(row.id, item => ({ ...item, excluded: true })); }}><Trash2 size={17} />Exclude new question</button><button type="button" className="iw-button" disabled={locked} onClick={() => setStep('edit')}>Edit new question</button></div>{decisionCurrent && <p className="iw-success-text">Your decision is saved locally.</p>}
                 </>}
               </> : <>
                 <div className="iw-editor-actions"><button type="button" className={`iw-button ${preview ? 'iw-primary' : ''}`} onClick={() => setPreview(!preview)}><Eye size={16} />{preview ? 'Edit fields' : 'Preview'}</button><button type="button" className="iw-button" disabled={locked || !!rowError || row.excluded} onClick={() => updateRow(row.id, item => ({ ...item, reviewed: !item.reviewed }))}><Check size={16} />{row.reviewed ? 'Mark unreviewed' : 'Mark reviewed'}</button><button type="button" className="iw-button" disabled={locked} onClick={() => addQuestion(true)}><Copy size={16} />Duplicate draft</button><button type="button" className="iw-button iw-danger" disabled={locked} onClick={() => updateRow(row.id, item => ({ ...item, excluded: !item.excluded }))}>{row.excluded ? 'Restore' : 'Exclude'}</button></div>
                 {preview ? <QuestionPreview question={row.question} media={draft.media} /> : <fieldset className="iw-form" disabled={locked || row.excluded}><legend className="sr-only">Edit question {row.position}</legend><label>Question text<textarea rows={6} dir="auto" value={row.question.stem} onChange={e => editQuestion({ stem: e.target.value })} /></label><p className="iw-muted">Use **double asterisks** for bold. Paragraphs and lists are preserved.</p><div className="iw-section-label"><h3>Answer choices</h3><span>Select one correct answer</span></div><div className="iw-options">{row.question.options.map((option, i) => <div className={`iw-option ${row.question.answer === i ? 'is-correct' : ''}`} key={i}><label className="iw-answer"><input type="radio" name={`answer-${row.id}`} aria-label={`Correct answer ${optionLabel(i)}`} checked={row.question.answer === i} onChange={() => editQuestion({ answer: i })} /><b>{optionLabel(i)}</b></label><textarea rows={2} dir="auto" aria-label={`Option ${optionLabel(i)}`} value={option} onChange={e => editQuestion({ options: row.question.options.map((v, n) => n === i ? e.target.value : v) })} /><div className="iw-option-tools"><button type="button" className="iw-icon-button" aria-label={`Move option ${optionLabel(i)} up`} disabled={i === 0} onClick={() => editQuestion(moveImportOption(row.question, i, i - 1))}><ArrowUp size={15} /></button><button type="button" className="iw-icon-button" aria-label={`Move option ${optionLabel(i)} down`} disabled={i === row.question.options.length - 1} onClick={() => editQuestion(moveImportOption(row.question, i, i + 1))}><ArrowDown size={15} /></button><button type="button" className="iw-icon-button" aria-label={`Remove option ${optionLabel(i)}`} disabled={row.question.options.length <= 2} onClick={() => editQuestion({ options: row.question.options.filter((_, n) => n !== i), answer: row.question.answer === i ? -1 : row.question.answer > i ? row.question.answer - 1 : row.question.answer })}><Trash2 size={15} /></button></div></div>)}</div><button type="button" className="iw-button" disabled={row.question.options.length >= 10} onClick={() => editQuestion({ options: [...row.question.options, ''] })}><Plus size={16} />Add choice</button>
                   <div className="iw-fields"><label>Specialty<input value={row.question.specialty} onChange={e => editQuestion({ specialty: e.target.value })} /></label><label>Topic<input value={row.question.topic} onChange={e => editQuestion({ topic: e.target.value })} /></label></div><label>Explanation<textarea rows={5} dir="auto" value={row.question.explanation} onChange={e => editQuestion({ explanation: e.target.value })} /></label>
                   <div className="iw-source-fields"><h3>Original source</h3><label>Source name · required<input maxLength={240} value={row.question.sourceFile || ''} onChange={e => editQuestion({ sourceFile: e.target.value })} placeholder="Original bank or lecture name" /></label><div className="iw-fields"><label>Page · optional<input type="number" min={1} max={100000} value={Number.isFinite(row.question.sourcePage) ? row.question.sourcePage : ''} onChange={e => editQuestion({ sourcePage: e.target.value === '' ? undefined : Number(e.target.value) })} placeholder="Unknown: leave empty" /></label><label>Original question number<input maxLength={80} value={row.question.originalQuestionNumber || ''} onChange={e => editQuestion({ originalQuestionNumber: e.target.value || undefined })} /></label></div></div>
-                  {(['images', 'explanationImages'] as const).map(section => <section className="iw-images" key={section}><div className="iw-section-label"><h3>{section === 'images' ? 'Question images' : 'Explanation images'}</h3><label className="iw-button"><ImagePlus size={16} />Add images<input type="file" className="iw-hidden-input" accept="image/jpeg,image/png,image/webp,image/gif" multiple disabled={locked || row.excluded} aria-label={`Add ${section === 'images' ? 'question' : 'explanation'} images`} onChange={e => { void addImages(e.target.files, section); e.target.value = ''; }} /></label></div><p className="iw-muted">New images stay on this device until Submit.</p><div className="iw-image-grid">{(row.question[section] ?? []).map(image => <figure key={image.id}><LocalImage image={image} blob={draft.media[image.id]} /><figcaption>{image.name}</figcaption><input aria-label={`Caption for ${image.name}`} placeholder="Caption" value={image.caption} onChange={e => editQuestion({ [section]: (row.question[section] ?? []).map(img => img.id === image.id ? { ...img, caption: e.target.value } : img) })} /><button type="button" className="iw-button" onClick={() => editQuestion({ [section]: (row.question[section] ?? []).filter(img => img.id !== image.id) })}>Remove image</button></figure>)}</div></section>)}
+                  {(['images', 'explanationImages'] as const).map(section => <section className="iw-images" key={section}><div className="iw-section-label"><h3>{section === 'images' ? 'Question images' : 'Explanation images'}</h3><label className="iw-button"><ImagePlus size={16} />Add images<input type="file" className="iw-hidden-input" accept="image/jpeg,image/png,image/webp,image/gif" multiple disabled={locked || row.excluded} aria-label={`Add ${section === 'images' ? 'question' : 'explanation'} images`} onChange={e => { void addImages(e.target.files, section); e.target.value = ''; }} /></label></div><p className="iw-muted">New images stay on this device until Submit.</p><div className="iw-image-grid">{(row.question[section] ?? []).map(image => <figure key={image.id}><LocalImage image={image} blob={localImportBlob(draft.media, image.id)} /><figcaption>{image.name}</figcaption><input aria-label={`Caption for ${image.name}`} placeholder="Caption" value={image.caption} onChange={e => editQuestion({ [section]: (row.question[section] ?? []).map(img => img.id === image.id ? { ...img, caption: e.target.value } : img) })} /><button type="button" className="iw-button" onClick={() => editQuestion({ [section]: (row.question[section] ?? []).filter(img => img.id !== image.id) })}>Remove image</button></figure>)}</div></section>)}
                 </fieldset>}
                 <details className="iw-details"><summary>Original JSON · repair this question</summary><p className="iw-muted">Edit the original entry and apply it locally. Keep exactly one question with its source name.</p><textarea aria-label="Original question JSON" rows={10} spellCheck={false} value={rawText} disabled={locked} onChange={e => updateRow(row.id, item => ({ ...item, pendingRaw: e.target.value }))} /><button type="button" className="iw-button" disabled={locked || !rawText.trim()} onClick={() => { try { const fixed = repairImportRow(row, rawText, row.question.sourceFile); updateRow(row.id, () => fixed); setNotice('Question corrected locally.'); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Correct the question JSON.'); } }}>Apply corrected question</button>{row.pendingRaw !== undefined && <button type="button" className="iw-button" disabled={locked} onClick={() => updateRow(row.id, item => ({ ...item, pendingRaw: undefined }))}>Discard pending JSON edits</button>}{row.original && <button type="button" className="iw-button" disabled={locked} onClick={() => updateRow(row.id, item => ({ ...item, question: structuredClone(item.original!), repairError: undefined, reviewed: false }))}>Restore original question</button>}</details>
               </>}
               <label className="iw-notes">Your review notes · local only<textarea rows={2} value={row.notes} disabled={locked} onChange={e => updateRow(row.id, item => ({ ...item, notes: e.target.value }))} placeholder="Things to verify against the source…" /></label>
             </> : <div className="iw-empty">Select a question to begin.</div>}</section>
-            <aside className="iw-inspector"><span className="iw-eyebrow">Review overview</span><h2>Your next step</h2><div className="iw-review-progress"><div><span>Manual review</span><strong>{reviewedCount} / {readiness?.active.length}</strong></div><progress max={Math.max(1, readiness?.active.length ?? 0)} value={reviewedCount} aria-label="Questions manually reviewed" /></div><p>{readiness?.invalid.length ? 'Correct the highlighted questions or exclude them from submission.' : readiness?.unchecked.length ? 'Review your questions, then run Check duplication when you are ready.' : readiness?.unresolved.length ? 'Choose how to handle every possible duplication before submitting.' : 'Everything selected is ready for the final submission summary.'}</p><div className="iw-local-guide"><ShieldCheck size={19} /><div><strong>Private local workspace</strong><p>Questions are sent only when you choose Check duplication or Submit.</p></div></div><details className="iw-details"><summary>Update filtered questions</summary><p className="iw-muted">Applies to {filtered.filter(item => !item.excluded).length} active questions in the current filter.</p><label>Source<input value={bulk.source} onChange={e => setBulk({ ...bulk, source: e.target.value })} /></label><label>Specialty<input value={bulk.specialty} onChange={e => setBulk({ ...bulk, specialty: e.target.value })} /></label><label>Topic<input value={bulk.topic} onChange={e => setBulk({ ...bulk, topic: e.target.value })} /></label><button type="button" className="iw-button" disabled={locked} onClick={() => void applyBulk()}>Preview & apply</button></details>{draft.skipped.length > 0 && <details className="iw-details"><summary>{draft.skipped.length} items skipped in the source extraction</summary>{draft.skipped.map((item, i) => <p key={i}>{item.originalQuestionNumber || i + 1}: {item.reason}</p>)}</details>}<details className="iw-details"><summary>Recover / edit full file JSON</summary><p className="iw-muted">Original contents stay available if a question was truncated or could not be recovered. Reparsing replaces this edited list.</p><textarea aria-label="Full file recovery JSON" rows={12} spellCheck={false} disabled={locked} value={wholeFile} onChange={e => { setWholeFile(e.target.value); commit({ ...draft, rawFile: e.target.value }, false); }} /><button type="button" className="iw-button" disabled={locked} onClick={() => void repairFile()}>Reparse locally</button></details><PromptBuilder /></aside>
+            <aside className="iw-inspector"><span className="iw-eyebrow">Review overview</span><h2>Your next step</h2><div className="iw-review-progress"><div><span>Manual review · optional tracking</span><strong>{reviewedCount} / {readiness?.active.length}</strong></div><progress max={Math.max(1, readiness?.active.length ?? 0)} value={reviewedCount} aria-label="Questions manually reviewed" /></div><p>{localPending ? 'Checking similarities in this file locally. You can continue editing.' : readiness?.invalid.length ? 'Correct the highlighted questions or exclude them from submission.' : readiness?.unchecked.length ? 'Review your questions, then run Check duplication when you are ready.' : readiness?.unresolved.length ? 'Choose how to handle every possible duplication before submitting.' : 'Everything selected is ready for the final submission summary.'}</p><div className="iw-local-guide"><ShieldCheck size={19} /><div><strong>Private local workspace</strong><p>Questions are sent only when you choose Check duplication or Submit.</p></div></div><details className="iw-details"><summary>Update filtered questions</summary><p className="iw-muted">Applies to {filtered.filter(item => !item.excluded).length} active questions in the current filter.</p><label>Source<input value={bulk.source} onChange={e => setBulk({ ...bulk, source: e.target.value })} /></label><label>Specialty<input value={bulk.specialty} onChange={e => setBulk({ ...bulk, specialty: e.target.value })} /></label><label>Topic<input value={bulk.topic} onChange={e => setBulk({ ...bulk, topic: e.target.value })} /></label><button type="button" className="iw-button" disabled={locked} onClick={() => void applyBulk()}>Preview & apply</button></details>{draft.skipped.length > 0 && <details className="iw-details"><summary>{draft.skipped.length} items skipped in the source extraction</summary>{draft.skipped.map((item, i) => <p key={i}>{item.originalQuestionNumber || i + 1}: {item.reason}</p>)}</details>}<details className="iw-details"><summary>Recover / edit full file JSON</summary><p className="iw-muted">Original contents stay available if a question was truncated or could not be recovered. Reparsing replaces this edited list.</p><textarea aria-label="Full file recovery JSON" rows={12} spellCheck={false} disabled={locked} value={wholeFile} onChange={e => { setWholeFile(e.target.value); commit({ ...draft, rawFile: e.target.value }, false); }} /><button type="button" className="iw-button" disabled={locked} onClick={() => void repairFile()}>Reparse locally</button></details><label className={`iw-button ${locked ? 'is-disabled' : ''}`}><FolderOpen size={16} />Restore full backup<input type="file" className="iw-hidden-input" accept=".zip" disabled={locked} aria-label="Restore backup on this device" onChange={e => { void restoreBackup(e.target.files?.[0]); e.target.value = ''; }} /></label><PromptBuilder /></aside>
           </div>}
-          {step === 'submit' && <section className="iw-submit iw-card"><ShieldCheck size={42} /><span className="iw-eyebrow">Final review</span><h2>{done ? 'Submitted for review' : 'Ready to send to your QBank?'}</h2><div className="iw-submit-destination"><span>Submit to this QBank</span><strong dir="auto">{context.bankName}</strong>{context.bankName !== bankId && <small dir="auto">{bankId}</small>}</div><div className="iw-submit-counts"><div><strong>{draft.submission?.successful ?? readiness?.active.length}</strong><span>{done ? 'Submitted questions' : 'Selected questions'}</span></div><div><strong>{draft.rows.filter(item => item.excluded).length}</strong><span>Excluded locally</span></div><div><strong>{readiness?.unresolved.length}</strong><span>Unresolved duplications</span></div></div><p className="iw-muted">Submit sends your selected questions for reviewer approval. They appear in the bank after approval. Review notes remain on your device.</p>{!done && <label className="iw-rights"><input type="checkbox" checked={rights} disabled={!!busy} onChange={e => setRights(e.target.checked)} />I confirm that I have the right to share this content.</label>}{draft.submission && !done && <p className="iw-alert">{draft.submission.completed} / {draft.submission.batches.length} batches acknowledged. Retry continues with the remaining batches. Editing is locked to preserve the submission.</p>}{done && <a className="iw-button iw-primary" href={`/qbanks/${encodeURIComponent(bankId)}`}>Return to QBank<ArrowRight size={16} /></a>}</section>}
-          <footer className="iw-footer"><div><div className="iw-footer-destination"><span>Destination QBank</span><strong dir="auto">{context.bankName}</strong></div><strong>{step === 'edit' ? 'Review locally, then check' : step === 'duplicates' ? `${readiness?.unresolved.length} decisions remaining` : done ? 'Review team will approve your questions' : 'Confirm and submit'}</strong><span>{step === 'edit' ? 'No questions are sent while you edit.' : step === 'duplicates' ? 'Your decisions stay local until Submit.' : 'Only the selected QBank receives these questions.'}</span></div><div className="iw-footer-actions">{step === 'duplicates' && <button type="button" className="iw-button" disabled={locked || !!readiness?.unchecked.length} onClick={() => void skipExact()}><ListFilter size={16} />Exclude exact matches</button>}{step !== 'submit' && <button type="button" className="iw-button iw-primary" disabled={!!busy || !!draft.submission || !readiness?.active.length} onClick={() => readiness?.limitExceeded ? setError(`Select at most ${draft.questionLimit} questions for this import.`) : readiness?.unchecked.length || readiness?.invalid.length ? void checkDuplication() : readiness?.unresolved.length ? (setStep('duplicates'), setSelected(readiness.unresolved[0].id), setFilter('duplicates')) : setStep('submit')}><ShieldCheck size={17} />{readiness?.limitExceeded ? 'Reduce selected questions' : readiness?.unchecked.length || readiness?.invalid.length ? 'Check duplication' : readiness?.unresolved.length ? 'Resolve duplications' : 'Continue to Submit'}</button>}{step === 'submit' && !done && <><button type="button" className="iw-button" disabled={locked} onClick={() => setStep('edit')}>Back to editing</button><button type="button" className="iw-button iw-primary" disabled={!!busy || !rights || !draft.submission && !readiness?.ready} onClick={() => void submit()}>{busy ? <LoaderCircle size={17} className="animate-spin" /> : <CheckCheck size={17} />}{draft.submission ? 'Retry remaining batches' : 'Submit for review'}</button></>}</div></footer>
+          {step === 'submit' && <section className="iw-submit iw-card"><ShieldCheck size={42} /><span className="iw-eyebrow">Final review</span><h2>{done ? 'Submitted for review' : 'Ready to send to your QBank?'}</h2><div className="iw-submit-destination"><span>Submit to this QBank</span><strong dir="auto">{context.bankName}</strong>{context.bankName !== bankId && <small dir="auto">{bankId}</small>}</div><div className="iw-submit-counts"><div><strong>{done ? draft.submission!.successful : draft.submission ? draft.submission.batches.reduce((total, batch) => total + batch.questions.length, 0) : (readiness?.active.length ?? 0) + (draft.resume?.savedBatches.reduce((total, batch) => total + batch.questions.length, 0) ?? 0)}</strong><span>{done ? 'Submitted questions' : 'Selected questions'}</span></div><div><strong>{draft.rows.filter(item => item.excluded).length}</strong><span>Excluded locally</span></div><div><strong>{readiness?.unresolved.length}</strong><span>Unresolved duplications</span></div></div>{!done && readiness && reviewedCount < readiness.active.length && <p className="iw-alert">{readiness.active.length - reviewedCount} selected questions have not been marked reviewed. Review markers are optional; verify the content against your source before submitting.</p>}<p className="iw-muted">Submit sends your selected questions for reviewer approval. They appear in the bank after approval. Review notes remain on your device.</p>{!done && <label className="iw-rights"><input type="checkbox" checked={rights} disabled={!!busy} onChange={e => setRights(e.target.checked)} />I confirm that I have the right to share this content.</label>}{draft.submission && !done && <p className="iw-alert">{draft.submission.completed} / {draft.submission.batches.length} batches acknowledged. Retry continues with the remaining batches. Editing is locked to preserve the submission.</p>}{done && <a className="iw-button iw-primary" href={`/qbanks/${encodeURIComponent(bankId)}`}>Return to QBank<ArrowRight size={16} /></a>}</section>}
+          <footer className="iw-footer"><div><div className="iw-footer-destination"><span>Destination QBank</span><strong dir="auto">{context.bankName}</strong></div><strong>{step === 'edit' ? 'Review locally, then check' : step === 'duplicates' ? `${readiness?.unresolved.length} decisions remaining` : done ? 'Review team will approve your questions' : 'Confirm and submit'}</strong><span>{step === 'edit' ? 'No questions are sent while you edit.' : step === 'duplicates' ? 'Your decisions stay local until Submit.' : 'Only the selected QBank receives these questions.'}</span></div><div className="iw-footer-actions">{step === 'duplicates' && <button type="button" className="iw-button" disabled={locked || localPending || !!readiness?.unchecked.length} onClick={() => void skipExact()}><ListFilter size={16} />Exclude exact matches</button>}{step !== 'submit' && <button type="button" className="iw-button iw-primary" disabled={!!busy || storageConflict || localPending || !!draft.submission || !readiness?.active.length && !readiness?.ready} onClick={() => readiness?.limitExceeded ? setError(`Select at most ${draft.questionLimit} questions for this import.`) : readiness?.unchecked.length || readiness?.invalid.length ? void checkDuplication() : readiness?.unresolved.length ? (setStep('duplicates'), setSelected(readiness.unresolved[0].id), setFilter('duplicates')) : setStep('submit')}><ShieldCheck size={17} />{localPending ? 'Checking this file locally…' : readiness?.limitExceeded ? 'Reduce selected questions' : readiness?.unchecked.length || readiness?.invalid.length ? 'Check duplication' : readiness?.unresolved.length ? 'Resolve duplications' : 'Continue to Submit'}</button>}{step === 'submit' && !done && <><button type="button" className="iw-button" disabled={locked} onClick={() => setStep('edit')}>Back to editing</button><button type="button" className="iw-button iw-primary" disabled={!!busy || storageConflict || localPending || !rights || !draft.submission && !readiness?.ready} onClick={() => void submit()}>{busy || localPending ? <LoaderCircle size={17} className="animate-spin" /> : <CheckCheck size={17} />}{draft.submission ? 'Retry remaining batches' : 'Submit for review'}</button></>}</div></footer>
         </>}
       </>}
     </div>{confirmationDialog}

@@ -2,13 +2,15 @@ import { env } from 'cloudflare:workers';
 import { classificationCleanupStatements } from '@/features/qbanks/server/classification-cleanup';
 import type {
   AppUser,
+  DuplicateCandidate,
+  QBank,
+  QBankMembership,
   Question,
   QuestionProposal,
   QuestionProposalPayload,
 } from '@/lib/medguard-types';
 import {
   prepareDuplicateCandidate,
-  detectDuplicateReview,
   duplicateFingerprint,
   normalizeDuplicateText,
   type PreparedDuplicateCandidate,
@@ -16,6 +18,7 @@ import {
 import {
   canAccessBank,
   canEditBank,
+  canReviewBank,
 } from '@/features/access/domain/access-policy';
 import { bankAccessState } from '@/lib/qbank-access-repository';
 import { json } from '@/server/http/response';
@@ -25,6 +28,8 @@ import { ImportDuplicateIndex } from '@/features/imports/domain/import-duplicate
 import { exactImportIdentity } from '@/features/imports/domain/exact-import-duplicates';
 import { cachedImportSearch, importSearchKey, importSearchRevision } from './import-search';
 export { ImportDuplicateIndex };
+import { detectImportDuplication } from '../domain/detect-import-duplication';
+export { detectImportDuplication };
 
 export async function importLimits(user: AppUser) {
   const policy = await env.DB.prepare(
@@ -51,50 +56,30 @@ export async function importLimits(user: AppUser) {
       limits.jsonImportDailyLimit,
   };
 }
-export function detectImportDuplication(
-  incoming: QuestionProposalPayload,
-  bankId: string,
-  candidates: PreparedDuplicateCandidate[],
-  sourceEntityId = '',
-  index = new ImportDuplicateIndex(candidates),
-) {
-  const normalized = normalizeDuplicateText(incoming.stem);
-  const sameText = index.exact(bankId, normalized);
-  if (!sameText.length)
-    return detectDuplicateReview({
-      incoming,
-      qbankId: bankId,
-      sourceEntityId,
-      candidates: index.near(bankId, normalized),
-    });
-  // Show full-content matches before stem-only matches in the bounded preview.
-  const identity = exactImportIdentity(incoming);
-  const matches = [...sameText].sort((left, right) =>
-    Number(exactImportIdentity(right.payload) === identity) - Number(exactImportIdentity(left.payload) === identity)
-  ).map((c) => ({
-    entityId: c.entityId,
-    entityType: c.entityType,
-    questionId: c.questionId,
-    candidateFingerprint: c.prepared.fingerprint,
-    classification: 'exact' as const,
-    similarity: 100,
-    detectedAt: new Date().toISOString(),
-    signals: {
-      stem: 100,
-      optionsSet: 0,
-      optionsOrdered: 0,
-      correctAnswer: 0,
-      specialty: 0,
-      topic: 0,
-    },
+type ImportCandidate = PreparedDuplicateCandidate & { fullPayload?: QuestionProposalPayload | Question; ownerId?: string };
+
+export async function publicImportMatches(user: AppUser, bank: QBank, memberships: QBankMembership[], findings: DuplicateCandidate[], candidates: ImportCandidate[]) {
+  const byIdentity = new Map(candidates.map(c => [`${c.entityType}:${c.entityId}`, c]));
+  const reviewer = canReviewBank(user, bank, memberships);
+  return Promise.all(findings.map(async finding => {
+    const candidate = byIdentity.get(`${finding.entityType}:${finding.entityId}`);
+    if (!candidate) throw new Error('Duplicate candidate changed. Retry the scan.');
+    if (candidate.entityType === 'pending_proposal' && candidate.ownerId !== user.uid && !reviewer) {
+      // Domain-separated HMAC prevents guessed answer keys or known legacy IDs
+      // from revealing private content through its deterministic fingerprint.
+      const secret = env.BACKUP_SIGNING_KEY?.trim();
+      if (!secret || secret.length < 32) throw json({ error: 'Private duplicate review is temporarily unavailable. Your draft is preserved.', code: 'IMPORT_SIGNING_KEY_UNAVAILABLE' }, 503);
+      const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+      const opaque = async (value: unknown) => [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(JSON.stringify(['qraft-private-import-v1', value]))))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+      return { entityId: `restricted:${await opaque([user.uid, bank.id, candidate.entityId])}`, entityType: 'pending_proposal' as const,
+        candidateFingerprint: `restricted:${await opaque([user.uid, bank.id, candidate.entityId, candidate.fullPayload ?? candidate.payload])}`,
+        classification: finding.classification, similarity: finding.similarity, detectedAt: finding.detectedAt,
+        signals: { stem: 0, optionsSet: 0, optionsOrdered: 0, correctAnswer: 0, specialty: 0, topic: 0 }, restricted: true, canDelete: false };
+    }
+    const payload = (candidate.fullPayload ?? candidate.payload) as QuestionProposalPayload;
+    return { ...finding, payload: { ...payload, sourceReference: readQuestionSource(payload).sourceReference },
+      canDelete: canEditBank(user, bank, memberships) || candidate.ownerId === user.uid };
   }));
-  return {
-    status: 'flagged' as const,
-    detectorVersion: 'import-stem-v1',
-    sourceFingerprint: duplicateFingerprint(incoming),
-    detectedAt: new Date().toISOString(),
-    candidates: [...matches].slice(0, 3),
-  };
 }
 
 export async function importCandidates(
@@ -185,29 +170,15 @@ export async function importPreview(
     candidates = await importCandidates(bankId, questions, user.uid, revision);
   }
   const index = new ImportDuplicateIndex(candidates);
-  const byIdentity = new Map(candidates.map(candidate => [`${candidate.entityType}:${candidate.entityId}`, candidate]));
   return json(
     {
       userId: user.uid,
       bankName: bank.name,
       ...policy,
-      matches: questions.map((payload) => {
+      matches: await Promise.all(questions.map(async (payload) => {
         const review = detectImportDuplication(payload, bankId, candidates, '', index);
-        return (review?.candidates ?? []).map((finding) => {
-          const candidate = byIdentity.get(`${finding.entityType}:${finding.entityId}`)!;
-          return {
-            ...finding,
-            payload: {
-              ...candidate.fullPayload,
-              sourceReference: readQuestionSource(candidate.fullPayload).sourceReference,
-            },
-            canDelete:
-              canEditBank(user, bank, state.memberships) ||
-              (candidate.entityType === 'pending_proposal' &&
-                candidate.ownerId === user.uid),
-          };
-        });
-      }),
+        return publicImportMatches(user, bank, state.memberships, review?.candidates ?? [], candidates);
+      })),
     },
     200,
     { 'x-qraft-unchanged': '1' },

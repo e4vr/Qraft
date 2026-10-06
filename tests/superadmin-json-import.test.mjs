@@ -29,7 +29,7 @@ void test('Superadmin has no JSON question cap while Full Access retains bounded
     d1Databases: { DB: 'superadmin-import-test' },
     r2Buckets: { ASSETS: 'assets-test' },
     durableObjects: { REALTIME: { className: 'RealtimeChannel', useSQLite: true } },
-    bindings: { ROOT_ADMIN_EMAIL: 'admin@example.test' },
+    bindings: { ROOT_ADMIN_EMAIL: 'admin@example.test', BACKUP_SIGNING_KEY: 'superadmin-import-test-signing-key-only' },
   }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database('DB');
@@ -59,9 +59,10 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
   }
   for (const uid of ['monthly','quarterly']) await seedFullAccess(db, uid, uid === 'quarterly' ? 'full_quarterly' : 'full_monthly');
   const call = async (uid, path, body, method = body ? 'POST' : 'GET') => {
+    if (path === '/platform/import' && body) body = await (await import('./reviewed-import-fixtures.mjs')).reviewedImportFixture(call, uid, body);
     const response = await mf.dispatchFetch(`https://qraft.test/api/cloudflare${path}`, {
       method,
-      headers: { cookie: `__Host-qraft_session=fixture-${uid}`, origin: 'https://qraft.test', 'content-type': 'application/json' },
+      headers: { cookie: `__Host-qraft_session=fixture-${uid}`, origin: 'https://qraft.test', 'content-type': 'application/json', ...(path === '/platform/import' ? { 'x-qraft-account': uid } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     return { status: response.status, data: await response.json() };

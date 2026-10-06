@@ -9,12 +9,18 @@ export async function observeCloudflareUser(
   callback: (user?: AppUser) => void,
 ): Promise<() => void> {
   const { user } = await api<{ user: AppUser | null }>('/auth/session');
+  rememberLocalAccount(user?.uid ?? '');
   callback(user ?? undefined);
   return () => undefined;
 }
 
 export function setAuthenticatedUserCache(user: AppUser): void {
+  rememberLocalAccount(user.uid);
   setApiCache('/auth/session', { user });
+}
+
+function rememberLocalAccount(uid: string) {
+  try { localStorage.setItem('qraft-current-account', uid); window.dispatchEvent(new Event('qraft-account-changed')); } catch { /* Server account guards remain mandatory. */ }
 }
 
 export async function signInCloudflare(
@@ -72,6 +78,7 @@ export async function createCloudflareAccount(
 
 export async function signOutCloudflare(): Promise<void> {
   await api('/auth/logout', { method: 'POST', body: '{}' });
+  rememberLocalAccount('');
   clearResourceCache();
 }
 

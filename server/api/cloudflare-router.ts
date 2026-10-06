@@ -98,6 +98,8 @@ async function routePost(request: Request): Promise<Response> {
     return uploadMedia(request, 'announcements');
   if (scope === 'media' && action === 'questions')
     return uploadMedia(request, 'questions');
+  if (scope === 'media' && action === 'proposals')
+    return uploadMedia(request, 'proposals');
   return notFound();
 }
 

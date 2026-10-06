@@ -50,7 +50,7 @@ async function upload(
   file: File,
   qbankId: string,
   questionId: string,
-  kind: 'notes' | 'questions' | 'shared-notes',
+  kind: 'notes' | 'questions' | 'shared-notes' | 'proposals',
 ): Promise<string> {
   const form = new FormData();
   form.append('file', file);
@@ -93,6 +93,19 @@ export async function uploadSharedNoteImage(
   questionId: string,
 ): Promise<string> {
   return upload(uid, file, qbankId, questionId, 'shared-notes');
+}
+
+export async function uploadImportImage(uid: string, file: File, qbankId: string, questionId: string, signal?: AbortSignal): Promise<string> {
+  const form = new FormData(); form.append('file', file); form.append('qbankId', qbankId); form.append('questionId', questionId);
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(() => controller.abort(new DOMException('Image upload timed out. Retry with this draft.', 'TimeoutError')), 60_000);
+  try {
+    const result = await api<{ url: string }>('/media/proposals', { method: 'POST', expectedUserId: uid, body: form, signal: controller.signal });
+    if (typeof result.url !== 'string' || !result.url.startsWith('/api/cloudflare/media/') && !result.url.startsWith('https://')) throw new Error('The image upload was not confirmed. Retry with this draft.');
+    return result.url;
+  } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
 
 export async function deleteQBankImages(qbankId: string): Promise<void> {

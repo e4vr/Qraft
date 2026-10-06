@@ -1,4 +1,5 @@
 import { auditStatement } from './platform-server';
+import { authorProposalView } from '@/features/contributions/domain/author-proposal-view';
 import { importKeyStatement } from '@/features/imports/server/import-search';
 import { readChangeWindow } from '@/features/collaboration/server/change-journal';
 import { deltaCollections } from '@/features/collaboration/domain/collaboration-delta';
@@ -1974,7 +1975,7 @@ export async function loadCollaboration(request: Request) {
   );
   state.proposals = state.proposals.filter(
     (item) => item.proposedById === user.uid || reviewIds.has(item.qbankId),
-  );
+  ).map(item => reviewIds.has(item.qbankId) ? item : authorProposalView(item));
   state.approvedQuestions = state.approvedQuestions.filter(
     (item) =>
       accessibleIds.has(item.qbankId ?? 'smle-gs') ||
@@ -2723,6 +2724,10 @@ export async function saveCollaboration(request: Request) {
   const conflictChecks = await Promise.all(input.operations.map(async operation => {
     if ((operation.collection === 'answerStats' && operation.type === 'set') || operation.collection === 'qbankShareLinks') return false;
     let current = collaborationValue(state, operation.collection, operation.id);
+    if (operation.collection === 'questionProposals' && current) {
+      const proposal = current as QuestionProposal, bank = state.qbanks.find(item => item.id === proposal.qbankId);
+      if (!bank || !canReviewBank(user, bank, state.memberships)) current = authorProposalView(proposal);
+    }
     if (operation.collection === 'profiles' && user.role !== 'super_admin' && current)
       current = accessManagerProfile(current as MemberProfile);
     if (Object.hasOwn(operation, 'baseHash'))
@@ -3071,7 +3076,12 @@ export async function saveCollaboration(request: Request) {
   }
   await notifyApprovedRegistrations(approvedIds);
   await emitUsage(user.uid, { privateBanksCreated: input.operations.filter(operation => operation.collection === 'qbanks' && operation.type === 'set' && (operation.value as QBank)?.visibility === 'private' && !state.qbanks.some(bank => bank.id === operation.id)).length });
-  return json({ ok: true, operations: input.operations }, 200, deletedQBankIds.length ? { 'x-qraft-media-cleanup': '1' } : undefined);
+  const visibleOperations = input.operations.map(operation => {
+    if (operation.collection !== 'questionProposals' || !operation.value) return operation;
+    const proposal = operation.value as unknown as QuestionProposal, bank = state.qbanks.find(item => item.id === proposal.qbankId);
+    return bank && canReviewBank(user, bank, state.memberships) ? operation : { ...operation, value: authorProposalView(proposal) };
+  });
+  return json({ ok: true, operations: visibleOperations }, 200, deletedQBankIds.length ? { 'x-qraft-media-cleanup': '1' } : undefined);
 }
 
 export async function reserveIds(request: Request) {
@@ -3213,10 +3223,12 @@ export async function previewBankInvite(request: Request) {
 
 export async function uploadMedia(
   request: Request,
-  kind: 'notes' | 'questions' | 'shared-notes' | 'announcements',
+  kind: 'notes' | 'questions' | 'shared-notes' | 'proposals' | 'announcements',
 ) {
   assertSameOrigin(request);
   const authorization = imageKitAuthorization();
+  if (kind === 'proposals' && !hasR2Storage())
+    return json({ error: 'Private proposal image storage is unavailable. Your local images are preserved.' }, 503);
   if (!hasR2Storage() && !authorization)
     return json(
       { error: 'Asset storage is not configured on this deployment.' },
@@ -3263,6 +3275,9 @@ export async function uploadMedia(
   const qbankId = kind === 'announcements' ? 'system-announcement' : typeof qbankValue === 'string' ? qbankValue : '';
   const questionId =
     typeof questionValue === 'string' ? questionValue : 'general';
+  const importAdmin = user.role === 'super_admin' && user.mfaEnrolled && user.mfaVerified && !user.suspended;
+  if (kind === 'proposals' && ((!importAdmin && (!limits.canUseJsonImport || !limits.canAddQuestions)) || !/^import-[a-zA-Z0-9-]{20,80}$/.test(questionId)))
+    return json({ error: 'A valid import submission and contribution access are required.' }, 403);
   const permittedTypes = new Set([
     'image/jpeg',
     'image/png',
@@ -3318,9 +3333,9 @@ export async function uploadMedia(
     );
   const fileHash = await sha256Bytes(bytes);
   const duplicate = await env.DB.prepare(
-    "SELECT key,provider FROM media WHERE owner_id=? AND qbank_id=? AND file_hash=? AND provider='r2' AND status='ready' AND (?!='shared-notes' OR purpose='shared-notes') AND (?!='announcements' OR purpose='announcements') LIMIT 1",
+    "SELECT key,provider FROM media WHERE owner_id=? AND qbank_id=? AND file_hash=? AND provider='r2' AND status='ready' AND purpose=? LIMIT 1",
   )
-    .bind(user.uid, qbankId, fileHash, kind, kind)
+    .bind(user.uid, qbankId, fileHash, kind)
     .first<{ key: string; provider: string }>();
   if (duplicate)
     return json({
@@ -3460,11 +3475,12 @@ export async function uploadMedia(
 export async function serveMedia(request: Request, key: string) {
   const user = await currentUser(request);
   const metadata = await env.DB.prepare(
-    'SELECT qbank_id,provider,storage_key,status,purpose FROM media WHERE key = ?',
+    'SELECT qbank_id,owner_id,provider,storage_key,status,purpose FROM media WHERE key = ?',
   )
     .bind(key)
     .first<{
       qbank_id: string;
+      owner_id: string;
       provider: string;
       storage_key: string | null;
       status: string;
@@ -3523,6 +3539,15 @@ export async function serveMedia(request: Request, key: string) {
     const bank = state.qbanks.find((item) => item.id === metadata.qbank_id);
     if (!bank || !canAccessBank(user, bank, state.memberships))
       return new Response('Forbidden.', { status: 403 });
+    if (metadata.purpose === 'proposals' && metadata.owner_id !== user.uid && !canReviewBank(user, bank, state.memberships)) {
+      const url = `/api/cloudflare/media/${key.split('/').map(encodeURIComponent).join('/')}`;
+      const published = await env.DB.prepare(`SELECT 1 AS allowed FROM records r
+        WHERE r.type='sharedQuestions' AND r.qbank_id=? AND (
+          EXISTS(SELECT 1 FROM json_each(r.payload,'$.images') WHERE json_extract(value,'$.url')=?) OR
+          EXISTS(SELECT 1 FROM json_each(r.payload,'$.explanationImages') WHERE json_extract(value,'$.url')=?)
+        ) LIMIT 1`).bind(bank.id, url, url).first<{ allowed: number }>();
+      if (!published) return new Response('Forbidden.', { status: 403 });
+    }
   }
   if (metadata.provider !== 'r2' || !metadata.storage_key)
     return new Response('This legacy asset is served by its original URL.', {
@@ -3543,7 +3568,7 @@ export async function serveMedia(request: Request, key: string) {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
-  headers.set('cache-control', metadata.purpose === 'announcements' ? 'private, no-store' : 'private, max-age=31536000, immutable');
+  headers.set('cache-control', ['announcements', 'proposals'].includes(metadata.purpose) ? 'private, no-store' : 'private, max-age=31536000, immutable');
   headers.set('x-content-type-options', 'nosniff');
   return new Response(object.body, { headers });
 }

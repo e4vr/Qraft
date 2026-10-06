@@ -218,6 +218,7 @@ print(json.dumps(out))`,
   }
   for (const uid of ['monthly','monthly-limit','monthly-pending','quarterly']) await seedFullAccess(db, uid, uid === 'quarterly' ? 'full_quarterly' : 'full_monthly');
   const call = async (uid, path, body, method = body ? 'POST' : 'GET', { withBaseValues = true } = {}) => {
+    if (path === '/platform/import' && body) body = await (await import('./reviewed-import-fixtures.mjs')).reviewedImportFixture(call, uid, body);
     // Model the snapshot carried by current clients. Security/concurrency tests
     // can opt out to exercise missing or explicitly stale preconditions.
     if (withBaseValues && path === '/collaboration' && method === 'PUT' && body?.operations?.some(op => op.collection !== 'answerStats' && !Object.hasOwn(op, 'baseValue'))) {
@@ -242,6 +243,7 @@ print(json.dumps(out))`,
           cookie: `__Host-qraft_session=fixture-${uid}`,
           origin: 'https://qraft.test',
           'content-type': 'application/json',
+          ...(path === '/platform/import' ? { 'x-qraft-account': uid } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
       },
@@ -2166,7 +2168,7 @@ print(json.dumps(out))`,
         (await call('monthly', '/platform/import', request)).data.proposals[0].id,
         first.data.proposals[0].id,
       );
-      const partial = await call('monthly', '/platform/import', {
+      const malformed = await call('monthly', '/platform/import', {
         qbankId: 'smle-gs',
         requestId: randomUUID(),
         fileName: 'gemini-output.txt',
@@ -2174,11 +2176,18 @@ print(json.dumps(out))`,
         questions:
           '```json\n{sourceFile:"Scan.pdf",questions:[{stem:"Valid",options:["Yes","No",],correctAnswer:"A",sourcePage:4,},{stem:"Broken",options:["Only one"],correctAnswer:"A",sourcePage:5,}],}\n```',
       });
+      assert.equal(malformed.status, 400, JSON.stringify(malformed));
+      assert.equal(malformed.data.code, 'INVALID_IMPORT_QUESTIONS');
+      const partial = await call('monthly', '/platform/import', {
+        qbankId: 'smle-gs', requestId: randomUUID(), fileName: 'gemini-output.txt', repaired: true,
+        fileHash: createHash('sha256').update('gemini-output-repaired').digest('hex'),
+        questions: [{ stem: 'Valid', options: ['Yes', 'No'], correctAnswer: 'A', sourceFile: 'Scan.pdf', sourcePage: 4 }],
+      });
       assert.equal(partial.status, 200, JSON.stringify(partial));
       assert.equal(partial.data.successful, 1);
-      assert.equal(partial.data.failed, 1);
+      assert.equal(partial.data.failed, 0);
       assert.equal(partial.data.repaired, true);
-      assert.equal(partial.data.skipped[0].page, 5);
+      assert.equal(partial.data.skipped.length, 0);
       assert.equal(
         partial.data.proposals[0].payload.sourceReference,
         'Scan.pdf - p.4',
@@ -2604,6 +2613,7 @@ print(json.dumps(out))`,
       assert.equal(imported.data.proposals.length, 2);
       assert.equal(imported.data.skippedDuplicates, 0);
       assert.equal(imported.data.flaggedDuplicates, 1);
+      await (await import('./reviewed-import-fixtures.mjs')).seedLegacyFlaggedImport(db, imported);
       const [first, duplicate] = imported.data.proposals;
       assert.equal(duplicate.duplicateReview.status, 'flagged');
       assert.equal(duplicate.duplicateReview.candidates[0].entityId, first.id);
@@ -2693,6 +2703,7 @@ print(json.dumps(out))`,
         ],
       });
       assert.equal(rejectedImport.status, 200);
+      await (await import('./reviewed-import-fixtures.mjs')).seedLegacyFlaggedImport(db, rejectedImport);
       const rejected = rejectedImport.data.proposals[0];
       const approvedCandidate = rejected.duplicateReview.candidates.find(
         (item) => item.entityType === 'approved_question',
@@ -2773,6 +2784,7 @@ print(json.dumps(out))`,
           },
         ],
       });
+      await (await import('./reviewed-import-fixtures.mjs')).seedLegacyFlaggedImport(db, staleImport);
       const [staleCandidate, staleIncoming] = staleImport.data.proposals;
       const staleCandidateRow = await db
         .prepare(
@@ -2874,6 +2886,7 @@ print(json.dumps(out))`,
           ],
         });
         assert.equal(imported.status, 200, JSON.stringify(imported));
+        await (await import('./reviewed-import-fixtures.mjs')).seedLegacyFlaggedImport(db, imported);
         const [first, dependent] = imported.data.proposals;
         assert.equal(
           dependent.duplicateReview.candidates[0].entityId,

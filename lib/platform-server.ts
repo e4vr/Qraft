@@ -1,8 +1,10 @@
 import { quote, type Discount } from '@/features/subscriptions/server/discount-quote';
+import { authorProposalView } from '@/features/contributions/domain/author-proposal-view';
+import { importSubmissionFingerprint } from '@/features/imports/server/submission-fingerprint';
 import { proposalReviewHashes } from '@/features/contributions/server/review-version';
 import { collaborationWriteGuard } from '@/server/db/collaboration-write-guard';
 import { AccessError, subscriptionApi } from '@/features/subscriptions/server/subscription-service';
-import { detectImportDuplication, ImportDuplicateIndex, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
+import { detectImportDuplication, publicImportMatches, ImportDuplicateIndex, importLimits, importCandidates, importPreview, deleteImportDuplicate } from '@/features/imports/server/import-service';
 import { importKeyStatement, importSearchRevision, importSearchGuard, releaseImportSearchGuard } from '@/features/imports/server/import-search';
 import { env } from 'cloudflare:workers';
 import { DEFAULT_LEGAL_LINKS } from './legal-links';
@@ -2399,10 +2401,15 @@ export async function platformApi(request: Request, action: string) {
       )
         .bind(batchId)
         .first<{ user_id: string; result: string }>();
-      if (previous)
-        return previous.user_id === user.uid
-          ? json(JSON.parse(previous.result), 200, { 'x-qraft-unchanged': '1' })
-          : json({ error: 'Invalid import ID.' }, 409);
+      if (previous) {
+        if (previous.user_id !== user.uid) return json({ error: 'Invalid import ID.' }, 409);
+        const confirmed = JSON.parse(previous.result);
+        const confirmedBank = confirmed.qbankId ?? confirmed.proposals?.[0]?.qbankId ?? (await env.DB.prepare('SELECT qbank_id FROM json_import_attempts WHERE request_id=? AND user_id=? LIMIT 1').bind(batchId, user.uid).first<{ qbank_id: string }>())?.qbank_id;
+        if (confirmedBank !== text('qbankId')) return json({ error: 'This import ID belongs to a different QBank.', code: 'IMPORT_BANK_MISMATCH' }, 409);
+        if (confirmed.submissionFingerprint && confirmed.submissionFingerprint !== await importSubmissionFingerprint(input)) return json({ error: 'The saved import ID belongs to different question contents. Restore the original full backup.', code: 'IMPORT_CONTENT_MISMATCH' }, 409);
+        if (!root && Array.isArray(confirmed.proposals)) confirmed.proposals = confirmed.proposals.map(authorProposalView);
+        return json(confirmed, 200, { 'x-qraft-unchanged': '1' });
+      }
       const plan = user.effectivePlan ?? user.tier;
       const limits = user.planLimits ?? getPlanLimits(plan);
       const now = new Date().toISOString();
@@ -2465,7 +2472,9 @@ export async function platformApi(request: Request, action: string) {
         );
       if (!root && !(await importSettings()).enabled)
         return rejectImport(context, 'IMPORT_PAUSED', 'JSON import is temporarily paused by Superadmin.', 403);
-      if (input.rightsConfirmed === false || (input.requireDuplicateResolution === true && input.rightsConfirmed !== true))
+      if (!request.headers.get('x-qraft-account'))
+        return rejectImport(context, 'IMPORT_ACCOUNT_REQUIRED', 'Refresh Qraft and run Check duplication to confirm the account before submitting. Your local draft is preserved.', 400);
+      if (input.rightsConfirmed !== true)
         return rejectImport(
           context,
           'RIGHTS_CONFIRMATION_REQUIRED',
@@ -2498,7 +2507,7 @@ export async function platformApi(request: Request, action: string) {
         ? input.questions
         : { sourceFile: text('sourceFile'), questions: input.questions, skipped: input.skipped };
       const report = validatedImportReport(rawImport, '', root ? 500 : 200);
-      if (input.requireDuplicateResolution === true && report.skipped.length)
+      if (report.skipped.length)
         return rejectImport(context, 'INVALID_IMPORT_QUESTIONS', 'Correct every selected question before submitting; no question was saved.', 400, { report: report.skipped });
       context.sourceFile = report.sourceFile;
       if (!report.questions.length)
@@ -2525,7 +2534,7 @@ export async function platformApi(request: Request, action: string) {
         );
       const searchRevision = await importSearchRevision();
       const candidates = await importCandidates(bank.id,report.questions,user.uid,searchRevision);
-      const preparedCandidates: ReturnType<typeof prepareDuplicateCandidate>[] = [...candidates];
+      const preparedCandidates: Array<ReturnType<typeof prepareDuplicateCandidate> & { ownerId?: string; fullPayload?: import('./medguard-types').QuestionProposalPayload | Question }> = [...candidates];
       const duplicateIndex = new ImportDuplicateIndex(preparedCandidates);
       let skippedDuplicates = 0;
       const accepted: Array<{
@@ -2550,16 +2559,14 @@ export async function platformApi(request: Request, action: string) {
         });
         let duplicateReview: QuestionProposal['duplicateReview'] = detectImportDuplication(payload,bank.id,preparedCandidates,proposalId,duplicateIndex);
         const choice=Array.isArray(input.duplicateChoices)?input.duplicateChoices[index]:undefined;
-        if(duplicateReview && choice?.sourceFingerprint===duplicateFingerprint(payload) && Array.isArray(choice.candidateFingerprints) && duplicateReview.candidates.every(candidate=>choice.candidateFingerprints.includes(candidate.candidateFingerprint))) {
+        const visibleMatches = duplicateReview ? await publicImportMatches(user, bank, state.memberships, duplicateReview.candidates, preparedCandidates) : [];
+        if(duplicateReview && choice?.sourceFingerprint===duplicateFingerprint(payload) && Array.isArray(choice.candidateFingerprints) && visibleMatches.every(candidate=>choice.candidateFingerprints.includes(candidate.candidateFingerprint))) {
           duplicateReview={...duplicateReview,status:'resolved',resolutions:duplicateReview.candidates.map(candidate=>({decision:'kept_both',candidateEntityId:candidate.entityId,reviewerId:user.uid,reviewerName:user.displayName,reviewedAt:now,note:'Author explicitly selected Save as duplication during import review.'}))};
         }
-        if (input.requireDuplicateResolution === true && duplicateReview?.status === 'flagged') {
+        if (duplicateReview?.status === 'flagged') {
           return rejectImport(context, 'DUPLICATE_REVIEW_REQUIRED', 'A duplicate needs your decision. This batch was not saved. Review the matches and submit again.', 409, {}, {
             questionIndex: index,
-            matches: duplicateReview.candidates.map(finding => ({ ...finding,
-              payload: preparedCandidates.find(candidate => candidate.entityId === finding.entityId && candidate.entityType === finding.entityType)?.payload,
-              canDelete: false,
-            })),
+            matches: visibleMatches.map(match => ({ ...match, canDelete: false })),
           });
         }
         accepted.push({
@@ -2567,7 +2574,7 @@ export async function platformApi(request: Request, action: string) {
           payload,
           duplicateReview,
         });
-        preparedCandidates.push(prepared);
+        preparedCandidates.push({ ...prepared, ownerId: user.uid, fullPayload: payload });
         duplicateIndex.add(prepared);
       }
       if (!root && accepted.length) {
@@ -2658,7 +2665,9 @@ export async function platformApi(request: Request, action: string) {
         proposedAt: now,
       }));
       const result = {
-        proposals,
+        qbankId: bank.id,
+        submissionFingerprint: await importSubmissionFingerprint(input),
+        proposals: root ? proposals : proposals.map(authorProposalView),
         // Pending proposals retain their classification in their payload. The
         // bank structure contains only classifications with published questions.
         specialties: [] as QBankSpecialty[],
