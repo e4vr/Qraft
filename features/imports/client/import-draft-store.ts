@@ -48,6 +48,21 @@ export async function saveImportDraft(uid: string, draft: ImportDraft, expectedR
   });
 }
 
+export async function discardImportDraft(uid: string, bankId: string, expectedRevision: string | null): Promise<void> {
+  const db = await open();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('drafts', 'readwrite'), store = tx.objectStore('drafts');
+    const request = store.get(key(uid, bankId)); let conflict = false;
+    request.onsuccess = () => {
+      const previous = request.result as ImportDraft | undefined;
+      if ((previous ? previous.storageRevision ?? 'legacy' : null) !== expectedRevision) { conflict = true; tx.abort(); return; }
+      store.delete(key(uid, bankId));
+    };
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onabort = tx.onerror = () => { db.close(); reject(conflict ? new ImportDraftConflict() : tx.error ?? new Error('Could not discard the local draft. Your work is preserved.')); };
+  });
+}
+
 export async function bindImportDraftScope(oldScope: string, uid: string, draft: ImportDraft, oldRevision: string | null, targetRevision: string | null): Promise<string> {
   const db = await open();
   return new Promise((resolve, reject) => {

@@ -5,6 +5,8 @@ import type {
   DuplicateCandidate,
   QBank,
   QBankMembership,
+  QBankSpecialty,
+  QBankTopic,
   Question,
   QuestionProposal,
   QuestionProposalPayload,
@@ -26,6 +28,7 @@ import { getPlanLimits } from '@/features/subscriptions/domain/plan-config';
 import { readQuestionSource } from '@/features/qbanks/domain/question-source';
 import { ImportDuplicateIndex } from '@/features/imports/domain/import-duplicate-index';
 import { exactImportIdentity } from '@/features/imports/domain/exact-import-duplicates';
+import { importBankClassifications } from '@/features/imports/domain/import-classifications';
 import { cachedImportSearch, importSearchKey, importSearchRevision } from './import-search';
 export { ImportDuplicateIndex };
 import { detectImportDuplication } from '../domain/detect-import-duplication';
@@ -170,11 +173,18 @@ export async function importPreview(
     candidates = await importCandidates(bankId, questions, user.uid, revision);
   }
   const index = new ImportDuplicateIndex(candidates);
+  // Refresh only the selected bank's published taxonomy with the first explicit
+  // Check request. Typing never calls this endpoint or loads question contents.
+  const classificationRows = policy ? (await env.DB.prepare("SELECT type,payload FROM records WHERE qbank_id=? AND type IN ('qbankSpecialties','qbankTopics') ORDER BY type,id LIMIT 20000").bind(bank.id).all<{ type: string; payload: string }>()).results : undefined;
+  const classifications = classificationRows ? importBankClassifications(bank.id,
+    classificationRows.filter(row => row.type === 'qbankSpecialties').map(row => JSON.parse(row.payload) as QBankSpecialty),
+    classificationRows.filter(row => row.type === 'qbankTopics').map(row => JSON.parse(row.payload) as QBankTopic)) : undefined;
   return json(
     {
       userId: user.uid,
       bankName: bank.name,
       ...policy,
+      ...(classifications ? { classifications } : {}),
       matches: await Promise.all(questions.map(async (payload) => {
         const review = detectImportDuplication(payload, bankId, candidates, '', index);
         return publicImportMatches(user, bank, state.memberships, review?.candidates ?? [], candidates);

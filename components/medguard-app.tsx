@@ -5454,7 +5454,7 @@ function QuestionManager({
             <SecondaryButton
               onClick={() =>
                 user.role === 'super_admin' || hasFeature(user.effectivePlan ?? user.tier, 'jsonImport', user.planLimits)
-                  ? openImportWorkspace(user, activeQBankId, collaboration.qbanks.find(bank => bank.id === activeQBankId)?.name)
+                  ? openImportWorkspace(user, activeQBankId, collaboration.qbanks.find(bank => bank.id === activeQBankId)?.name, collaboration)
                   : openUpgrade()
               }
             >

@@ -23,6 +23,29 @@ await test('concurrent tabs cannot silently overwrite a newer local draft', asyn
   assert.equal(b.rows[0].notes, 'Tab B work', 'the losing tab can still export its own backup');
 });
 
+await test('discard removes only the selected account and bank, including local attachments', async () => {
+  const d = draft(); d.media.image = new Blob(['local image']);
+  const revision = await m.saveImportDraft('discard-user', d);
+  await m.saveImportDraft('other-user', d);
+  await m.saveImportDraft('discard-user', draft([input], 'other-bank'));
+  await m.discardImportDraft('discard-user', d.bankId, revision);
+  assert.equal(await m.loadImportDraft('discard-user', d.bankId), undefined);
+  assert.ok(await m.loadImportDraft('other-user', d.bankId));
+  assert.ok(await m.loadImportDraft('discard-user', 'other-bank'));
+  // A delayed save from an old tab must not resurrect the deleted draft.
+  await assert.rejects(m.saveImportDraft('discard-user', d, revision), m.ImportDraftConflict);
+});
+
+await test('discard rejects stale tabs rather than deleting newer edits', async () => {
+  const d = draft(); const oldRevision = await m.saveImportDraft('discard-stale', d);
+  d.rows[0].notes = 'Newer work';
+  const revision = await m.saveImportDraft('discard-stale', d, oldRevision);
+  await assert.rejects(m.discardImportDraft('discard-stale', d.bankId, oldRevision), m.ImportDraftConflict);
+  assert.equal((await m.loadImportDraft('discard-stale', d.bankId)).rows[0].notes, 'Newer work');
+  await m.discardImportDraft('discard-stale', d.bankId, revision);
+  await m.discardImportDraft('discard-stale', d.bankId, null);
+});
+
 await test('binding removes the unbound copy atomically and rejects stale target revisions', async () => {
   const d = draft(); const oldRevision = await m.saveImportDraft('unbound:test-session', d);
   const revision = await m.bindImportDraftScope('unbound:test-session', 'bound-user', d, oldRevision, null);

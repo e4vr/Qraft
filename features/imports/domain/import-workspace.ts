@@ -4,6 +4,7 @@ import { withLocalImportMatches, type ImportMatch } from './local-import-duplica
 import { exactImportIdentity } from './exact-import-duplicates';
 import type { QuestionProposalPayload } from '@/lib/medguard-types';
 import { validImageAttachments } from '@/features/media/domain/image-attachments';
+import type { ImportClassificationCatalog } from './import-classifications';
 
 export interface ImportRow {
   id: string;
@@ -46,6 +47,7 @@ export interface ImportDraft {
   submission?: ImportSubmission;
   resume?: Pick<ImportSubmission, 'sessionId' | 'successful'> & { savedBatches: ImportSubmission['batches']; confirmedCount?: number };
   questionLimit?: number;
+  classificationCatalog?: ImportClassificationCatalog;
 }
 
 export function emptyImportQuestion(sourceFile = ''): QuestionProposalPayload {

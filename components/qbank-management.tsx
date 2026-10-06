@@ -184,7 +184,7 @@ export function QBankManagement({
       return;
     }
     setError('');
-    if (next === 'import') { openImportWorkspace(user, bankId, bankName); return; }
+    if (next === 'import') { openImportWorkspace(user, bankId, bankName, collaboration); return; }
     setSection(next);
   }
 
@@ -764,7 +764,7 @@ export function QBankManagement({
           <section className="rounded-2xl bg-card p-6 ring-1 ring-border">
             <h2 className="text-lg font-bold">Import workspace</h2>
             <p className="my-3 text-sm text-muted-foreground">Review and edit your file locally before checking duplication and submitting.</p>
-            <button className="q-button q-button-primary" onClick={() => canImport ? openImportWorkspace(user, bankId, bankName) : openUpgrade()}>Open Import workspace</button>
+            <button className="q-button q-button-primary" onClick={() => canImport ? openImportWorkspace(user, bankId, bankName, collaboration) : openUpgrade()}>Open Import workspace</button>
           </section>
         )}
       </div>

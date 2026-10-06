@@ -23,6 +23,11 @@ await test('import privacy, mandatory gates and proposal images work together wi
     }
     const bank = { id: 'security-bank', name: 'Synthetic bank', ownerId: 'author', createdById: 'author', visibility: 'public', reviewerIds: [], viewerIds: [], essential: false, archived: false, createdAt: now };
     await db.prepare("INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES('qbanks',?,?,?,?,?)").bind(bank.id, bank.id, bank.ownerId, JSON.stringify(bank), now).run();
+    for (const [type, item] of [
+      ['qbankSpecialties', { id: 'safety-specialty', qbankId: bank.id, name: 'Cardiology' }],
+      ['qbankTopics', { id: 'safety-topic', qbankId: bank.id, specialtyId: 'safety-specialty', name: 'Heart failure' }],
+      ['qbankSpecialties', { id: 'other-bank-specialty', qbankId: 'other-bank', name: 'Hidden other bank taxonomy' }],
+    ]) await db.prepare('INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES(?,?,?,?,?,?)').bind(type, item.id, item.qbankId, 'author', JSON.stringify(item), now).run();
     const question = { stem: 'Which synthetic option is appropriate for this security scenario?', options: ['First', 'Second'], answer: 0, sourceFile: 'Synthetic source.pdf', specialty: 'General', topic: 'Audit', explanation: 'Private unapproved explanation', images: [] };
     const proposal = { id: randomUUID(), qbankId: bank.id, type: 'new_question', status: 'pending', proposedById: 'author', proposedByName: 'Private author', proposedAt: now, payload: question };
     await db.prepare("INSERT INTO records(type,id,qbank_id,owner_id,payload,updated_at) VALUES('questionProposals',?,?,?,?,?)").bind(proposal.id, bank.id, proposal.proposedById, JSON.stringify(proposal), now).run();
@@ -30,7 +35,8 @@ await test('import privacy, mandatory gates and proposal images work together wi
     const call = async (path, body, uid = 'reader') => { const response = await mf.dispatchFetch(`https://security.test/api/cloudflare${path}`, { method: body ? 'POST' : 'GET', headers: headers(uid), ...(body ? { body: JSON.stringify(body) } : {}) }); return { status: response.status, data: await response.json() }; };
     const incoming = { ...question, explanation: 'Reader own explanation' };
     const collaboration = await call('/collaboration'); assert.equal(JSON.stringify(collaboration.data).includes(proposal.id), false);
-    const preview = await call('/platform/import-preview', { qbankId: bank.id, questions: [incoming] }); assert.equal(preview.status, 200);
+    const preview = await call('/platform/import-preview', { qbankId: bank.id, questions: [incoming], includePolicy: true }); assert.equal(preview.status, 200);
+    assert.deepEqual(preview.data.classifications, { specialties: ['Cardiology'], topics: [{ specialty: 'Cardiology', name: 'Heart failure' }] });
     const hidden = preview.data.matches[0][0]; assert.equal(hidden.restricted, true); assert.equal(hidden.payload, undefined);
     assert.equal(hidden.similarity, 0); assert.equal(hidden.classification, 'possible', 'private answers cannot be inferred from a precise similarity score');
     const probes = await call('/platform/import-preview', { qbankId: bank.id, questions: [0, 1].map(answer => ({ ...incoming, answer, stem: incoming.stem.replace('scenario', 'situation') })) });
@@ -38,6 +44,7 @@ await test('import privacy, mandatory gates and proposal images work together wi
     assert.ok(probes.data.matches.every(matches => matches[0]?.restricted && matches[0].similarity === 0 && matches[0].classification === 'possible'));
     assert.equal(JSON.stringify(preview.data).includes(question.explanation), false); assert.equal(JSON.stringify(preview.data).includes(proposal.id), false);
     const ownerPreview = await call('/platform/import-preview', { qbankId: bank.id, questions: [incoming] }, 'author'); assert.equal(ownerPreview.data.matches[0][0].payload.explanation, question.explanation);
+    assert.equal(ownerPreview.data.classifications, undefined, 'later chunks do not reload taxonomy');
     assert.equal((await call('/platform/import-preview', { qbankId: 'private-unavailable', questions: [incoming] })).status, 403);
     const csrf = await mf.dispatchFetch('https://security.test/api/cloudflare/platform/import-preview', { method: 'POST', headers: { ...headers('reader'), origin: 'https://evil.invalid' }, body: JSON.stringify({ qbankId: bank.id, questions: [incoming] }) }); assert.equal(csrf.status, 403);
     const changed = await mf.dispatchFetch('https://security.test/api/cloudflare/platform/import-preview', { method: 'POST', headers: { ...headers('reader'), 'x-qraft-account': 'author' }, body: JSON.stringify({ qbankId: bank.id, questions: [incoming] }) }); assert.equal(changed.status, 409);
