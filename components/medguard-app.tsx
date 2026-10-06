@@ -30,7 +30,7 @@ import { ContributionDraftHistory } from '@/components/contribution-draft-histor
 import { GiftNotification } from '@/components/gift-notification';
 import { AccountProfile } from '@/components/account-profile';
 import { SystemStatePage } from '@/components/system-state-page';
-import { QuestionImportReview } from '@/components/question-import-review';
+import { openImportWorkspace } from '@/features/imports/client/open-import-workspace';
 import { QuestionId, QuestionOption } from '@/components/question-tools';
 import {
   FlashcardsWorkspace,
@@ -4973,7 +4973,6 @@ function QuestionManager({
     contributionAccount.current = user.uid;
     return () => { contributionAccount.current = ''; };
   }, [user.uid]);
-  const [importOpen, setImportOpen] = useState(false);
   const [contributionSearch, setContributionSearch] = useState('');
   const [selectedContributionIds, setSelectedContributionIds] = useState<
     Set<string>
@@ -5455,7 +5454,7 @@ function QuestionManager({
             <SecondaryButton
               onClick={() =>
                 user.role === 'super_admin' || hasFeature(user.effectivePlan ?? user.tier, 'jsonImport', user.planLimits)
-                  ? setImportOpen(true)
+                  ? openImportWorkspace(user, activeQBankId, collaboration.qbanks.find(bank => bank.id === activeQBankId)?.name)
                   : openUpgrade()
               }
             >
@@ -5485,52 +5484,6 @@ function QuestionManager({
           </div>
         }
       />
-      <Dialog open={importOpen} onOpenChange={setImportOpen}>
-        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-3xl">
-          <DialogTitle>Import</DialogTitle>
-          <QuestionImportReview
-            uid={user.uid}
-            bankId={activeQBankId}
-            adminImportPrivileges={user.role === 'super_admin'}
-            onImported={(result) =>
-              confirmUpdate((current) => ({
-                ...current,
-                proposals: [
-                  ...result.proposals,
-                  ...current.proposals.filter(
-                    (p) => !result.proposals.some((n) => n.id === p.id),
-                  ),
-                ],
-                specialties: [
-                  ...current.specialties,
-                  ...result.specialties.filter(
-                    (item) =>
-                      !current.specialties.some(
-                        (existing) => existing.id === item.id,
-                      ),
-                  ),
-                ],
-                topics: [
-                  ...current.topics,
-                  ...result.topics.filter(
-                    (item) =>
-                      !current.topics.some(
-                        (existing) => existing.id === item.id,
-                      ),
-                  ),
-                ],
-                classificationRevisions:
-                  result.classificationRevision === undefined
-                    ? current.classificationRevisions
-                    : {
-                        ...current.classificationRevisions,
-                        [activeQBankId]: result.classificationRevision,
-                      },
-              }))
-            }
-          />
-        </DialogContent>
-      </Dialog>
       {roleRequestOpen && (
         <dialog
           open

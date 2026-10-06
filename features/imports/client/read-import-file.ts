@@ -1,6 +1,6 @@
 import type { QuestionImportReport } from '@/lib/question-import';
 
-export async function readImportFile(file: File): Promise<{ report: QuestionImportReport; hash: string }> {
+export async function readImportFile(file: File): Promise<{ report: QuestionImportReport; hash: string; content: string }> {
   const bytes = await file.arrayBuffer();
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./import-file-worker.ts', import.meta.url), { type: 'module' });

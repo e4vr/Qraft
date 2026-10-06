@@ -60,7 +60,7 @@ export async function accountBoundDiscountTests(
         (await call('admin', '/platform/discounts', coupon)).data.unchanged,
         true,
       );
-      const { audience, bound_user_id, ...legacy } = coupon;
+      const { audience: _audience, bound_user_id: _boundUserId, ...legacy } = coupon;
       const disabled = await call('admin', '/platform/discounts', {
         ...legacy,
         enabled: false,

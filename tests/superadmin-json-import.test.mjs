@@ -313,6 +313,29 @@ print(json.dumps(out))`], { encoding: 'utf8' }));
     assert.equal(renamed.status, 200, JSON.stringify(renamed.data));
     assert.match(renamed.data.proposals[0].payload.sourceReference, /^Reviewed source title - p\.1 - Q\.17$/);
   });
+  await t.test('local workspace rejects unresolved or newly changed duplicates before saving a batch', async () => {
+    const question = { ...reusableQuestion, stem: `Strict workspace duplicate ${marker}` };
+    const metadata = forPlan('strict-workspace', 1);
+    const first = await call('admin', '/platform/import', { ...metadata, questions: [question], requireDuplicateResolution: true });
+    assert.equal(first.status, 200, JSON.stringify(first.data));
+    const unresolved = await call('admin', '/platform/import', { ...metadata, requestId: randomUUID(), questions: [question], requireDuplicateResolution: true });
+    assert.equal(unresolved.status, 409);
+    assert.equal(unresolved.data.code, 'DUPLICATE_REVIEW_REQUIRED');
+    assert.equal(unresolved.data.questionIndex, 0);
+    assert.equal(unresolved.data.matches[0].payload.stem, question.stem);
+    assert.equal((await db.prepare("SELECT count(*) n FROM records WHERE type='questionProposals' AND json_extract(payload,'$.payload.stem')=?").bind(question.stem).first()).n, 1);
+    const { duplicateFingerprint } = await import('../.ui-review/import-domain.mjs');
+    const choice = { sourceFingerprint: duplicateFingerprint(question), candidateFingerprints: unresolved.data.matches.map(match => match.candidateFingerprint) };
+    const resolved = await call('admin', '/platform/import', { ...metadata, requestId: randomUUID(), questions: [question], requireDuplicateResolution: true, duplicateChoices: [choice] });
+    assert.equal(resolved.status, 200, JSON.stringify(resolved.data));
+    assert.equal(resolved.data.proposals[0].duplicateReview.status, 'resolved');
+    const invalid = await call('admin', '/platform/import', { ...metadata, requestId: randomUUID(), questions: [{ ...question, stem: '' }], requireDuplicateResolution: true });
+    assert.equal(invalid.status, 400);
+    assert.equal(invalid.data.code, 'INVALID_IMPORT_QUESTIONS');
+    const rights = await call('admin', '/platform/import', { ...metadata, requestId: randomUUID(), rightsConfirmed: undefined, requireDuplicateResolution: true });
+    assert.equal(rights.status, 400);
+    assert.equal(rights.data.code, 'RIGHTS_CONFIRMATION_REQUIRED');
+  });
   await t.test('source-only JSON imports and publishes without a fabricated page', async () => {
     const imported = await call('monthly', '/platform/import', {
       ...forPlan('source-only', 1),

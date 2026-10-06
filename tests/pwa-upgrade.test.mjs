@@ -28,6 +28,7 @@ void test('service worker replaces only Qraft shell caches and avoids mixed stat
   makeCache('qraft-shell-v4.7.0');
   makeCache('qraft-shell-v4.7.1');
   makeCache('qraft-shell-v4.7.3');
+  makeCache('qraft-shell-v4.7.15');
   makeCache('unrelated-cache');
   const caches = {
     async open(name) { return makeCache(name); },
@@ -58,7 +59,7 @@ void test('service worker replaces only Qraft shell caches and avoids mixed stat
   const activate = lifecycleEvent();
   listeners.get('activate')(activate);
   await activate.promise;
-  assert.deepEqual(deleted, ['qraft-shell-v3.0.0', 'qraft-shell-v4.7.0', 'qraft-shell-v4.7.1', 'qraft-shell-v4.7.3']);
+  assert.deepEqual(deleted, ['qraft-shell-v3.0.0', 'qraft-shell-v4.7.0', 'qraft-shell-v4.7.1', 'qraft-shell-v4.7.3', 'qraft-shell-v4.7.15']);
   assert.ok(buckets.has('unrelated-cache'));
   assert.equal(claimed, 1);
   assert.equal(messages[0].type, 'QRAFT_SW_ACTIVATED');

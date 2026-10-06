@@ -360,7 +360,7 @@ void test('confirmations share a responsive in-app surface across workspaces', a
     'components/classification-manager.tsx',
     'components/preformed-tests-workspace.tsx',
     'components/qbank-management.tsx',
-    'components/question-import-review.tsx',
+    'components/import-workspace.tsx',
     'components/review-workspace.tsx',
     'components/subscription-workspace.tsx',
   ];
@@ -542,7 +542,7 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
     'utf8',
   );
   const importReview = await readFile(
-    new URL('components/question-import-review.tsx', root),
+    new URL('components/import-workspace.tsx', root),
     'utf8',
   );
   const preformed = await readFile(
@@ -567,9 +567,9 @@ void test('review workspace, test deletion, question images, and Qraft JSON impo
     review,
     /Reviewed ·\s*\{historyReady \? reviewed\.length : '…'\}/,
   );
-  assert.match(importReview, /QuestionImportReview/);
-  assert.match(importReview, /One question per slide/);
-  assert.match(manager, /QuestionImportReview/);
+  assert.match(importReview, /ImportWorkspace/);
+  assert.match(importReview, /One per slide/);
+  assert.match(manager, /openImportWorkspace/);
   assert.match(preformed, /onClick=\{openImport\}/);
   assert.match(preformed, /Import<\/h2>/);
   assert.match(preformed, /Upload your file here/);
@@ -655,12 +655,12 @@ void test('questions and JSON prompts support a configurable number of options',
     'utf8',
   );
   const importReview = await readFile(
-    new URL('components/question-import-review.tsx', root),
+    new URL('components/import-workspace.tsx', root),
     'utf8',
   );
   const types = await readFile(new URL('lib/medguard-types.ts', root), 'utf8');
   assert.match(types, /function optionLabel/);
-  assert.match(importReview, /Options per question/);
+  assert.match(importReview, /optionCount/);
   const importer = await readFile(
     new URL('lib/question-import.ts', root),
     'utf8',
@@ -668,7 +668,7 @@ void test('questions and JSON prompts support a configurable number of options',
   assert.match(importer, /\$\{optionCount\} distinct answer options/);
   assert.match(
     importer,
-    /options.length < 2\s*\|\|\s*item.options.length > 10/,
+    /item.options.length < 2\s*\|\|\s*item.options.length > 10/,
   );
   assert.match(manager, /Add option/);
   const editDialog = await readFile(new URL('components/question-edit-dialog.tsx', root), 'utf8');
@@ -935,7 +935,7 @@ void test('every question change requires independent review with durable attrib
   assert.match(access, /hasReviewerRole\(user\)/);
   assert.match(server, /current\.proposedById !== user\.uid/);
   assert.match(server, /reviewedQuestionWriteAllowed/);
-  assert.match(manager, /QuestionImportReview/);
+  assert.match(manager, /openImportWorkspace/);
   assert.doesNotMatch(manager, /questions_json_imported/);
   assert.match(review, /proposal\.reviewedById === user\.uid/);
   assert.match(platform, /writtenByName:\s*proposal\.type === 'new_question'/);

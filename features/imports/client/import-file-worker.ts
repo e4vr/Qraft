@@ -12,7 +12,7 @@ worker.onmessage = async ({ data }) => {
     const report = parseQuestionImportReport(content, data.fallbackSourceFile, Number.POSITIVE_INFINITY);
     const digest = await crypto.subtle.digest('SHA-256', data.bytes);
     const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
-    worker.postMessage({ report, hash });
+    worker.postMessage({ report, hash, content });
   } catch (error) {
     worker.postMessage({ error: error instanceof Error ? error.message : 'Unable to read this JSON file.' });
   }

@@ -424,6 +424,7 @@ async function rejectImport(
   errorMessage: string,
   status: number,
   outcome: Omit<ImportMonitorOutcome, 'status' | 'errorCode' | 'errorMessage'> = {},
+  details: Record<string, unknown> = {},
 ) {
   await env.DB.batch(
     importMonitoringStatements(context, {
@@ -433,7 +434,7 @@ async function rejectImport(
       errorMessage,
     }),
   );
-  return json({ error: errorMessage, code: errorCode }, status);
+  return json({ error: errorMessage, code: errorCode, ...details }, status);
 }
 
 export async function platformApi(request: Request, action: string) {
@@ -699,7 +700,7 @@ export async function platformApi(request: Request, action: string) {
         return json({ error: `Review between 1 and ${settings.previewBatchSize} questions per request.` }, 400);
       const report=validatedImportReport({sourceFile:text('sourceFile'),questions:input.questions},'',settings.previewBatchSize);
       if(report.skipped.length) return json({error:'Correct the invalid question before checking duplication.'},400);
-      return importPreview(user,report.questions,text('qbankId'));
+      return importPreview(user,report.questions,text('qbankId'), input.includePolicy === true ? { limits: await importLimits(user), settings, isSuperadmin: root } : undefined);
     }
     if (action === 'import-delete-duplicate' && request.method === 'POST') return deleteImportDuplicate(user,input);
     if (action === 'json-import-status' && request.method === 'GET') {
@@ -2464,7 +2465,7 @@ export async function platformApi(request: Request, action: string) {
         );
       if (!root && !(await importSettings()).enabled)
         return rejectImport(context, 'IMPORT_PAUSED', 'JSON import is temporarily paused by Superadmin.', 403);
-      if (input.rightsConfirmed === false)
+      if (input.rightsConfirmed === false || (input.requireDuplicateResolution === true && input.rightsConfirmed !== true))
         return rejectImport(
           context,
           'RIGHTS_CONFIRMATION_REQUIRED',
@@ -2497,6 +2498,8 @@ export async function platformApi(request: Request, action: string) {
         ? input.questions
         : { sourceFile: text('sourceFile'), questions: input.questions, skipped: input.skipped };
       const report = validatedImportReport(rawImport, '', root ? 500 : 200);
+      if (input.requireDuplicateResolution === true && report.skipped.length)
+        return rejectImport(context, 'INVALID_IMPORT_QUESTIONS', 'Correct every selected question before submitting; no question was saved.', 400, { report: report.skipped });
       context.sourceFile = report.sourceFile;
       if (!report.questions.length)
         return rejectImport(
@@ -2549,6 +2552,15 @@ export async function platformApi(request: Request, action: string) {
         const choice=Array.isArray(input.duplicateChoices)?input.duplicateChoices[index]:undefined;
         if(duplicateReview && choice?.sourceFingerprint===duplicateFingerprint(payload) && Array.isArray(choice.candidateFingerprints) && duplicateReview.candidates.every(candidate=>choice.candidateFingerprints.includes(candidate.candidateFingerprint))) {
           duplicateReview={...duplicateReview,status:'resolved',resolutions:duplicateReview.candidates.map(candidate=>({decision:'kept_both',candidateEntityId:candidate.entityId,reviewerId:user.uid,reviewerName:user.displayName,reviewedAt:now,note:'Author explicitly selected Save as duplication during import review.'}))};
+        }
+        if (input.requireDuplicateResolution === true && duplicateReview?.status === 'flagged') {
+          return rejectImport(context, 'DUPLICATE_REVIEW_REQUIRED', 'A duplicate needs your decision. This batch was not saved. Review the matches and submit again.', 409, {}, {
+            questionIndex: index,
+            matches: duplicateReview.candidates.map(finding => ({ ...finding,
+              payload: preparedCandidates.find(candidate => candidate.entityId === finding.entityId && candidate.entityType === finding.entityType)?.payload,
+              canDelete: false,
+            })),
+          });
         }
         accepted.push({
           id: proposalId,

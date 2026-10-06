@@ -169,6 +169,7 @@ export async function importPreview(
   user: AppUser,
   questions: QuestionProposalPayload[],
   bankId: string,
+  policy?: Record<string, unknown>,
 ) {
   const state = await bankAccessState(bankId),
     bank = state.qbanks.find((b) => b.id === bankId);
@@ -187,6 +188,9 @@ export async function importPreview(
   const byIdentity = new Map(candidates.map(candidate => [`${candidate.entityType}:${candidate.entityId}`, candidate]));
   return json(
     {
+      userId: user.uid,
+      bankName: bank.name,
+      ...policy,
       matches: questions.map((payload) => {
         const review = detectImportDuplication(payload, bankId, candidates, '', index);
         return (review?.candidates ?? []).map((finding) => {

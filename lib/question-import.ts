@@ -43,6 +43,7 @@ export interface QuestionPromptSettings {
 }
 
 export interface SkippedImportedQuestion {
+  inputIndex?: number;
   originalQuestionNumber?: string;
   page?: number;
   fileName: string;
@@ -50,6 +51,7 @@ export interface SkippedImportedQuestion {
 }
 
 export interface QuestionImportReport {
+  entries?: Array<{ inputIndex: number; value: unknown; question?: QuestionProposalPayload; error?: string }>;
   questions: QuestionProposalPayload[];
   skipped: SkippedImportedQuestion[];
   sourceFile: string;
@@ -151,13 +153,26 @@ export function normalizeImportedQuestion(
     stem: original.stem ?? original.question ?? original.questionText,
     options: original.options ?? original.choices,
     correctAnswer: original.correctAnswer ?? original.correct_answer ?? original.answer,
+    sourceFile: original.sourceFile ?? original.source_file,
+    originalQuestionNumber: original.originalQuestionNumber ?? original.original_question_number,
     sourcePage: Object.hasOwn(original, 'sourcePage') ? original.sourcePage : original.page ?? original.slideNumber,
   } as Record<string, unknown>;
   if (item.options && typeof item.options === 'object' && !Array.isArray(item.options)) {
     const choices = item.options as Record<string, unknown>;
-    const keys = Object.keys(choices).sort();
+    const keys = Object.keys(choices).sort((a, b) => a.toUpperCase().localeCompare(b.toUpperCase()));
     if (keys.length >= 2 && keys.every((key, i) => key.toUpperCase() === optionLabel(i)))
       item.options = keys.map(key => choices[key]);
+  }
+  if (Array.isArray(item.options) && item.options.every(option => option && typeof option === 'object' && !Array.isArray(option))) {
+    const labelled = [...item.options] as Array<Record<string, unknown>>;
+    const labels = labelled.map(option => option.label);
+    if (labels.some(label => label !== undefined)) {
+      if (labels.some(label => typeof label !== 'string') || new Set(labels.map(label => String(label).toUpperCase())).size !== labels.length)
+        return fail('options (use unique A–J labels)');
+      labelled.sort((a, b) => String(a.label).toUpperCase().localeCompare(String(b.label).toUpperCase()));
+      if (labelled.some((option, i) => String(option.label).toUpperCase() !== optionLabel(i))) return fail('options (labels must start at A without gaps)');
+    }
+    item.options = labelled.map(option => option.text);
   }
   const string = (key: string, fallback?: string, optional = false) => {
     if (item[key] === undefined || item[key] === null) {
@@ -184,18 +199,27 @@ export function normalizeImportedQuestion(
     return fail('options (2–10 non-empty strings)');
   const options = (item.options as string[]).map((x, i) => normalizeQuestionText(x).replace(new RegExp(`^${optionLabel(i)}[.)]\\s+`, 'i'), ''));
   if (options.some(option => !option)) return fail('options (non-empty answer text)');
-  const raw = item.correctAnswer ?? item.answer;
-  const numeric =
-    typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw) : raw;
-  const label = typeof raw === 'string' ? raw.trim().match(/^([A-J])(?:[.)]|$)/i)?.[1]?.toUpperCase() : undefined;
-  const answer =
-    typeof numeric === 'number'
-      ? numeric
-      : options.findIndex(
-          (option, i) => optionLabel(i) === label || option === normalizeQuestionText(String(raw)).replace(/^[A-J][.)]\s+/i, ''),
-        );
+  const resolveAnswer = (raw: unknown) => {
+    if (typeof raw === 'number' || (typeof raw === 'string' && /^\d+$/.test(raw.trim()))) return Number(raw);
+    if (typeof raw !== 'string') return -1;
+    const text = normalizeQuestionText(raw);
+    const labelled = text.match(/^([A-J])(?:[.)](?:\s+(.*))?|$)$/i);
+    if (labelled) {
+      const i = labelled[1].toUpperCase().charCodeAt(0) - 65;
+      if (labelled[2] && options[i] !== labelled[2]) return fail('answer (the letter and answer text disagree)');
+      return i;
+    }
+    const indexes = options.flatMap((option, i) => option === text ? [i] : []);
+    if (indexes.length > 1) return fail('answer (answer text matches more than one option; select a letter)');
+    return indexes[0] ?? -1;
+  };
+  const answer = resolveAnswer(item.correctAnswer);
   if (!Number.isInteger(answer) || answer < 0 || answer >= options.length)
     return fail('answer');
+  for (const key of ['correctAnswer', 'correct_answer', 'answer']) {
+    if (original[key] !== undefined && original[key] !== null && resolveAnswer(original[key]) !== answer)
+      return fail('answer (conflicting answer keys; keep one correct answer)');
+  }
   let source: ReturnType<typeof validateQuestionSource>;
   try { source = validateQuestionSource(item, fallbackSourceFile); }
   catch (error) { throw new Error(`Question ${index + 1}: ${error instanceof Error ? error.message : 'Invalid source.'}`); }
@@ -205,10 +229,11 @@ export function normalizeImportedQuestion(
     if (!value || typeof value !== 'object')
       return fail(`images[${imageIndex}]`);
     const image = value as Record<string, unknown>;
-    if (typeof image.url !== 'string' || !/^https:\/\//i.test(image.url))
-      return fail(`images[${imageIndex}].url (HTTPS required)`);
+    const protectedUrl = typeof image.url === 'string' && image.url.startsWith('/api/cloudflare/media/') && !/[\s\\]/.test(image.url);
+    if (typeof image.url !== 'string' || (!/^https:\/\//i.test(image.url) && !protectedUrl))
+      return fail(`images[${imageIndex}].url (HTTPS or protected Qraft image required)`);
     try {
-      new URL(image.url);
+      if (!protectedUrl) new URL(image.url);
     } catch {
       return fail(`images[${imageIndex}].url`);
     }
@@ -220,6 +245,7 @@ export function normalizeImportedQuestion(
     };
   });
   if (images.length > 10) return fail('images (maximum 10)');
+  if (!validImageAttachments(images)) return fail('images (use unique image IDs and valid attachments)');
   let explanationImages;
   if (item.explanationImages !== undefined) {
     if (!Array.isArray(item.explanationImages)) return fail('explanationImages');
@@ -261,6 +287,7 @@ function skippedFrom(
       ? item.reason.trim()
       : fallbackReason;
   return {
+    ...(Number.isInteger(item.inputIndex) && Number(item.inputIndex) > 0 ? { inputIndex: Number(item.inputIndex) } : {}),
     ...(typeof number === 'string' || typeof number === 'number'
       ? { originalQuestionNumber: String(number).slice(0, 80) }
       : {}),
@@ -362,26 +389,31 @@ export function parseQuestionImportReport(
   if (rows.length + declaredSkipped.length < 1 || rows.length + declaredSkipped.length > maxEntries)
     throw new Error(`Provide 1–${maxEntries} combined questions and skipped entries per import.`);
   const questions: QuestionProposalPayload[] = [];
+  const entries: NonNullable<QuestionImportReport['entries']> = [];
   const skipped = declaredSkipped.map((value) =>
     skippedFrom(value, sourceFile, 'Skipped by extraction model.'),
   );
   rows.forEach((row, index) => {
     try {
-      questions.push(normalizeImportedQuestion(row, index, sourceFile));
+      const question = normalizeImportedQuestion(row, index, sourceFile);
+      questions.push(question);
+      entries.push({ inputIndex: index + 1, value: row, question });
     } catch (error) {
+      const reason = error instanceof Error ? error.message.replace(/^Question \d+:\s*/, '') : 'Invalid question.';
+      entries.push({ inputIndex: index + 1, value: row, error: reason });
       skipped.push(
-        skippedFrom(
+        { ...skippedFrom(
           row,
           sourceFile,
           error instanceof Error
             ? error.message.replace(/^Question \d+:\s*/, '')
             : 'Invalid question.',
-        ),
+        ), inputIndex: index + 1 },
       );
     }
   });
   return {
-    questions, skipped,
+    questions, skipped, entries,
     sourceFile: sourceFile || questions[0]?.sourceFile || '',
     repaired,
   };

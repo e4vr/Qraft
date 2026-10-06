@@ -8,7 +8,7 @@ import { ArrowLeft, Check, Clipboard, Copy, FileJson, ImagePlus, Layers3, Link2,
 import { useCallback, useMemo, useState } from 'react';
 import { ClassificationFields } from '@/components/classification-fields';
 import { ClassificationManager } from '@/components/classification-manager';
-import { QuestionImportReview } from '@/components/question-import-review';
+import { openImportWorkspace } from '@/features/imports/client/open-import-workspace';
 import { QuestionId } from '@/components/question-tools';
 import { ReviewerSearch } from '@/components/reviewer-search';
 import { WorkspaceHeader } from '@/components/workspace-header';
@@ -184,6 +184,7 @@ export function QBankManagement({
       return;
     }
     setError('');
+    if (next === 'import') { openImportWorkspace(user, bankId, bankName); return; }
     setSection(next);
   }
 
@@ -760,15 +761,10 @@ export function QBankManagement({
         )}
 
         {section === 'import' && (
-          <section className="min-w-0 rounded-2xl bg-card p-3 ring-1 ring-border sm:p-6">
-            <h2 className="mb-4 text-lg font-bold">Import</h2>
-            <QuestionImportReview uid={user.uid} bankId={bankId} adminImportPrivileges={user.role === 'super_admin'} onImported={result=>confirmUpdate(current=>({
-              ...current,
-              proposals:[...result.proposals,...current.proposals.filter(p=>!result.proposals.some(n=>n.id===p.id))],
-              specialties:[...current.specialties,...result.specialties.filter(item=>!current.specialties.some(existing=>existing.id===item.id))],
-              topics:[...current.topics,...result.topics.filter(item=>!current.topics.some(existing=>existing.id===item.id))],
-              classificationRevisions: result.classificationRevision === undefined ? current.classificationRevisions : { ...current.classificationRevisions, [bankId]: result.classificationRevision },
-            }))} />
+          <section className="rounded-2xl bg-card p-6 ring-1 ring-border">
+            <h2 className="text-lg font-bold">Import workspace</h2>
+            <p className="my-3 text-sm text-muted-foreground">Review and edit your file locally before checking duplication and submitting.</p>
+            <button className="q-button q-button-primary" onClick={() => canImport ? openImportWorkspace(user, bankId, bankName) : openUpgrade()}>Open Import workspace</button>
           </section>
         )}
       </div>

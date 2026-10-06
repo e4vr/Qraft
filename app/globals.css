@@ -253,28 +253,6 @@ button { cursor: pointer; }
 .q-button-danger { background: #fff0f0; border-color: #fecaca; color: #b42332; }
 .dark .q-button-danger { background: #ff716c14; border-color: #ff716c40; color: #ff9894; }
 
-/* Import review controls remain distinct in both themes, including during saving. */
-.q-button.q-import-action { min-height: 48px; white-space: normal; border-radius: 12px; font-weight: 700; }
-.q-import-action:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
-.q-import-action:not(:disabled):active { transform: translateY(1px); }
-.q-button.q-import-compare { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); background: color-mix(in srgb, var(--primary) 10%, var(--card)); }
-.q-button.q-import-keep { border-color: color-mix(in srgb, #16a34a 50%, var(--border)); background: color-mix(in srgb, #16a34a 10%, var(--card)); }
-.q-button.q-import-skip { border-color: color-mix(in srgb, var(--violet) 50%, var(--border)); background: color-mix(in srgb, var(--violet) 10%, var(--card)); }
-.q-button.q-import-skip[aria-pressed="true"] { border-color: var(--violet); box-shadow: inset 0 0 0 1px var(--violet); }
-.q-button.q-import-save { min-height: 54px; font-size: 15px; box-shadow: 0 4px 14px color-mix(in srgb, var(--primary) 20%, transparent); }
-.q-import-progress { padding: 16px; border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--primary) 8%, var(--card)); }
-.q-import-progress-bar { display: block; height: 10px; appearance: none; border: 0; border-radius: 999px; overflow: hidden; background: var(--muted); accent-color: var(--primary); }
-.q-import-progress-bar::-webkit-progress-bar { background: var(--muted); border-radius: 999px; }
-.q-import-progress-bar::-webkit-progress-value { background: var(--primary); border-radius: 999px; transition: width 200ms ease; }
-.q-import-progress-bar::-moz-progress-bar { background: var(--primary); border-radius: 999px; }
-.q-import-progress-bar:indeterminate { background: linear-gradient(90deg, var(--muted) 0%, var(--primary) 50%, var(--muted) 100%); background-size: 200% 100%; animation: q-import-pending 1.5s linear infinite; }
-.q-import-progress-bar:indeterminate::-webkit-progress-bar { background: transparent; }
-@keyframes q-import-pending { to { background-position: -200% 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .q-import-progress-bar:indeterminate { animation: none; }
-  .q-import-progress-bar::-webkit-progress-value { transition: none; }
-  .q-import-action:not(:disabled):active { transform: none; }
-}
 .q-icon { display: inline-grid; width: 42px; height: 42px; flex-shrink: 0; place-items: center; border: 1px solid var(--border); border-radius: 11px; background: var(--card); color: var(--muted-foreground); }
 .q-icon:hover { background: var(--accent); color: var(--primary); }
 .q-text-action { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; color: var(--primary); font-size: 13px; font-weight: 650; }
