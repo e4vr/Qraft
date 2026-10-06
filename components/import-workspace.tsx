@@ -151,8 +151,8 @@ export function ImportWorkspace({ bankId }: { bankId: string }) {
   const decisionCurrent = !!row && decisionIsCurrent(row, matches, draft?.decisions[row.id]);
   const filtered = useMemo(() => draft?.rows.filter(item => {
     const text = `${item.position} ${item.question.originalQuestionNumber || ''} ${item.question.stem} ${item.question.sourceFile || ''} ${item.question.specialty} ${item.question.topic}`.toLowerCase();
-    return (!query.trim() || text.includes(query.trim().toLowerCase())) && (filter === 'all' || filter === 'excluded' && item.excluded || !item.excluded && (filter === 'errors' && !!validateImportRow(item).error || filter === 'unreviewed' && !item.reviewed || filter === 'duplicates' && !!readiness?.matches[item.id]?.length));
-  }) ?? [], [draft, query, filter, readiness]);
+    return (!query.trim() || text.includes(query.trim().toLowerCase())) && (filter === 'all' || filter === 'excluded' && item.excluded || !item.excluded && (filter === 'errors' && !!analysisCache.validation(item).error || filter === 'unreviewed' && !item.reviewed || filter === 'duplicates' && !!readiness?.matches[item.id]?.length));
+  }) ?? [], [draft, query, filter, readiness, analysisCache]);
   const currentPage = Math.min(page, Math.max(0, Math.ceil(filtered.length / PAGE_SIZE) - 1));
 
   useEffect(() => {
