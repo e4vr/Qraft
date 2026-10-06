@@ -73,7 +73,7 @@ export async function publicImportMatches(user: AppUser, bank: QBank, membership
       const opaque = async (value: unknown) => [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(JSON.stringify(['qraft-private-import-v1', value]))))].map(byte => byte.toString(16).padStart(2, '0')).join('');
       return { entityId: `restricted:${await opaque([user.uid, bank.id, candidate.entityId])}`, entityType: 'pending_proposal' as const,
         candidateFingerprint: `restricted:${await opaque([user.uid, bank.id, candidate.entityId, candidate.fullPayload ?? candidate.payload])}`,
-        classification: finding.classification, similarity: finding.similarity, detectedAt: finding.detectedAt,
+        classification: 'possible' as const, similarity: 0, detectedAt: finding.detectedAt,
         signals: { stem: 0, optionsSet: 0, optionsOrdered: 0, correctAnswer: 0, specialty: 0, topic: 0 }, restricted: true, canDelete: false };
     }
     const payload = (candidate.fullPayload ?? candidate.payload) as QuestionProposalPayload;

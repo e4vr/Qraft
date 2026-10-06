@@ -32,6 +32,10 @@ await test('import privacy, mandatory gates and proposal images work together wi
     const collaboration = await call('/collaboration'); assert.equal(JSON.stringify(collaboration.data).includes(proposal.id), false);
     const preview = await call('/platform/import-preview', { qbankId: bank.id, questions: [incoming] }); assert.equal(preview.status, 200);
     const hidden = preview.data.matches[0][0]; assert.equal(hidden.restricted, true); assert.equal(hidden.payload, undefined);
+    assert.equal(hidden.similarity, 0); assert.equal(hidden.classification, 'possible', 'private answers cannot be inferred from a precise similarity score');
+    const probes = await call('/platform/import-preview', { qbankId: bank.id, questions: [0, 1].map(answer => ({ ...incoming, answer, stem: incoming.stem.replace('scenario', 'situation') })) });
+    assert.equal(probes.status, 200);
+    assert.ok(probes.data.matches.every(matches => matches[0]?.restricted && matches[0].similarity === 0 && matches[0].classification === 'possible'));
     assert.equal(JSON.stringify(preview.data).includes(question.explanation), false); assert.equal(JSON.stringify(preview.data).includes(proposal.id), false);
     const ownerPreview = await call('/platform/import-preview', { qbankId: bank.id, questions: [incoming] }, 'author'); assert.equal(ownerPreview.data.matches[0][0].payload.explanation, question.explanation);
     assert.equal((await call('/platform/import-preview', { qbankId: 'private-unavailable', questions: [incoming] })).status, 403);
