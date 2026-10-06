@@ -6,6 +6,7 @@
     "node": ">=22.13.0"
   },
   "overrides": {
+    "source-map-js": "1.2.2",
     "shadcn": {
       "undici": "7.30.0"
     }
